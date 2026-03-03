@@ -1,0 +1,11 @@
+{
+  "hbm_total_used": 16384,
+  "tensor_count": 6,
+  "reuse_count": 2,
+  "assertions": [
+    "所有 offset >= 0",
+    "相邻活跃 tensor 的区间不重叠",
+    "所有 HBM offset 满足 512B 对齐",
+    "所有 L1 offset 满足 32B 对齐"
+  ]
+}
