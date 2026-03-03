@@ -22,7 +22,7 @@ Phase 0: common (Python) + npu_cpu_mock (C)  ← 同分支并行，零文件交�
 
 ```
 main
- ├── feature/common         → common (Python)          ← worktree 并行
+ ├── feature/common-dev     → common (Python)          ← worktree 并行
  ├── feature/npu-cpu-mock   → npu_cpu_mock (C)         ← worktree 并行
  │     合并到 main 后
  ├── feature/agent1  → graph_capture + op_mapping + op_decomposition  ← worktree 并行
@@ -39,13 +39,13 @@ main
 
 | 终端 | worktree 分支 | 负责目录 | 语言 | 验证命令 |
 |------|-------------|---------|------|---------|
-| 终端 A | feature/common | `npu_compiler/common/` | Python | `pytest npu_compiler/common/tests/` |
+| 终端 A | feature/common-dev | `npu_compiler/common/` | Python | `pytest npu_compiler/common/tests/` |
 | 终端 B | feature/npu-cpu-mock | `npu_cpu_mock/` | C | `cd npu_cpu_mock && cmake -B build && cmake --build build && cd build && ctest` |
 
 ```bash
-# 0. 创建 worktree
+# 0. 确保在 main 分支，创建 worktree
 git checkout main
-git worktree add .claude/worktrees/common -b feature/common
+git worktree add .claude/worktrees/common -b feature/common-dev
 git worktree add .claude/worktrees/mock -b feature/npu-cpu-mock
 ```
 
@@ -66,15 +66,15 @@ pytest npu_compiler/common/tests/ 全绿后 commit。
 ### 终端 B — npu_cpu_mock (C)
 
 ```bash
-cd .claude/worktrees/mock/npu_cpu_mock && claude
+cd .claude/worktrees/mock && claude
 ```
 
 Prompt:
 
 ```
-阅读 README.md，实现全部 17 个 NPU API 的 CPU mock 和 C 单元测试。
+阅读 npu_cpu_mock/README.md，实现全部 17 个 NPU API 的 CPU mock 和 C 单元测试。
 具体：include/ 头文件、src/ 全部实现、tests/ 全部测试、CMakeLists.txt。
-cmake -B build && cmake --build build && cd build && ctest 全绿后 commit。
+cd npu_cpu_mock && cmake -B build && cmake --build build && cd build && ctest 全绿后 commit。
 ```
 
 ### 合并到 main
@@ -84,7 +84,7 @@ cmake -B build && cmake --build build && cd build && ctest 全绿后 commit。
 ```bash
 cd /path/to/torch2c
 git checkout main
-git merge feature/common
+git merge feature/common-dev
 git merge feature/npu-cpu-mock
 
 # 验证
@@ -246,9 +246,10 @@ git checkout main && git merge feature/integration
 每个阶段合并后及时清理：
 
 ```bash
-# 第一步完成后
+# 第一步合并后
 git worktree remove .claude/worktrees/common
 git worktree remove .claude/worktrees/mock
+git branch -d feature/common-dev feature/npu-cpu-mock
 
 # 第二步完成后
 git worktree remove .claude/worktrees/agent1
