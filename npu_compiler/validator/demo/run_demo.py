@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from npu_compiler.common import ValidationError, get_logger, setup_logging
+from npu_compiler.common import Graph, ValidationError, get_logger, setup_logging
 
 from npu_compiler.validator import load_validator_config, run
 
@@ -20,7 +20,6 @@ def main() -> None:
 
     # 测试合法图
     with open(demo_dir / "demo_valid_graph.json", encoding="utf-8") as f:
-        from npu_compiler.common import Graph
         valid_graph = Graph.from_dict(json.load(f))
 
     result = run(valid_graph, config)

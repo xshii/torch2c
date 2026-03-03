@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from npu_compiler.common import ValidationError, get_logger, load_config
+from npu_compiler.common import Graph, ValidationError, get_logger, load_config
 
 logger = get_logger(__name__)
 
@@ -14,7 +14,7 @@ def load_validator_config(path: str) -> dict:
     return load_config(path, required_keys=_CONFIG_REQUIRED_KEYS)
 
 
-def run(graph, config: dict):
+def run(graph: Graph, config: dict) -> Graph:
     """校验所有节点是否都已映射到支持的 NPU 算子。"""
     supported = set(config["supported_ops"])
     unsupported: list[str] = []

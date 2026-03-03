@@ -61,10 +61,22 @@ def _try_absorb(graph: Graph, rule: dict) -> tuple[int, int]:
             if tid == out_tid:
                 consumer.inputs[i] = passthrough_tid
                 break
+
+        # 清理被吸收节点在其输入 tensor 上的消费者记录
+        for tid in node.inputs:
+            t = graph.get_tensor(tid)
+            if t and node.id in t.consumer_node_ids:
+                t.consumer_node_ids.remove(node.id)
+
         # 更新 passthrough tensor 的消费者列表
         pt = graph.get_tensor(passthrough_tid)
         if pt and consumer_id not in pt.consumer_node_ids:
             pt.consumer_node_ids.append(consumer_id)
+
+        # 更新 absorbed param tensor 的消费者列表
+        at = graph.get_tensor(param_tid)
+        if at and consumer_id not in at.consumer_node_ids:
+            at.consumer_node_ids.append(consumer_id)
 
         nodes_to_remove.append(node.id)
         tensors_to_remove.append(out_tid)

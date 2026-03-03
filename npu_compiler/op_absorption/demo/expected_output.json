@@ -42,7 +42,7 @@
       "is_model_input": true,
       "is_model_output": false,
       "producer_node_id": null,
-      "consumer_node_ids": ["node_add", "node_softmax_p1"]
+      "consumer_node_ids": ["node_softmax_p1"]
     },
     "tensor_mask": {
       "id": "tensor_mask",
@@ -56,7 +56,7 @@
       "is_model_input": true,
       "is_model_output": false,
       "producer_node_id": null,
-      "consumer_node_ids": ["node_add"]
+      "consumer_node_ids": ["node_softmax_p1"]
     },
     "tensor_sm_p1_out": {
       "id": "tensor_sm_p1_out",
