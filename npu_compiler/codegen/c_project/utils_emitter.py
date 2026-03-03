@@ -7,24 +7,26 @@ from pathlib import Path
 
 from npu_compiler.common import get_logger
 
+from .._helpers import c_header_guard, write_files
+
 logger = get_logger("codegen.utils_emitter")
 
 _TMPL_DIR = Path(__file__).parent.parent / "templates"
 
 
 def _load_template(name: str) -> str:
-    path = _TMPL_DIR / name
-    with open(path, "r", encoding="utf-8") as f:
+    with open(_TMPL_DIR / name, "r", encoding="utf-8") as f:
         return f.read()
 
+
+# ---- data_loader ----
 
 def emit_data_loader_c() -> str:
     return _load_template("data_loader.c.tmpl").format()
 
 
 def emit_data_loader_h() -> str:
-    return (
-        "#ifndef DATA_LOADER_H\n#define DATA_LOADER_H\n\n"
+    body = (
         "#include <stddef.h>\n\n"
         "typedef struct {\n"
         "    int shape[8];\n"
@@ -35,18 +37,19 @@ def emit_data_loader_h() -> str:
         "} tensor_desc_t;\n\n"
         "int parse_desc(const char* desc_path, tensor_desc_t* desc);\n"
         "int load_tensor(void* hbm_base, size_t offset,\n"
-        "                const char* bin_path, const char* desc_path);\n\n"
-        "#endif\n"
+        "                const char* bin_path, const char* desc_path);\n"
     )
+    return c_header_guard("DATA_LOADER_H", body)
 
+
+# ---- comparator ----
 
 def emit_comparator_c() -> str:
     return _load_template("comparator.c.tmpl").format()
 
 
 def emit_comparator_h() -> str:
-    return (
-        "#ifndef COMPARATOR_H\n#define COMPARATOR_H\n\n"
+    body = (
         '#include "data_loader.h"\n\n'
         "typedef struct {\n"
         "    float max_abs_diff;\n"
@@ -59,10 +62,12 @@ def emit_comparator_h() -> str:
         "} compare_result_t;\n\n"
         "int compare_tensors(const char* actual_path, const char* golden_path,\n"
         "                    const char* desc_path, float abs_tol, float cos_tol,\n"
-        "                    compare_result_t* result);\n\n"
-        "#endif\n"
+        "                    compare_result_t* result);\n"
     )
+    return c_header_guard("COMPARATOR_H", body)
 
+
+# ---- data_dumper ----
 
 def emit_data_dumper_c() -> str:
     return (
@@ -80,38 +85,37 @@ def emit_data_dumper_c() -> str:
 
 
 def emit_data_dumper_h() -> str:
-    return (
-        "#ifndef DATA_DUMPER_H\n#define DATA_DUMPER_H\n\n"
+    body = (
         "#include <stddef.h>\n\n"
         "int dump_tensor(const void* hbm_base, size_t offset,\n"
-        "                size_t size, const char* path);\n\n"
-        "#endif\n"
+        "                size_t size, const char* path);\n"
     )
+    return c_header_guard("DATA_DUMPER_H", body)
 
+
+# ---- tensor_utils ----
 
 def emit_tensor_utils_h() -> str:
-    return (
-        "#ifndef TENSOR_UTILS_H\n#define TENSOR_UTILS_H\n\n"
+    body = (
         "#include <stddef.h>\n\n"
         "static inline size_t dtype_size(const char* dtype) {\n"
-        '    if (dtype[0] == \'f\' && dtype[1] == \'p\' && dtype[2] == \'3\') return 4;\n'
+        "    if (dtype[0] == 'f' && dtype[1] == 'p' && dtype[2] == '3') return 4;\n"
         "    return 2; /* fp16, bf16, int16 default */\n"
         "}\n\n"
         "static inline size_t elem_count(const int* shape, int ndim) {\n"
         "    size_t n = 1;\n"
         "    for (int i = 0; i < ndim; i++) n *= (size_t)shape[i];\n"
         "    return n;\n"
-        "}\n\n"
-        "#endif\n"
+        "}\n"
     )
+    return c_header_guard("TENSOR_UTILS_H", body)
 
+
+# ---- 批量生成 ----
 
 def run(output_dir: str) -> None:
     logger.info("utils_emitter: 开始生成辅助工具代码")
-    utils_dir = os.path.join(output_dir, "utils")
-    os.makedirs(utils_dir, exist_ok=True)
-
-    files = [
+    write_files(os.path.join(output_dir, "utils"), [
         ("data_loader.c", emit_data_loader_c()),
         ("data_loader.h", emit_data_loader_h()),
         ("comparator.c", emit_comparator_c()),
@@ -119,9 +123,4 @@ def run(output_dir: str) -> None:
         ("data_dumper.c", emit_data_dumper_c()),
         ("data_dumper.h", emit_data_dumper_h()),
         ("tensor_utils.h", emit_tensor_utils_h()),
-    ]
-    for name, content in files:
-        path = os.path.join(utils_dir, name)
-        with open(path, "w") as f:
-            f.write(content)
-        logger.info("utils_emitter: 已生成 %s", path)
+    ])

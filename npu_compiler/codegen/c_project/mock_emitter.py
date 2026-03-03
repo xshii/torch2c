@@ -3,28 +3,22 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
-from npu_compiler.common import get_logger, load_config
+from npu_compiler.common import get_logger
+
+from .._helpers import PARAM_TYPE_C, load_signatures, write_file
 
 logger = get_logger("codegen.mock_emitter")
 
-_TYPE_C = {"addr": "void*", "int": "int", "float": "float",
-           "enum": "int", "int_array": "const int*"}
-
-
-def _param_to_c(p: dict) -> str:
-    ctype = _TYPE_C.get(p["type"], "int")
-    return f"{ctype} {p['name']}"
-
 
 def _gen_func_decl(name: str, sig: dict) -> str:
-    params = sig.get("params", [])
-    opt = sig.get("optional_params", [])
-    all_params = params + opt
+    all_params = sig.get("params", []) + sig.get("optional_params", [])
     if not all_params:
         return f"void {name}(void);"
-    args = ", ".join(_param_to_c(p) for p in all_params)
+    args = ", ".join(
+        f"{PARAM_TYPE_C.get(p['type'], 'int')} {p['name']}"
+        for p in all_params
+    )
     return f"void {name}({args});"
 
 
@@ -68,14 +62,5 @@ def emit_mock_h(signatures: dict) -> str:
 def run(output_dir: str, config_dir: str | None = None) -> None:
     """生成 npu_mock.h 到 output_dir。"""
     logger.info("mock_emitter: 开始生成 npu_mock.h")
-    if config_dir is None:
-        config_dir = str(Path(__file__).parent.parent / "config")
-    sigs = load_config(
-        os.path.join(config_dir, "c_api_signatures.yaml"),
-        required_keys=["compute_ops"],
-    )
-    path = os.path.join(output_dir, "npu_mock.h")
-    os.makedirs(output_dir, exist_ok=True)
-    with open(path, "w") as f:
-        f.write(emit_mock_h(sigs))
-    logger.info("mock_emitter: 已生成 %s", path)
+    sigs = load_signatures(config_dir)
+    write_file(os.path.join(output_dir, "npu_mock.h"), emit_mock_h(sigs))

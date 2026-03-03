@@ -19,7 +19,6 @@ from npu_compiler.codegen import (
     mock_emitter,
     utils_emitter,
 )
-from npu_compiler.codegen.c_emitter import emit_model_memory_h
 from npu_compiler.common import get_logger
 
 logger = get_logger("codegen.demo")
