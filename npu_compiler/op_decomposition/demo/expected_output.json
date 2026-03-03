@@ -1,0 +1,12 @@
+{
+  "_comment": "裂解后：layer_norm→2 part, mm 保持, softmax→2 part。节点 3→5，新增 2 个中间 tensor",
+  "expected_nodes": [
+    {"id": "node_0_step_0", "npu_op": "npu_layernorm_part1", "compute_unit": "vector"},
+    {"id": "node_0_step_1", "npu_op": "npu_layernorm_part2", "compute_unit": "vector"},
+    {"id": "node_1", "npu_op": "npu_matmul", "compute_unit": "cube"},
+    {"id": "node_2_step_0", "npu_op": "npu_softmax_part1", "compute_unit": "vector"},
+    {"id": "node_2_step_1", "npu_op": "npu_softmax_part2", "compute_unit": "vector"}
+  ],
+  "expected_node_count": 5,
+  "expected_new_intermediate_tensors": 2
+}
