@@ -95,6 +95,24 @@ def test_no_match_preserved():
     assert len(result.nodes) == 1
 
 
+def test_consumer_ids_cleaned():
+    """吸收后 consumer_node_ids 不含已删除节点，且新消费关系正确。"""
+    g = _make_absorption_graph()
+    result = run(g, _RULES)
+
+    # scores: 原消费者 n_add 已删除，新消费者是 n_sp1
+    t_scores = result.get_tensor("t_scores")
+    assert t_scores is not None
+    assert "n_add" not in t_scores.consumer_node_ids
+    assert "n_sp1" in t_scores.consumer_node_ids
+
+    # mask: 原消费者 n_add 已删除，作为 absorbed_input 被 n_sp1 消费
+    t_mask = result.get_tensor("t_mask")
+    assert t_mask is not None
+    assert "n_add" not in t_mask.consumer_node_ids
+    assert "n_sp1" in t_mask.consumer_node_ids
+
+
 def test_empty_rules():
     """absorptions 为空列表时图不变。"""
     g = _make_absorption_graph()
