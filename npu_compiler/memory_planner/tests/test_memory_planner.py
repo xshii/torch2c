@@ -105,23 +105,19 @@ class TestNoOverlap:
         ]
         for i, t1 in enumerate(tensors_with_hbm):
             for t2 in tensors_with_hbm[i + 1:]:
-                # 判断是否同时活跃：取生命周期交集
                 t1_start = _get_first_use(g, t1)
                 t1_end = _get_last_use(g, t1)
                 t2_start = _get_first_use(g, t2)
                 t2_end = _get_last_use(g, t2)
-                # 如果有交集
+                # 生命周期有交集 → 地址区间不得重叠
                 if t1_start <= t2_end and t2_start <= t1_end:
                     end1 = t1.hbm_offset + t1.hbm_size
                     end2 = t2.hbm_offset + t2.hbm_size
-                    overlap = (
-                        t1.hbm_offset < end2 and t2.hbm_offset < end1
+                    overlap = t1.hbm_offset < end2 and t2.hbm_offset < end1
+                    assert not overlap, (
+                        f"同时活跃的 {t1.id}[{t1.hbm_offset}:{end1}] 和"
+                        f" {t2.id}[{t2.hbm_offset}:{end2}] 地址重叠"
                     )
-                    if overlap:
-                        assert t1.hbm_offset == t2.hbm_offset, (
-                            f"同时活跃的 {t1.id} 和 {t2.id} 地址重叠"
-                            " (不同偏移但区间交叉)"
-                        )
 
 
 def _get_first_use(g: Graph, t: Tensor) -> int:

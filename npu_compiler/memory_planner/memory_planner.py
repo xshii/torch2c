@@ -121,13 +121,14 @@ def _allocate_hbm(
     lifetimes: dict[str, tuple[int, int]],
     hbm_alignment: int,
     cube_size: int,
-) -> None:
-    """Best-fit HBM 分配，支持空间复用。"""
-    # 按 first_use 排序
+) -> int:
+    """Best-fit HBM 分配，支持空间复用。返回实际复用次数。"""
     sorted_tids = sorted(lifetimes.keys(), key=lambda t: lifetimes[t][0])
 
-    # 空闲块列表: [(offset, size)]
-    free_blocks: list[list[int]] = []
+    free_blocks: list[list[int]] = []  # [offset, size]
+    freed_set: set[str] = set()  # 已释放的 tensor id，防止重复释放
+    hbm_watermark = 0  # 已分配的最高水位
+    reuse_count = 0
 
     for tid in sorted_tids:
         t = graph.tensors[tid]
@@ -135,24 +136,24 @@ def _allocate_hbm(
         t.hbm_size = size
         aligned_size = align_up(size, hbm_alignment)
 
-        # 释放已过期的 tensor（last_use < 当前 tensor 的 first_use）
+        # 释放已过期且尚未释放的 tensor
         current_first = lifetimes[tid][0]
         for other_tid in sorted_tids:
-            if other_tid == tid:
+            if other_tid == tid or other_tid in freed_set:
                 continue
             other_t = graph.tensors[other_tid]
             if other_t.hbm_offset is None:
                 continue
-            other_last = lifetimes[other_tid][1]
-            if other_last < current_first:
-                blk = [other_t.hbm_offset, align_up(other_t.hbm_size, hbm_alignment)]
-                if blk not in free_blocks:
-                    free_blocks.append(blk)
+            if lifetimes[other_tid][1] < current_first:
+                free_blocks.append(
+                    [other_t.hbm_offset, align_up(other_t.hbm_size, hbm_alignment)]
+                )
+                freed_set.add(other_tid)
 
         # Best-fit: 找最小的满足 aligned_size 的空闲块
         best_idx = -1
         best_fit_size = float("inf")
-        for i, (off, sz) in enumerate(free_blocks):
+        for i, (_, sz) in enumerate(free_blocks):
             if sz >= aligned_size and sz < best_fit_size:
                 best_idx = i
                 best_fit_size = sz
@@ -165,17 +166,14 @@ def _allocate_hbm(
                 free_blocks[best_idx] = [blk_off + aligned_size, remaining]
             else:
                 free_blocks.pop(best_idx)
+            reuse_count += 1
             logger.debug("HBM 复用: %s -> offset=%d, size=%d", tid, blk_off, size)
         else:
-            # 分配新空间：找已分配的最大末尾
-            max_end = 0
-            for other_tid2 in sorted_tids:
-                ot = graph.tensors[other_tid2]
-                if ot.hbm_offset is not None and ot.hbm_size is not None:
-                    end = ot.hbm_offset + align_up(ot.hbm_size, hbm_alignment)
-                    max_end = max(max_end, end)
-            t.hbm_offset = align_up(max_end, hbm_alignment)
+            t.hbm_offset = hbm_watermark
+            hbm_watermark = t.hbm_offset + aligned_size
             logger.debug("HBM 新分配: %s -> offset=%d, size=%d", tid, t.hbm_offset, size)
+
+    return reuse_count
 
 
 # ── L1 布局 ──────────────────────────────────────────────
@@ -283,10 +281,17 @@ def _build_dma_plan(
                 )
             )
 
-    # Store: 所有输出
+    # Store: 所有输出（L1 中可能是算子计算格式，store 回 HBM 存储格式）
     for tid in node.outputs:
         t = graph.tensors.get(tid)
         if t and t.hbm_offset is not None and tid in l1_layout:
+            # 输出的 L1 格式由 format_annotation 决定
+            l1_fmt = t.format
+            if node.format_annotation and "outputs" in node.format_annotation:
+                annots = node.format_annotation["outputs"]
+                out_idx = node.outputs.index(tid)
+                if out_idx < len(annots) and "format" in annots[out_idx]:
+                    l1_fmt = annots[out_idx]["format"]
             plan.stores.append(
                 DmaInstruction(
                     op="store",
@@ -294,7 +299,7 @@ def _build_dma_plan(
                     hbm_offset=t.hbm_offset,
                     l1_offset=l1_layout[tid],
                     size_bytes=calc_padded_size(t.shape, t.dtype, t.format, cube_size),
-                    src_format=t.format,
+                    src_format=l1_fmt,
                     dst_format=t.format,
                 )
             )
@@ -328,13 +333,12 @@ def run(graph: Graph, config: dict) -> tuple[Graph, list[DmaPlan]]:
 
     # 1. HBM 全局分配
     lifetimes = _analyze_lifetimes(graph)
-    _allocate_hbm(graph, lifetimes, hbm_align, cube_size)
+    reuse_count = _allocate_hbm(graph, lifetimes, hbm_align, cube_size)
 
     # 2. L1 布局 + DMA 计划
     dma_plans: list[DmaPlan] = []
     for nid in graph.execution_order:
         l1_layout = _plan_l1_layout(graph, nid, l1_align, l1_cap, cube_size)
-        # 将 l1_offset 写回 tensor（取最后一次规划的值）
         for tid, off in l1_layout.items():
             t = graph.tensors.get(tid)
             if t:
@@ -343,19 +347,9 @@ def run(graph: Graph, config: dict) -> tuple[Graph, list[DmaPlan]]:
         dma_plans.append(plan)
         logger.debug("节点 %s: %d loads, %d stores", nid, len(plan.loads), len(plan.stores))
 
-    # 统计
     allocated = sum(1 for t in graph.tensors.values() if t.hbm_offset is not None)
-    reused = sum(
-        1 for tid in lifetimes
-        if any(
-            graph.tensors[tid].hbm_offset == graph.tensors[other].hbm_offset
-            and tid != other
-            for other in lifetimes
-            if graph.tensors[other].hbm_offset is not None
-        )
-    )
     logger.info(
         "Pass 完成。HBM 分配: %d 个张量, 复用: %d, DMA 计划: %d 个算子",
-        allocated, reused, len(dma_plans),
+        allocated, reuse_count, len(dma_plans),
     )
     return graph, dma_plans
