@@ -46,6 +46,8 @@ void npu_layernorm_part2(void* inter, void* orig, void* out, int hidden, npu_dty
 
 void npu_softmax_part1(void* input, void* out, int dim, int count, npu_dtype_t dtype);
 void npu_softmax_part2(void* inter, void* out, int count, npu_dtype_t dtype);
+void npu_softmax_mask(void* input, void* out, const uint8_t* mask,
+                      int dim, int count, npu_dtype_t dtype);
 
 void npu_transpose(void* input, void* out, int ndim, const int* dims,
                    int dim0, int dim1, npu_dtype_t dtype);
