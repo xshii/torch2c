@@ -1,0 +1,42 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "npu_mock.h"
+#include "src/model_graph.h"
+#include "src/model_memory.h"
+#include "src/model_weights.h"
+#include "utils/data_loader.h"
+#include "utils/comparator.h"
+
+int main(void) {{
+    printf("=== NPU Model Runner ===\\n");
+
+    /* Allocate HBM and L1 */
+    unsigned char* hbm = (unsigned char*)calloc(1, {hbm_size});
+    unsigned char* l1  = (unsigned char*)calloc(1, {l1_size});
+    if (!hbm || !l1) {{
+        fprintf(stderr, "Memory allocation failed\\n");
+        return 1;
+    }}
+
+    /* Load weights into HBM */
+    load_weights(hbm);
+
+    /* Load input golden data */
+{load_inputs}
+
+    /* Run model */
+    printf("Running model...\\n");
+    model_run(hbm, l1);
+    printf("Model execution complete.\\n");
+
+    /* Compare outputs */
+    int pass = 1;
+    compare_result_t result;
+{compare_outputs}
+
+    free(hbm);
+    free(l1);
+    printf("\\n=== %s ===\\n", pass ? "ALL PASSED" : "FAILED");
+    return pass ? 0 : 1;
+}}
