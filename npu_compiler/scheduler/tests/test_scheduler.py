@@ -151,3 +151,21 @@ class TestScheduleOrder:
         orders = [g.nodes[nid].schedule_order for nid in g.execution_order]
         assert orders == sorted(orders)
         assert orders == list(range(len(orders)))
+
+
+class TestAdjacentOnlyDeps:
+    """回归测试：确保只产生相邻对的依赖，不产生传递依赖。"""
+
+    def test_no_transitive_deps(self):
+        """线性链 4 个算子只应有 3 条依赖（仅相邻对）。"""
+        g = _make_linear_chain()
+        g = run(g)
+
+        total_deps = sum(len(n.dependencies) for n in g.nodes.values())
+        assert total_deps == 3, f"期望 3 条依赖，实际 {total_deps}"
+
+        # node_2 不应直接依赖 node_0（只依赖 node_1）
+        assert "node_0" not in g.nodes["node_2"].dependencies
+        # node_3 不应直接依赖 node_0 或 node_1
+        assert "node_0" not in g.nodes["node_3"].dependencies
+        assert "node_1" not in g.nodes["node_3"].dependencies

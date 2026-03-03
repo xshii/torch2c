@@ -306,6 +306,68 @@ def _build_dma_plan(
     return plan
 
 
+# ── L1 全局布局优化 ──────────────────────────────────────
+
+
+def _try_global_l1_layout(
+    graph: Graph,
+    l1_alignment: int,
+    l1_capacity: int,
+    cube_size: int,
+    hbm_alignment: int,
+) -> bool:
+    """尝试将所有 tensor 同时放入 L1。成功则填充偏移并返回 True。"""
+    offset = 0
+    layout: dict[str, int] = {}
+    for tid, t in graph.tensors.items():
+        offset = align_up(offset, l1_alignment)
+        layout[tid] = offset
+        offset += calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+
+    if offset > l1_capacity:
+        return False
+
+    logger.info("所有张量适配 L1（%d / %d 字节），使用全局布局", offset, l1_capacity)
+
+    # 写回 L1 offset + 分配线性 HBM（用于初始加载和最终存储）
+    hbm_offset = 0
+    for tid, l1_off in layout.items():
+        t = graph.tensors[tid]
+        t.l1_offset = l1_off
+        size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+        t.hbm_size = size
+        t.hbm_offset = hbm_offset
+        hbm_offset = align_up(hbm_offset + size, hbm_alignment)
+    return True
+
+
+def _build_bulk_dma(graph: Graph, cube_size: int) -> list[DmaPlan]:
+    """为全局 L1 布局生成 bulk load/store DMA 计划。"""
+    bulk_load = DmaPlan(node_id="__bulk_load__")
+    bulk_store = DmaPlan(node_id="__bulk_store__")
+
+    for t in graph.tensors.values():
+        if t.hbm_offset is None or t.l1_offset is None:
+            continue
+        size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+        # 输入/权重: 开头 bulk load
+        if t.is_model_input or t.is_weight:
+            bulk_load.loads.append(DmaInstruction(
+                op="load", tensor_id=t.id,
+                hbm_offset=t.hbm_offset, l1_offset=t.l1_offset,
+                size_bytes=size, src_format=t.format, dst_format=t.format,
+            ))
+        # 输出: 结尾 bulk store
+        if t.is_model_output:
+            bulk_store.stores.append(DmaInstruction(
+                op="store", tensor_id=t.id,
+                hbm_offset=t.hbm_offset, l1_offset=t.l1_offset,
+                size_bytes=size, src_format=t.format, dst_format=t.format,
+            ))
+
+    return [bulk_load, bulk_store]
+
+
 # ── 主入口 ───────────────────────────────────────────────
 
 
@@ -327,15 +389,23 @@ def run(graph: Graph, config: dict) -> tuple[Graph, list[DmaPlan]]:
     l1_cap = mem["l1"]["total_size_bytes"]
     cube_size = config["fractal"]["cube_size"]
 
-    # 确保 execution_order 存在
     if not graph.execution_order:
         graph.execution_order = graph.topo_sort()
 
-    # 1. HBM 全局分配
+    # 尝试全局 L1 布局：如果所有 tensor 同时放得下，跳过 per-op DMA
+    if _try_global_l1_layout(graph, l1_align, l1_cap, cube_size, hbm_align):
+        dma_plans = _build_bulk_dma(graph, cube_size)
+        allocated = sum(1 for t in graph.tensors.values() if t.hbm_offset is not None)
+        logger.info(
+            "Pass 完成（L1 全局布局）。HBM 分配: %d 个张量, DMA: bulk load/store",
+            allocated,
+        )
+        return graph, dma_plans
+
+    # 常规路径：HBM 全局分配 + per-op L1 布局
     lifetimes = _analyze_lifetimes(graph)
     reuse_count = _allocate_hbm(graph, lifetimes, hbm_align, cube_size)
 
-    # 2. L1 布局 + DMA 计划
     dma_plans: list[DmaPlan] = []
     for nid in graph.execution_order:
         l1_layout = _plan_l1_layout(graph, nid, l1_align, l1_cap, cube_size)
