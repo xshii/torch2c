@@ -1,0 +1,18 @@
+{
+  "_comment": "预期算子类型清单（全称），实际节点数和tensor数需运行后确认",
+  "expected_op_types": [
+    "aten.native_layer_norm.default",
+    "aten.addmm.default",
+    "aten.t.default",
+    "aten.add.Tensor",
+    "aten.mul.Tensor",
+    "aten._softmax.default",
+    "aten.gelu.default",
+    "aten.view.default",
+    "aten.transpose.int",
+    "aten.bmm.default",
+    "aten.expand.default"
+  ],
+  "expected_node_count_range": [40, 120],
+  "expected_weight_tensor_range": [20, 50]
+}

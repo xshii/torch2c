@@ -1,0 +1,37 @@
+# ATen → NPU 算子直接映射表
+# 算子名为 torch.export 输出的全称
+
+mappings:
+  aten.addmm.default:
+    npu_op: npu_matmul
+    compute_unit: cube
+  aten.mm.default:
+    npu_op: npu_matmul
+    compute_unit: cube
+  aten.bmm.default:
+    npu_op: npu_matmul
+    compute_unit: cube
+  aten.add.Tensor:
+    npu_op: npu_add
+    compute_unit: vector
+  aten.mul.Tensor:
+    npu_op: npu_mul
+    compute_unit: vector
+  aten.gelu.default:
+    npu_op: npu_gelu
+    compute_unit: vector
+  aten.transpose.int:
+    npu_op: npu_transpose
+    compute_unit: vector
+  aten.t.default:
+    npu_op: npu_transpose_2d
+    compute_unit: vector
+  aten.view.default:
+    npu_op: npu_reshape
+    compute_unit: scalar
+  aten.expand.default:
+    npu_op: npu_broadcast
+    compute_unit: scalar
+  aten.clone.default:
+    npu_op: npu_copy
+    compute_unit: scalar
