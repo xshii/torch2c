@@ -1,0 +1,13 @@
+{
+  "schedule_order": [0, 1, 2, 3],
+  "dependencies": [
+    ["node_0", "node_1"],
+    ["node_1", "node_2"],
+    ["node_2", "node_3"]
+  ],
+  "parallel_pairs": 0,
+  "assertions": [
+    "所有 4 个算子串行（因为有数据依赖链）",
+    "依赖关系: node_0→node_1→node_2→node_3"
+  ]
+}
