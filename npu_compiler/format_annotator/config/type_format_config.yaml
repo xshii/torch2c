@@ -1,0 +1,115 @@
+# NPU 算子 format/dtype 配置
+
+op_format_requirements:
+  npu_matmul:
+    inputs:
+      - { format: nz, dtype: fp16 }
+      - { format: nz, dtype: fp16 }
+    outputs:
+      - { format: nz, dtype: fp16 }
+    compute_dtype: fp16
+    supports_format_convert: true
+    supports_dtype_cast: true
+
+  npu_add:
+    inputs:
+      - { format: nd, dtype: fp16 }
+      - { format: nd, dtype: fp16 }
+    outputs:
+      - { format: nd, dtype: fp16 }
+    compute_dtype: fp16
+    supports_format_convert: true
+    supports_dtype_cast: true
+
+  npu_mul:
+    inputs:
+      - { format: nd, dtype: fp16 }
+      - { format: nd, dtype: fp16 }
+    outputs:
+      - { format: nd, dtype: fp16 }
+    compute_dtype: fp16
+    supports_format_convert: true
+    supports_dtype_cast: true
+
+  npu_mul_scalar:
+    inputs:
+      - { format: nd, dtype: fp16 }
+    outputs:
+      - { format: nd, dtype: fp16 }
+    compute_dtype: fp16
+    supports_format_convert: false
+    supports_dtype_cast: false
+
+  npu_gelu:
+    inputs:
+      - { format: nd, dtype: fp16 }
+    outputs:
+      - { format: nd, dtype: fp16 }
+    compute_dtype: fp16
+    supports_format_convert: true
+    supports_dtype_cast: true
+
+  npu_transpose:
+    inputs:
+      - { format: nd, dtype: fp16 }
+    outputs:
+      - { format: nd, dtype: fp16 }
+    compute_dtype: fp16
+    supports_format_convert: false
+    supports_dtype_cast: false
+
+  npu_transpose_2d:
+    inputs:
+      - { format: nz, dtype: fp16 }
+    outputs:
+      - { format: nz, dtype: fp16 }
+    compute_dtype: fp16
+    supports_format_convert: false
+    supports_dtype_cast: false
+
+  npu_reshape:
+    inputs:
+      - { format: nd, dtype: fp16 }
+    outputs:
+      - { format: nd, dtype: fp16 }
+    compute_dtype: fp16
+    supports_format_convert: false
+    supports_dtype_cast: false
+
+  npu_layernorm_part1:
+    inputs:
+      - { format: nd, dtype: fp32 }
+    outputs:
+      - { format: nd, dtype: fp32 }
+    compute_dtype: fp32
+    supports_format_convert: true
+    supports_dtype_cast: true
+
+  npu_layernorm_part2:
+    inputs:
+      - { format: nd, dtype: fp32 }
+      - { format: nd, dtype: fp32 }
+      - { format: nd, dtype: fp32 }
+    outputs:
+      - { format: nd, dtype: fp32 }
+    compute_dtype: fp32
+    supports_format_convert: true
+    supports_dtype_cast: true
+
+  npu_softmax_part1:
+    inputs:
+      - { format: nd, dtype: fp16 }
+    outputs:
+      - { format: nd, dtype: fp16 }
+    compute_dtype: fp16
+    supports_format_convert: true
+    supports_dtype_cast: true
+
+  npu_softmax_part2:
+    inputs:
+      - { format: nd, dtype: fp16 }
+    outputs:
+      - { format: nd, dtype: fp16 }
+    compute_dtype: fp16
+    supports_format_convert: true
+    supports_dtype_cast: true

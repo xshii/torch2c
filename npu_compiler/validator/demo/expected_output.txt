@@ -1,0 +1,2 @@
+Valid graph: 校验通过，返回原图不变
+Invalid graph: 抛出 ValidationError，包含 "npu_unknown"

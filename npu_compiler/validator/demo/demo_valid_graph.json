@@ -1,0 +1,65 @@
+{
+  "nodes": {
+    "node_matmul": {
+      "id": "node_matmul",
+      "op_type": "aten.mm",
+      "inputs": ["tensor_a", "tensor_b"],
+      "outputs": ["tensor_out"],
+      "params": {},
+      "compute_unit": "cube",
+      "npu_op": "npu_matmul",
+      "is_mapped": true,
+      "format_annotation": null,
+      "schedule_order": null,
+      "dependencies": [],
+      "absorbed_inputs": {}
+    },
+    "node_add": {
+      "id": "node_add",
+      "op_type": "aten.add",
+      "inputs": ["tensor_out", "tensor_c"],
+      "outputs": ["tensor_final"],
+      "params": {},
+      "compute_unit": "vector",
+      "npu_op": "npu_add",
+      "is_mapped": true,
+      "format_annotation": null,
+      "schedule_order": null,
+      "dependencies": [],
+      "absorbed_inputs": {}
+    }
+  },
+  "tensors": {
+    "tensor_a": {
+      "id": "tensor_a", "shape": [1, 32, 64], "dtype": "fp16", "format": "nd",
+      "hbm_offset": null, "hbm_size": null, "l1_offset": null,
+      "is_weight": false, "is_model_input": true, "is_model_output": false,
+      "producer_node_id": null, "consumer_node_ids": ["node_matmul"]
+    },
+    "tensor_b": {
+      "id": "tensor_b", "shape": [64, 64], "dtype": "fp16", "format": "nd",
+      "hbm_offset": null, "hbm_size": null, "l1_offset": null,
+      "is_weight": true, "is_model_input": false, "is_model_output": false,
+      "producer_node_id": null, "consumer_node_ids": ["node_matmul"]
+    },
+    "tensor_out": {
+      "id": "tensor_out", "shape": [1, 32, 64], "dtype": "fp16", "format": "nd",
+      "hbm_offset": null, "hbm_size": null, "l1_offset": null,
+      "is_weight": false, "is_model_input": false, "is_model_output": false,
+      "producer_node_id": "node_matmul", "consumer_node_ids": ["node_add"]
+    },
+    "tensor_c": {
+      "id": "tensor_c", "shape": [64], "dtype": "fp16", "format": "nd",
+      "hbm_offset": null, "hbm_size": null, "l1_offset": null,
+      "is_weight": true, "is_model_input": false, "is_model_output": false,
+      "producer_node_id": null, "consumer_node_ids": ["node_add"]
+    },
+    "tensor_final": {
+      "id": "tensor_final", "shape": [1, 32, 64], "dtype": "fp16", "format": "nd",
+      "hbm_offset": null, "hbm_size": null, "l1_offset": null,
+      "is_weight": false, "is_model_input": false, "is_model_output": true,
+      "producer_node_id": "node_add", "consumer_node_ids": []
+    }
+  },
+  "execution_order": ["node_matmul", "node_add"]
+}

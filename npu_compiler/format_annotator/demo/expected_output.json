@@ -1,0 +1,19 @@
+{
+  "description": "matmul 输出 tensor 标注为 nz, add 输出保持 nd",
+  "node_matmul_annotation": {
+    "inputs": [{"format": "nz", "dtype": "fp16"}, {"format": "nz", "dtype": "fp16"}],
+    "outputs": [{"format": "nz", "dtype": "fp16"}],
+    "compute_dtype": "fp16",
+    "supports_format_convert": true,
+    "supports_dtype_cast": true
+  },
+  "node_add_annotation": {
+    "inputs": [{"format": "nd", "dtype": "fp16"}, {"format": "nd", "dtype": "fp16"}],
+    "outputs": [{"format": "nd", "dtype": "fp16"}],
+    "compute_dtype": "fp16",
+    "supports_format_convert": true,
+    "supports_dtype_cast": true
+  },
+  "tensor_mm_out_format": "nz",
+  "tensor_add_out_format": "nd"
+}

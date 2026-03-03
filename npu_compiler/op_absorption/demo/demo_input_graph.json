@@ -1,0 +1,119 @@
+{
+  "nodes": {
+    "node_add": {
+      "id": "node_add",
+      "op_type": "aten.add",
+      "inputs": ["tensor_scores", "tensor_mask"],
+      "outputs": ["tensor_add_out"],
+      "params": {},
+      "compute_unit": "vector",
+      "npu_op": "npu_add",
+      "is_mapped": true,
+      "format_annotation": null,
+      "schedule_order": null,
+      "dependencies": [],
+      "absorbed_inputs": {}
+    },
+    "node_softmax_p1": {
+      "id": "node_softmax_p1",
+      "op_type": "aten.softmax",
+      "inputs": ["tensor_add_out"],
+      "outputs": ["tensor_sm_p1_out"],
+      "params": {"dim": -1},
+      "compute_unit": "vector",
+      "npu_op": "npu_softmax_part1",
+      "is_mapped": true,
+      "format_annotation": null,
+      "schedule_order": null,
+      "dependencies": [],
+      "absorbed_inputs": {}
+    },
+    "node_softmax_p2": {
+      "id": "node_softmax_p2",
+      "op_type": "aten.softmax",
+      "inputs": ["tensor_sm_p1_out"],
+      "outputs": ["tensor_sm_p2_out"],
+      "params": {"dim": -1},
+      "compute_unit": "vector",
+      "npu_op": "npu_softmax_part2",
+      "is_mapped": true,
+      "format_annotation": null,
+      "schedule_order": null,
+      "dependencies": [],
+      "absorbed_inputs": {}
+    }
+  },
+  "tensors": {
+    "tensor_scores": {
+      "id": "tensor_scores",
+      "shape": [1, 1, 32, 32],
+      "dtype": "fp16",
+      "format": "nd",
+      "hbm_offset": null,
+      "hbm_size": null,
+      "l1_offset": null,
+      "is_weight": false,
+      "is_model_input": true,
+      "is_model_output": false,
+      "producer_node_id": null,
+      "consumer_node_ids": ["node_add"]
+    },
+    "tensor_mask": {
+      "id": "tensor_mask",
+      "shape": [1, 1, 32, 32],
+      "dtype": "fp16",
+      "format": "nd",
+      "hbm_offset": null,
+      "hbm_size": null,
+      "l1_offset": null,
+      "is_weight": false,
+      "is_model_input": true,
+      "is_model_output": false,
+      "producer_node_id": null,
+      "consumer_node_ids": ["node_add"]
+    },
+    "tensor_add_out": {
+      "id": "tensor_add_out",
+      "shape": [1, 1, 32, 32],
+      "dtype": "fp16",
+      "format": "nd",
+      "hbm_offset": null,
+      "hbm_size": null,
+      "l1_offset": null,
+      "is_weight": false,
+      "is_model_input": false,
+      "is_model_output": false,
+      "producer_node_id": "node_add",
+      "consumer_node_ids": ["node_softmax_p1"]
+    },
+    "tensor_sm_p1_out": {
+      "id": "tensor_sm_p1_out",
+      "shape": [1, 1, 32, 32],
+      "dtype": "fp16",
+      "format": "nd",
+      "hbm_offset": null,
+      "hbm_size": null,
+      "l1_offset": null,
+      "is_weight": false,
+      "is_model_input": false,
+      "is_model_output": false,
+      "producer_node_id": "node_softmax_p1",
+      "consumer_node_ids": ["node_softmax_p2"]
+    },
+    "tensor_sm_p2_out": {
+      "id": "tensor_sm_p2_out",
+      "shape": [1, 1, 32, 32],
+      "dtype": "fp16",
+      "format": "nd",
+      "hbm_offset": null,
+      "hbm_size": null,
+      "l1_offset": null,
+      "is_weight": false,
+      "is_model_input": false,
+      "is_model_output": true,
+      "producer_node_id": "node_softmax_p2",
+      "consumer_node_ids": []
+    }
+  },
+  "execution_order": ["node_add", "node_softmax_p1", "node_softmax_p2"]
+}

@@ -1,0 +1,8 @@
+# 吸收规则配置
+
+absorptions:
+  - absorbed_op: npu_add
+    target_op: npu_softmax_part1
+    param_name: mask
+    absorbed_input_index: 1
+    passthrough_input_index: 0
