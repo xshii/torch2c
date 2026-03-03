@@ -1,0 +1,18 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <assert.h>
+#include "model_memory.h"
+
+static int _test_count = 0;
+static int _pass_count = 0;
+#define RUN_TEST(fn) do {{ _test_count++; printf("  [RUN] %s ... ", #fn); fn(); _pass_count++; printf("PASS\\n"); }} while(0)
+#define ASSERT_TRUE(cond) do {{ if (!(cond)) {{ printf("FAIL\\n    %s:%d\\n", __FILE__, __LINE__); exit(1); }} }} while(0)
+#define TEST_SUMMARY() printf("\\n=== %d/%d tests passed ===\\n", _pass_count, _test_count)
+
+{test_functions}
+
+int main(void) {{
+{run_tests}
+    TEST_SUMMARY();
+    return (_pass_count == _test_count) ? 0 : 1;
+}}

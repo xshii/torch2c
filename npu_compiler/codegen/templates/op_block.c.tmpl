@@ -1,0 +1,6 @@
+    /* === {op_id}: {npu_op} ({compute_unit}) === */
+{dma_loads}
+    npu_dma_barrier();
+    {op_call};
+{dma_stores}
+    npu_dma_barrier();

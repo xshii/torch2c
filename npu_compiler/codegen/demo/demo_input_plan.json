@@ -1,0 +1,150 @@
+{
+  "nodes": {
+    "node_0": {
+      "id": "node_0",
+      "op_type": "npu_matmul",
+      "inputs": ["t_input", "t_weight"],
+      "outputs": ["t_mm_out"],
+      "params": {},
+      "compute_unit": "Cube",
+      "npu_op": "npu_matmul",
+      "is_mapped": true,
+      "format_annotation": null,
+      "schedule_order": 0,
+      "dependencies": [],
+      "absorbed_inputs": {}
+    },
+    "node_1": {
+      "id": "node_1",
+      "op_type": "npu_gelu",
+      "inputs": ["t_mm_out"],
+      "outputs": ["t_gelu_out"],
+      "params": {},
+      "compute_unit": "Vector",
+      "npu_op": "npu_gelu",
+      "is_mapped": true,
+      "format_annotation": null,
+      "schedule_order": 1,
+      "dependencies": ["node_0"],
+      "absorbed_inputs": {}
+    },
+    "node_2": {
+      "id": "node_2",
+      "op_type": "npu_add",
+      "inputs": ["t_gelu_out", "t_input"],
+      "outputs": ["t_add_out"],
+      "params": {},
+      "compute_unit": "Vector",
+      "npu_op": "npu_add",
+      "is_mapped": true,
+      "format_annotation": null,
+      "schedule_order": 2,
+      "dependencies": ["node_1"],
+      "absorbed_inputs": {}
+    }
+  },
+  "tensors": {
+    "t_input": {
+      "id": "t_input",
+      "shape": [1, 32, 64],
+      "dtype": "fp16",
+      "format": "nd",
+      "hbm_offset": 0,
+      "hbm_size": 4096,
+      "l1_offset": 0,
+      "is_weight": false,
+      "is_model_input": true,
+      "is_model_output": false,
+      "producer_node_id": null,
+      "consumer_node_ids": ["node_0", "node_2"]
+    },
+    "t_weight": {
+      "id": "t_weight",
+      "shape": [64, 64],
+      "dtype": "fp16",
+      "format": "nd",
+      "hbm_offset": 4096,
+      "hbm_size": 8192,
+      "l1_offset": 4096,
+      "is_weight": true,
+      "is_model_input": false,
+      "is_model_output": false,
+      "producer_node_id": null,
+      "consumer_node_ids": ["node_0"]
+    },
+    "t_mm_out": {
+      "id": "t_mm_out",
+      "shape": [1, 32, 64],
+      "dtype": "fp16",
+      "format": "nd",
+      "hbm_offset": 12288,
+      "hbm_size": 4096,
+      "l1_offset": 12288,
+      "is_weight": false,
+      "is_model_input": false,
+      "is_model_output": false,
+      "producer_node_id": "node_0",
+      "consumer_node_ids": ["node_1"]
+    },
+    "t_gelu_out": {
+      "id": "t_gelu_out",
+      "shape": [1, 32, 64],
+      "dtype": "fp16",
+      "format": "nd",
+      "hbm_offset": 16384,
+      "hbm_size": 4096,
+      "l1_offset": 0,
+      "is_weight": false,
+      "is_model_input": false,
+      "is_model_output": false,
+      "producer_node_id": "node_1",
+      "consumer_node_ids": ["node_2"]
+    },
+    "t_add_out": {
+      "id": "t_add_out",
+      "shape": [1, 32, 64],
+      "dtype": "fp16",
+      "format": "nd",
+      "hbm_offset": 20480,
+      "hbm_size": 4096,
+      "l1_offset": 8192,
+      "is_weight": false,
+      "is_model_input": false,
+      "is_model_output": true,
+      "producer_node_id": "node_2",
+      "consumer_node_ids": []
+    }
+  },
+  "execution_order": ["node_0", "node_1", "node_2"],
+  "dma_plans": [
+    {
+      "node_id": "node_0",
+      "loads": [
+        {"op": "load", "tensor_id": "t_input", "hbm_offset": 0, "l1_offset": 0, "size_bytes": 4096, "src_format": "nd", "dst_format": "nd"},
+        {"op": "load", "tensor_id": "t_weight", "hbm_offset": 4096, "l1_offset": 4096, "size_bytes": 8192, "src_format": "nd", "dst_format": "nd"}
+      ],
+      "stores": [
+        {"op": "store", "tensor_id": "t_mm_out", "hbm_offset": 12288, "l1_offset": 12288, "size_bytes": 4096, "src_format": "nd", "dst_format": "nd"}
+      ]
+    },
+    {
+      "node_id": "node_1",
+      "loads": [
+        {"op": "load", "tensor_id": "t_mm_out", "hbm_offset": 12288, "l1_offset": 0, "size_bytes": 4096, "src_format": "nd", "dst_format": "nd"}
+      ],
+      "stores": [
+        {"op": "store", "tensor_id": "t_gelu_out", "hbm_offset": 16384, "l1_offset": 4096, "size_bytes": 4096, "src_format": "nd", "dst_format": "nd"}
+      ]
+    },
+    {
+      "node_id": "node_2",
+      "loads": [
+        {"op": "load", "tensor_id": "t_gelu_out", "hbm_offset": 16384, "l1_offset": 0, "size_bytes": 4096, "src_format": "nd", "dst_format": "nd"},
+        {"op": "load", "tensor_id": "t_input", "hbm_offset": 0, "l1_offset": 4096, "size_bytes": 4096, "src_format": "nd", "dst_format": "nd"}
+      ],
+      "stores": [
+        {"op": "store", "tensor_id": "t_add_out", "hbm_offset": 20480, "l1_offset": 8192, "size_bytes": 4096, "src_format": "nd", "dst_format": "nd"}
+      ]
+    }
+  ]
+}
