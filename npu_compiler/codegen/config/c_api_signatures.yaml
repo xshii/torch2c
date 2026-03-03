@@ -60,7 +60,7 @@ compute_ops:
       - { name: "inter",    type: "addr",  source: "tensor.input_0.l1_offset" }
       - { name: "orig",     type: "addr",  source: "tensor.input_1.l1_offset" }
       - { name: "out",      type: "addr",  source: "tensor.output_0.l1_offset" }
-      - { name: "hidden",   type: "int",   source: "tensor.input_0.shape.-1" }
+      - { name: "hidden",   type: "int",   source: "tensor.input_0.elem_count" }
       - { name: "dtype",    type: "enum",  source: "tensor.input_0.dtype" }
 
   npu_softmax_part1:
@@ -103,6 +103,7 @@ compute_ops:
       - { name: "input",  type: "addr",  source: "tensor.input_0.l1_offset" }
       - { name: "out",    type: "addr",  source: "tensor.output_0.l1_offset" }
       - { name: "count",  type: "int",   source: "tensor.input_0.elem_count" }
+      - { name: "dtype",  type: "enum",  source: "tensor.input_0.dtype" }
 
 dma_ops:
   npu_dma_load:

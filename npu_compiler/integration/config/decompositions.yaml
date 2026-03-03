@@ -1,0 +1,16 @@
+# 算子裂解规则：将未映射的 ATen 算子替换为固定 NPU 算子组
+# 中间 tensor shape = 源算子输入 shape（§16.5）
+
+decompositions:
+  aten.native_layer_norm.default:
+    steps:
+      - npu_op: npu_layernorm_part1
+        compute_unit: vector
+      - npu_op: npu_layernorm_part2
+        compute_unit: vector
+  aten._softmax.default:
+    steps:
+      - npu_op: npu_softmax_part1
+        compute_unit: vector
+      - npu_op: npu_softmax_part2
+        compute_unit: vector

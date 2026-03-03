@@ -67,7 +67,7 @@ static int test_transpose_nd_swap_adjacent(void) {
 static int test_reshape(void) {
     float in[6] = {1, 2, 3, 4, 5, 6};
     float out[6] = {0};
-    npu_reshape(in, out, 6 * (int)sizeof(float));
+    npu_reshape(in, out, 6, NPU_DTYPE_FP32);
     for (int i = 0; i < 6; i++)
         ASSERT_FLOAT_EQ(out[i], in[i], 0.0f);
     return 1;

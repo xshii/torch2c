@@ -23,15 +23,18 @@ def _array_to_hex(arr: np.ndarray) -> str:
     return ",\n".join(lines)
 
 
-def emit_weights_h(weights: dict[str, np.ndarray]) -> str:
+def emit_weights_h(weights: dict[str, np.ndarray],
+                   offsets: dict[str, int] | list[int] | None = None) -> str:
     """生成 model_weights.h 内容。
 
     Args:
-        weights: {tensor_id: numpy_array} 映射。
+        weights: {state_dict_key: numpy_array} 映射。
+        offsets: 权重名→HBM 偏移的字典，或与 weights 顺序一致的列表。
     """
     lines = ["#ifndef MODEL_WEIGHTS_H", "#define MODEL_WEIGHTS_H", "",
-             "#include <stddef.h>", ""]
+             "#include <stddef.h>", "#include <string.h>", ""]
 
+    entries: list[tuple[str, str, int]] = []  # (safe_name, tid, offset)
     for tid, arr in weights.items():
         safe = tid.replace(".", "_").replace("-", "_")
         nbytes = arr.nbytes
@@ -42,16 +45,31 @@ def emit_weights_h(weights: dict[str, np.ndarray]) -> str:
         lines.append(hex_data)
         lines.append("};")
         lines.append("")
+        # 解析偏移
+        if isinstance(offsets, dict):
+            offset = offsets.get(tid)
+        elif isinstance(offsets, list) and len(offsets) > len(entries):
+            offset = offsets[len(entries)]
+        else:
+            offset = None
+        entries.append((safe, tid, offset))
 
     lines.append("static inline void load_weights(unsigned char* hbm) {")
-    lines.append("    (void)hbm; /* weights loaded via offsets */")
+    if all(e[2] is not None for e in entries):
+        for safe, _tid, offset in entries:
+            lines.append(
+                f"    memcpy(hbm + {offset}, {safe}_data, sizeof({safe}_data));"
+            )
+    else:
+        lines.append("    (void)hbm;")
     lines.append("}")
     lines += ["", "#endif", ""]
     return "\n".join(lines)
 
 
 def export_weights(state_dict: dict, output_path: str,
-                   dtype: str = "fp16") -> None:
+                   dtype: str = "fp16",
+                   offsets: dict[str, int] | list[int] | None = None) -> None:
     """将 PyTorch state_dict 导出为 model_weights.h。"""
     logger.info("weight_exporter: 导出权重到 %s", output_path)
     np_dtype = _DTYPE_NP.get(dtype)
@@ -65,5 +83,5 @@ def export_weights(state_dict: dict, output_path: str,
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "w") as f:
-        f.write(emit_weights_h(weights))
+        f.write(emit_weights_h(weights, offsets))
     logger.info("weight_exporter: 已生成 %s", output_path)

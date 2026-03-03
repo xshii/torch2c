@@ -52,7 +52,7 @@ void npu_softmax_mask(void* input, void* out, const uint8_t* mask,
 void npu_transpose(void* input, void* out, int ndim, const int* dims,
                    int dim0, int dim1, npu_dtype_t dtype);
 void npu_transpose_2d(void* input, void* out, int rows, int cols, npu_dtype_t dtype);
-void npu_reshape(void* input, void* out, int count);
+void npu_reshape(void* input, void* out, int count, npu_dtype_t dtype);
 
 /* ---- DMA ops (3) ---- */
 void npu_dma_load(void* l1_dst, void* hbm_src, int size,

@@ -89,10 +89,11 @@ def capture(model: nn.Module, dummy_input: torch.Tensor,
     ep = export(model, args)
 
     # 区分参数/权重 placeholder 和用户输入 placeholder
-    param_names: set[str] = set()
+    # 映射 FX placeholder name → state_dict key (spec.target)
+    param_names: dict[str, str] = {}
     for spec in ep.graph_signature.input_specs:
         if spec.kind.name != "USER_INPUT":
-            param_names.add(spec.arg.name)
+            param_names[spec.arg.name] = spec.target
 
     fx_map: dict[str, str | list[str]] = {}
     tgen = _IdGen("t")
@@ -130,6 +131,8 @@ def _handle_placeholder(graph, fx_node, fx_map, tgen, param_names):
     is_weight = fx_node.name in param_names
     t = _make_tensor(tid, val, is_weight=is_weight,
                      is_model_input=not is_weight)
+    if is_weight:
+        t.name = param_names[fx_node.name]
     graph.add_tensor(t)
     fx_map[fx_node.name] = tid
 

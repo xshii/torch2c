@@ -157,6 +157,20 @@ def gen_op_block(node: dict, tensors: dict, dma_plan: dict,
 
 # ---- 文件级生成 ----
 
+def _gen_bulk_dma(dma_plan: dict, label: str) -> str:
+    """生成 bulk DMA (load/store) 代码块。"""
+    indent = "    "
+    loads = dma_plan.get("loads", [])
+    stores = dma_plan.get("stores", [])
+    instructions = loads + stores
+    if not instructions:
+        return ""
+    lines = [f"{indent}/* === {label} === */"]
+    lines.append(_gen_dma_block(instructions, indent))
+    lines.append(f"{indent}npu_dma_barrier();")
+    return "\n".join(lines)
+
+
 def emit_model_graph_c(plan: dict, signatures: dict) -> str:
     """生成 model_graph.c 完整内容。"""
     nodes = plan["nodes"]
@@ -164,12 +178,23 @@ def emit_model_graph_c(plan: dict, signatures: dict) -> str:
     dma_plans = {dp["node_id"]: dp for dp in plan.get("dma_plans", [])}
     order = plan.get("execution_order", list(nodes.keys()))
 
-    blocks = []
+    parts = []
+
+    # bulk load（全局 L1 布局时）
+    bulk_load = dma_plans.get("__bulk_load__")
+    if bulk_load:
+        parts.append(_gen_bulk_dma(bulk_load, "Bulk DMA Load"))
+
     for nid in order:
         dp = dma_plans.get(nid, {"loads": [], "stores": []})
-        blocks.append(gen_op_block(nodes[nid], tensors, dp, signatures))
+        parts.append(gen_op_block(nodes[nid], tensors, dp, signatures))
 
-    body = "\n\n".join(blocks)
+    # bulk store（全局 L1 布局时）
+    bulk_store = dma_plans.get("__bulk_store__")
+    if bulk_store:
+        parts.append(_gen_bulk_dma(bulk_store, "Bulk DMA Store"))
+
+    body = "\n\n".join(p for p in parts if p)
     return (
         '#include "model_graph.h"\n'
         '#include "model_memory.h"\n'

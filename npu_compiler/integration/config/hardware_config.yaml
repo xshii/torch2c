@@ -1,0 +1,21 @@
+memory:
+  hbm:
+    total_size_bytes: 4294967296
+    alignment_bytes: 512
+  l2:
+    total_size_bytes: 33554432
+    alignment_bytes: 256
+  l1:
+    total_size_bytes: 16777216
+    alignment_bytes: 32
+
+fractal:
+  cube_size: 16
+  c0_by_dtype:
+    fp16: 16
+    int8: 32
+
+dma:
+  supports_format_convert: true
+  supports_dtype_cast: false
+  max_transfer_size_bytes: 1048576

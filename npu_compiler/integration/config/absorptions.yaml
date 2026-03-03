@@ -1,0 +1,5 @@
+# 吸收规则配置
+# 注意: npu_cpu_mock 不支持 fused mask+softmax，
+# 因此 integration 管线不吸收 mask add 到 softmax。
+
+absorptions: []

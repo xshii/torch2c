@@ -33,8 +33,7 @@ void npu_softmax_part1(void* input, void* out, int dim, int count, npu_dtype_t d
 }
 
 void npu_softmax_part2(void* inter, void* out, int count, npu_dtype_t dtype) {
-    (void)dtype;
-    memcpy(out, inter, (size_t)count);
+    memcpy(out, inter, (size_t)count * npu_dtype_size(dtype));
 }
 
 /*

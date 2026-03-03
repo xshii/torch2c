@@ -23,6 +23,7 @@ class Tensor:
     is_weight: bool = False
     is_model_input: bool = False
     is_model_output: bool = False
+    name: Optional[str] = None
     producer_node_id: Optional[str] = None
     consumer_node_ids: list[str] = field(default_factory=list)
 

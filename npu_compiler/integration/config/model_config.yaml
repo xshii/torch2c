@@ -1,0 +1,9 @@
+# 模型参数配置
+
+model:
+  d_model: 256
+  dim_ff: 512
+  num_layers: 2
+  seq_len: 32
+  batch_size: 1
+  dtype: fp16
