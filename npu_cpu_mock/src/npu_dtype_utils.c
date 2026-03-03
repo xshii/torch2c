@@ -36,8 +36,11 @@ float npu_read_as_float(const void* buf, int index, npu_dtype_t dtype) {
             memcpy(&f, &bits, 4);
             return f;
         }
-        case NPU_DTYPE_INT8:
-            return (float)((const int8_t*)buf)[index];
+        case NPU_DTYPE_INT8: {
+            int8_t v;
+            memcpy(&v, p + index * 1, 1);
+            return (float)v;
+        }
         case NPU_DTYPE_INT32: {
             int32_t v;
             memcpy(&v, p + index * 4, 4);
@@ -70,16 +73,19 @@ void npu_write_from_float(void* buf, int index, float value, npu_dtype_t dtype) 
             memcpy(p + index * 2, &h, 2);
             break;
         }
-        case NPU_DTYPE_INT8:
-            ((int8_t*)buf)[index] = (int8_t)value;
+        case NPU_DTYPE_INT8: {
+            float clamped = value < -128.0f ? -128.0f : (value > 127.0f ? 127.0f : value);
+            ((int8_t*)p)[index] = (int8_t)clamped;
             break;
+        }
         case NPU_DTYPE_INT32: {
             int32_t v = (int32_t)value;
             memcpy(p + index * 4, &v, 4);
             break;
         }
         case NPU_DTYPE_INT16: {
-            int16_t v = (int16_t)value;
+            float clamped = value < -32768.0f ? -32768.0f : (value > 32767.0f ? 32767.0f : value);
+            int16_t v = (int16_t)clamped;
             memcpy(p + index * 2, &v, 2);
             break;
         }

@@ -59,6 +59,50 @@ static int test_read_write_fp16(void) {
     return 1;
 }
 
+static int test_read_write_int8(void) {
+    int8_t buf[4];
+    npu_write_from_float(buf, 0, 42.0f, NPU_DTYPE_INT8);
+    npu_write_from_float(buf, 1, -100.0f, NPU_DTYPE_INT8);
+    npu_write_from_float(buf, 2, 0.0f, NPU_DTYPE_INT8);
+    ASSERT_FLOAT_EQ(npu_read_as_float(buf, 0, NPU_DTYPE_INT8), 42.0f, 0.0f);
+    ASSERT_FLOAT_EQ(npu_read_as_float(buf, 1, NPU_DTYPE_INT8), -100.0f, 0.0f);
+    ASSERT_FLOAT_EQ(npu_read_as_float(buf, 2, NPU_DTYPE_INT8), 0.0f, 0.0f);
+    return 1;
+}
+
+static int test_read_write_int16(void) {
+    int16_t buf[4];
+    npu_write_from_float(buf, 0, 1000.0f, NPU_DTYPE_INT16);
+    npu_write_from_float(buf, 1, -2000.0f, NPU_DTYPE_INT16);
+    npu_write_from_float(buf, 2, 0.0f, NPU_DTYPE_INT16);
+    ASSERT_FLOAT_EQ(npu_read_as_float(buf, 0, NPU_DTYPE_INT16), 1000.0f, 0.0f);
+    ASSERT_FLOAT_EQ(npu_read_as_float(buf, 1, NPU_DTYPE_INT16), -2000.0f, 0.0f);
+    ASSERT_FLOAT_EQ(npu_read_as_float(buf, 2, NPU_DTYPE_INT16), 0.0f, 0.0f);
+    return 1;
+}
+
+static int test_int8_clamp(void) {
+    int8_t buf[2];
+    /* overflow: 200 > 127 => clamp to 127 */
+    npu_write_from_float(buf, 0, 200.0f, NPU_DTYPE_INT8);
+    ASSERT_FLOAT_EQ(npu_read_as_float(buf, 0, NPU_DTYPE_INT8), 127.0f, 0.0f);
+    /* underflow: -200 < -128 => clamp to -128 */
+    npu_write_from_float(buf, 1, -200.0f, NPU_DTYPE_INT8);
+    ASSERT_FLOAT_EQ(npu_read_as_float(buf, 1, NPU_DTYPE_INT8), -128.0f, 0.0f);
+    return 1;
+}
+
+static int test_int16_clamp(void) {
+    int16_t buf[2];
+    /* overflow: 40000 > 32767 => clamp to 32767 */
+    npu_write_from_float(buf, 0, 40000.0f, NPU_DTYPE_INT16);
+    ASSERT_FLOAT_EQ(npu_read_as_float(buf, 0, NPU_DTYPE_INT16), 32767.0f, 0.0f);
+    /* underflow: -40000 < -32768 => clamp to -32768 */
+    npu_write_from_float(buf, 1, -40000.0f, NPU_DTYPE_INT16);
+    ASSERT_FLOAT_EQ(npu_read_as_float(buf, 1, NPU_DTYPE_INT16), -32768.0f, 0.0f);
+    return 1;
+}
+
 int main(void) {
     printf("test_fp16:\n");
     RUN_TEST(test_fp16_roundtrip);
@@ -67,5 +111,9 @@ int main(void) {
     RUN_TEST(test_dtype_size);
     RUN_TEST(test_read_write_fp32);
     RUN_TEST(test_read_write_fp16);
+    RUN_TEST(test_read_write_int8);
+    RUN_TEST(test_read_write_int16);
+    RUN_TEST(test_int8_clamp);
+    RUN_TEST(test_int16_clamp);
     TEST_SUMMARY();
 }

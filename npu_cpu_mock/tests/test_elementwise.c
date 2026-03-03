@@ -66,13 +66,73 @@ static int test_gelu_fp16(void) {
     return 1;
 }
 
+static int test_add_int8(void) {
+    int8_t a[4], b[4], out[4];
+    /* 10+20=30, 50+60=110, (-10)+(-20)=-30, 100+100=127 (clamped) */
+    npu_write_from_float(a, 0, 10.0f, NPU_DTYPE_INT8);
+    npu_write_from_float(a, 1, 50.0f, NPU_DTYPE_INT8);
+    npu_write_from_float(a, 2, -10.0f, NPU_DTYPE_INT8);
+    npu_write_from_float(a, 3, 100.0f, NPU_DTYPE_INT8);
+    npu_write_from_float(b, 0, 20.0f, NPU_DTYPE_INT8);
+    npu_write_from_float(b, 1, 60.0f, NPU_DTYPE_INT8);
+    npu_write_from_float(b, 2, -20.0f, NPU_DTYPE_INT8);
+    npu_write_from_float(b, 3, 100.0f, NPU_DTYPE_INT8);
+    npu_add(a, b, out, 4, NPU_DTYPE_INT8);
+    ASSERT_FLOAT_EQ(npu_read_as_float(out, 0, NPU_DTYPE_INT8), 30.0f, 0.0f);
+    ASSERT_FLOAT_EQ(npu_read_as_float(out, 1, NPU_DTYPE_INT8), 110.0f, 0.0f);
+    ASSERT_FLOAT_EQ(npu_read_as_float(out, 2, NPU_DTYPE_INT8), -30.0f, 0.0f);
+    /* 100+100=200 => clamped to 127 */
+    ASSERT_FLOAT_EQ(npu_read_as_float(out, 3, NPU_DTYPE_INT8), 127.0f, 0.0f);
+    return 1;
+}
+
+static int test_add_int16(void) {
+    int16_t a[4], b[4], out[4];
+    npu_write_from_float(a, 0, 1000.0f, NPU_DTYPE_INT16);
+    npu_write_from_float(a, 1, -500.0f, NPU_DTYPE_INT16);
+    npu_write_from_float(b, 0, 2000.0f, NPU_DTYPE_INT16);
+    npu_write_from_float(b, 1, -300.0f, NPU_DTYPE_INT16);
+    npu_add(a, b, out, 2, NPU_DTYPE_INT16);
+    ASSERT_FLOAT_EQ(npu_read_as_float(out, 0, NPU_DTYPE_INT16), 3000.0f, 0.0f);
+    ASSERT_FLOAT_EQ(npu_read_as_float(out, 1, NPU_DTYPE_INT16), -800.0f, 0.0f);
+    return 1;
+}
+
+static int test_mul_int8(void) {
+    int8_t a[2], b[2], out[2];
+    npu_write_from_float(a, 0, 5.0f, NPU_DTYPE_INT8);
+    npu_write_from_float(a, 1, -3.0f, NPU_DTYPE_INT8);
+    npu_write_from_float(b, 0, 4.0f, NPU_DTYPE_INT8);
+    npu_write_from_float(b, 1, 7.0f, NPU_DTYPE_INT8);
+    npu_mul(a, b, out, 2, NPU_DTYPE_INT8);
+    ASSERT_FLOAT_EQ(npu_read_as_float(out, 0, NPU_DTYPE_INT8), 20.0f, 0.0f);
+    ASSERT_FLOAT_EQ(npu_read_as_float(out, 1, NPU_DTYPE_INT8), -21.0f, 0.0f);
+    return 1;
+}
+
+static int test_matmul_int8(void) {
+    /* [1x2] * [2x1] = [1x1]: 3*4 + 5*6 = 42 */
+    int8_t a[2], b[2], out[1];
+    npu_write_from_float(a, 0, 3.0f, NPU_DTYPE_INT8);
+    npu_write_from_float(a, 1, 5.0f, NPU_DTYPE_INT8);
+    npu_write_from_float(b, 0, 4.0f, NPU_DTYPE_INT8);
+    npu_write_from_float(b, 1, 6.0f, NPU_DTYPE_INT8);
+    npu_matmul(a, b, out, 1, 1, 2, NPU_DTYPE_INT8, NPU_FORMAT_ND);
+    ASSERT_FLOAT_EQ(npu_read_as_float(out, 0, NPU_DTYPE_INT8), 42.0f, 0.0f);
+    return 1;
+}
+
 int main(void) {
     printf("test_elementwise:\n");
     RUN_TEST(test_add_fp32);
     RUN_TEST(test_add_fp16);
+    RUN_TEST(test_add_int8);
+    RUN_TEST(test_add_int16);
     RUN_TEST(test_mul_fp32);
+    RUN_TEST(test_mul_int8);
     RUN_TEST(test_mul_scalar_fp32);
     RUN_TEST(test_gelu_fp32);
     RUN_TEST(test_gelu_fp16);
+    RUN_TEST(test_matmul_int8);
     TEST_SUMMARY();
 }
