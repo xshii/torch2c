@@ -92,3 +92,20 @@ void npu_write_from_float(void* buf, int index, float value, npu_dtype_t dtype) 
         default: break;
     }
 }
+
+float npu_round_to_dtype(float value, npu_dtype_t dtype) {
+    switch (dtype) {
+        case NPU_DTYPE_FP16:
+            return fp16_to_float(float_to_fp16(value));
+        case NPU_DTYPE_BF16: {
+            uint32_t bits;
+            memcpy(&bits, &value, 4);
+            bits &= 0xFFFF0000u; /* truncate lower 16 mantissa bits */
+            float r;
+            memcpy(&r, &bits, 4);
+            return r;
+        }
+        default:
+            return value; /* FP32/INT types: no rounding needed */
+    }
+}

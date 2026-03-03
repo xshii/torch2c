@@ -24,10 +24,16 @@ typedef enum {
 size_t npu_dtype_size(npu_dtype_t dtype);
 float  npu_read_as_float(const void* buf, int index, npu_dtype_t dtype);
 void   npu_write_from_float(void* buf, int index, float value, npu_dtype_t dtype);
+float  npu_round_to_dtype(float value, npu_dtype_t dtype);
 
 /* ---- compute ops (12) ---- */
 void npu_matmul(void* a, void* b, void* out,
                 int M, int N, int K, npu_dtype_t dtype, npu_format_t fmt);
+
+void npu_matmul_bias(void* a, void* b, void* bias, void* out,
+                     int M, int N, int K,
+                     npu_dtype_t io_dtype, npu_dtype_t compute_dtype,
+                     npu_format_t fmt);
 
 void npu_add(void* a, void* b, void* out, int count, npu_dtype_t dtype);
 void npu_mul(void* a, void* b, void* out, int count, npu_dtype_t dtype);
