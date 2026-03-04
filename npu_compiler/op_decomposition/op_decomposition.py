@@ -108,6 +108,7 @@ def _rewire_graph(graph: Graph, node: Node, new_nodes: list[Node], intermediates
     # 中间 tensor 的 producer/consumer
     for i, inter_tid in enumerate(intermediates):
         t = graph.get_tensor(inter_tid)
+        assert t is not None
         t.producer_node_id = new_nodes[i].id
         t.consumer_node_ids = [new_nodes[i + 1].id]
 

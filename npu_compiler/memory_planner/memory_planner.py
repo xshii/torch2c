@@ -76,7 +76,7 @@ def _release_expired(
         if other_tid in freed_set:
             continue
         other_t = graph.tensors[other_tid]
-        if other_t.hbm_offset is None:
+        if other_t.hbm_offset is None or other_t.hbm_size is None:
             continue
         if lifetimes[other_tid][1] < current_first:
             free_blocks.append([other_t.hbm_offset, align_up(other_t.hbm_size, hbm_alignment)])
@@ -229,7 +229,7 @@ def run(graph: Graph, config: dict) -> tuple[Graph, list[DmaPlan]]:
     lifetimes = _analyze_lifetimes(graph)
     reuse_count = _allocate_hbm(graph, lifetimes, hbm_align, cube_size)
 
-    dma_plans: list[DmaPlan] = []
+    dma_plans = []
     for nid in graph.execution_order:
         l1_layout = _plan_l1_layout(graph, nid, l1_align, l1_cap, cube_size)
         for tid, off in l1_layout.items():

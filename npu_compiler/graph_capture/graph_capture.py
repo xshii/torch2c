@@ -1,13 +1,9 @@
-"""图捕获：将 PyTorch 模型导出为 Graph IR。
-
-使用 torch.export 将 nn.Module 导出为 ATen IR，然后转换为 Graph IR。
-保留高级算子（layer_norm, softmax），标记权重和输入输出张量。
-"""
+"""图捕获：将 PyTorch 模型（通过 torch.export）导出为 Graph IR。"""
 
 from __future__ import annotations
 
 import operator
-from typing import Any
+from typing import Any, TypeAlias
 
 import torch
 import torch.nn as nn
@@ -25,6 +21,8 @@ from ._constants import (
 )
 
 logger = get_logger(__name__)
+
+_FxMap: TypeAlias = "dict[str, str | list[str]]"
 
 
 class _IdGen:
@@ -48,16 +46,7 @@ def _make_tensor(tid: str, val: Any, **kwargs) -> Tensor:
 
 
 def capture(model: nn.Module, dummy_input: torch.Tensor, mask: torch.Tensor | None = None) -> Graph:
-    """将 PyTorch 模型导出为 Graph IR。
-
-    Args:
-        model: PyTorch 模型。
-        dummy_input: 固定 shape 的样例输入。
-        mask: 可选 attention mask。
-
-    Returns:
-        Graph IR，节点 op_type 为 ATen 算子全称。
-    """
+    """将 PyTorch 模型导出为 Graph IR。"""
     graph = Graph()
     args = (dummy_input, mask) if mask is not None else (dummy_input,)
 
@@ -70,7 +59,7 @@ def capture(model: nn.Module, dummy_input: torch.Tensor, mask: torch.Tensor | No
         if spec.kind.name != "USER_INPUT":
             param_names[spec.arg.name] = spec.target
 
-    fx_map: dict[str, str | list[str]] = {}
+    fx_map: _FxMap = {}
     tgen = _IdGen("t")
     ngen = _IdGen("node")
 
@@ -104,7 +93,6 @@ def capture(model: nn.Module, dummy_input: torch.Tensor, mask: torch.Tensor | No
     return graph
 
 
-
 def _resolve_negative_dims(graph: Graph) -> None:
     """将 dim 参数的负索引转正，并将 softmax 的 dim 从索引转为维度大小。"""
     for node in graph.nodes.values():
@@ -125,8 +113,9 @@ def _resolve_negative_dims(graph: Graph) -> None:
             node.params["dim"] = dim_val
 
 
-
-def _handle_placeholder(graph, fx_node, fx_map, tgen, param_names):
+def _handle_placeholder(
+    graph: Graph, fx_node: torch.fx.Node, fx_map: _FxMap, tgen: _IdGen, param_names: dict[str, str],
+) -> None:
     """处理 placeholder 节点（模型输入或参数）。"""
     tid = tgen.next()
     val = fx_node.meta.get("val")
@@ -138,7 +127,7 @@ def _handle_placeholder(graph, fx_node, fx_map, tgen, param_names):
     fx_map[fx_node.name] = tid
 
 
-def _handle_getitem(fx_node, fx_map):
+def _handle_getitem(fx_node: torch.fx.Node, fx_map: _FxMap) -> None:
     """处理 getitem 节点（多输出算子的索引访问）。"""
     source = fx_node.args[0]
     index = fx_node.args[1]
@@ -241,7 +230,9 @@ def _create_call_outputs(
     return output_tids
 
 
-def _handle_call(graph, fx_node, fx_map, tgen, ngen):
+def _handle_call(
+    graph: Graph, fx_node: torch.fx.Node, fx_map: _FxMap, tgen: _IdGen, ngen: _IdGen,
+) -> None:
     """处理 call_function 节点（ATen 算子调用）。"""
     op = op_name(fx_node.target)
     nid = ngen.next()
@@ -285,7 +276,7 @@ def post_validate(graph: Graph) -> list[str]:
     return errors
 
 
-def _handle_output(graph, fx_node, fx_map):
+def _handle_output(graph: Graph, fx_node: torch.fx.Node, fx_map: _FxMap) -> None:
     """处理 output 节点，标记模型输出张量。"""
     output_args = fx_node.args[0] if fx_node.args else ()
     if isinstance(output_args, torch.fx.Node):

@@ -43,7 +43,7 @@ def emit_weights_h(
         "",
     ]
 
-    entries: list[tuple[str, str, int]] = []  # (safe_name, tid, offset)
+    entries: list[tuple[str, str, int | None]] = []  # (safe_name, tid, offset)
     for tid, arr in weights.items():
         safe = tid.replace(".", "_").replace("-", "_")
         nbytes = arr.nbytes

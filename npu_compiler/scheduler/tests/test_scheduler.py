@@ -226,7 +226,10 @@ class TestScheduleOrder:
         g = _make_linear_chain()
         g = run(g)
 
-        orders = [g.nodes[nid].schedule_order for nid in g.execution_order]
+        raw_orders = [g.nodes[nid].schedule_order for nid in g.execution_order]
+        assert all(o is not None for o in raw_orders)
+        orders: list[int] = [o for o in raw_orders if o is not None]
+        assert len(orders) == len(raw_orders)
         assert orders == sorted(orders)
         assert orders == list(range(len(orders)))
 
