@@ -15,44 +15,16 @@ from torch.export import export
 
 from ..common.graph_ir import Graph, Node, Tensor
 from ..common.logger import get_logger
+from ._constants import (
+    ADDMM_REORDER,
+    DIM_TO_SIZE_OPS,
+    PARAM_RENAMES,
+    dtype_str,
+    is_tensor_overload,
+    op_name,
+)
 
 logger = get_logger(__name__)
-
-# graph_capture 产出的 positional param 名 → codegen 期望的 param 名
-_PARAM_RENAMES: dict[str, dict[str, str]] = {
-    "aten.transpose.int": {"p0": "dim0", "p1": "dim1"},
-    "aten._softmax.default": {"p0": "dim"},
-    "aten.native_layer_norm.default": {"p1": "epsilon", "eps": "epsilon"},
-}
-
-_DTYPE_MAP = {
-    torch.float16: "fp16",
-    torch.float32: "fp32",
-    torch.float64: "fp64",
-    torch.int8: "int8",
-    torch.int16: "int16",
-    torch.int32: "int32",
-    torch.int64: "int64",
-    torch.bool: "bool",
-    torch.bfloat16: "bf16",
-}
-
-
-def _dtype_str(dt: torch.dtype) -> str:
-    """将 torch dtype 转换为字符串标识。"""
-    return _DTYPE_MAP.get(dt, str(dt).replace("torch.", ""))
-
-
-def _op_name(target: Any) -> str:
-    """提取 ATen 算子全称，如 'aten.mm.default'。"""
-    s = str(target)
-    return s[len("torch.ops.") :] if s.startswith("torch.ops.") else s
-
-
-def _is_tensor_overload(op_name: str) -> bool:
-    """判断算子重载是否期望全部 Tensor 参数（如 aten.mul.Tensor）。"""
-    parts = op_name.rsplit(".", 1)
-    return len(parts) >= 2 and parts[-1] == "Tensor"
 
 
 class _IdGen:
@@ -71,11 +43,8 @@ class _IdGen:
 def _make_tensor(tid: str, val: Any, **kwargs) -> Tensor:
     """根据 FakeTensor 元信息创建 Tensor 对象。"""
     if isinstance(val, torch.Tensor):
-        return Tensor(id=tid, shape=list(val.shape), dtype=_dtype_str(val.dtype), **kwargs)
+        return Tensor(id=tid, shape=list(val.shape), dtype=dtype_str(val.dtype), **kwargs)
     return Tensor(id=tid, shape=[1], dtype="fp32", **kwargs)
-
-
-# ---- 主入口 ----
 
 
 def capture(model: nn.Module, dummy_input: torch.Tensor, mask: torch.Tensor | None = None) -> Graph:
@@ -135,10 +104,6 @@ def capture(model: nn.Module, dummy_input: torch.Tensor, mask: torch.Tensor | No
     return graph
 
 
-# ---- dim 解析 ----
-
-_DIM_TO_SIZE_OPS = {"aten._softmax.default"}
-
 
 def _resolve_negative_dims(graph: Graph) -> None:
     """将 dim 参数的负索引转正，并将 softmax 的 dim 从索引转为维度大小。"""
@@ -154,13 +119,11 @@ def _resolve_negative_dims(graph: Graph) -> None:
         ndim = len(t.shape)
         if dim_val < 0:
             dim_val = dim_val + ndim
-        if node.op_type in _DIM_TO_SIZE_OPS:
+        if node.op_type in DIM_TO_SIZE_OPS:
             node.params["dim"] = t.shape[dim_val]
         else:
             node.params["dim"] = dim_val
 
-
-# ---- 内部处理函数 ----
 
 
 def _handle_placeholder(graph, fx_node, fx_map, tgen, param_names):
@@ -235,12 +198,10 @@ def _normalize_op_inputs(
     params: dict,
 ) -> tuple[list[str], dict]:
     """addmm 输入重排 + 参数重命名。"""
-    # addmm(bias, mat1, mat2) → NPU 期望 (mat1, mat2, bias)
-    _ADDMM_REORDER = [1, 2, 0]
-    if op == "aten.addmm.default" and len(input_tids) >= len(_ADDMM_REORDER):
-        input_tids = [input_tids[i] for i in _ADDMM_REORDER]
+    if op == "aten.addmm.default" and len(input_tids) >= len(ADDMM_REORDER):
+        input_tids = [input_tids[i] for i in ADDMM_REORDER]
 
-    renames = _PARAM_RENAMES.get(op)
+    renames = PARAM_RENAMES.get(op)
     if renames:
         for old_key, new_key in renames.items():
             if old_key in params and new_key not in params:
@@ -281,9 +242,9 @@ def _create_call_outputs(
 
 def _handle_call(graph, fx_node, fx_map, tgen, ngen):
     """处理 call_function 节点（ATen 算子调用）。"""
-    op = _op_name(fx_node.target)
+    op = op_name(fx_node.target)
     nid = ngen.next()
-    tensor_overload = _is_tensor_overload(op)
+    tensor_overload = is_tensor_overload(op)
 
     input_tids, params = _parse_call_args(
         graph,
