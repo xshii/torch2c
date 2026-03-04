@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from npu_compiler.common import Graph, Node, Tensor
-from npu_compiler.op_absorption import run
+from npu_compiler.op_absorption.op_absorption import post_validate, run
 
 
 def _make_absorption_graph() -> Graph:
@@ -177,3 +177,30 @@ def test_empty_rules():
     result = run(g, {"absorptions": []})
     assert len(result.nodes) == node_count
     assert len(result.tensors) == tensor_count
+
+
+def test_post_validate_clean():
+    """吸收后校验通过。"""
+    g = _make_absorption_graph()
+    result = run(g, _RULES)
+    errors = post_validate(result)
+    assert errors == []
+
+
+def test_post_validate_missing_tensor():
+    """absorbed_inputs 引用不存在的 tensor 报错。"""
+    g = Graph()
+    g.add_tensor(Tensor(id="t_in", shape=[32], dtype="fp16", consumer_node_ids=["n"]))
+    g.add_tensor(Tensor(id="t_out", shape=[32], dtype="fp16", producer_node_id="n"))
+    g.add_node(
+        Node(
+            id="n",
+            op_type="npu_matmul",
+            inputs=["t_in"],
+            outputs=["t_out"],
+            absorbed_inputs={"bias": "t_nonexistent"},
+        )
+    )
+    errors = post_validate(g)
+    assert len(errors) == 1
+    assert "t_nonexistent" in errors[0]

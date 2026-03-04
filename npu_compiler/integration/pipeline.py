@@ -76,7 +76,7 @@ _MIDDLE_PASSES: list[_PassDesc] = [
         "decomposition",
         op_decomposition.post_validate,
     ),
-    _PassDesc("op_absorption", "④", op_absorption.run, "absorption"),
+    _PassDesc("op_absorption", "④", op_absorption.run, "absorption", op_absorption.post_validate),
     _PassDesc(
         "format_annotator",
         "⑤",
@@ -202,7 +202,11 @@ def compile(
     # Pass ⑥ validator（特殊：config 从 signatures 派生）
     logger.info("Pass ⑥ validator 开始")
     validator_cfg = _build_validator_config(configs["signatures"])
-    graph = validator.run(graph, validator_cfg)
+    try:
+        graph = validator.run(graph, validator_cfg)
+    except Exception as exc:
+        collector.error("validator", str(exc))
+        raise
     logger.info("Pass ⑥ 完成")
 
     # Pass ⑦ memory_planner（特殊：返回 tuple）
@@ -214,6 +218,7 @@ def compile(
     # Pass ⑧ scheduler（特殊：无 config）
     logger.info("Pass ⑧ scheduler 开始")
     graph = scheduler.run(graph)
+    _run_post_validation(collector, "scheduler", graph, scheduler.post_validate)
     logger.info("Pass ⑧ 完成")
 
     logger.info(collector.summary())

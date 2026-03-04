@@ -1,7 +1,7 @@
 """scheduler 单元测试。"""
 
 from npu_compiler.common import Graph, Node, Tensor
-from npu_compiler.scheduler import run
+from npu_compiler.scheduler.scheduler import post_validate, run
 
 
 def _make_linear_chain() -> Graph:
@@ -247,3 +247,20 @@ class TestAdjacentOnlyDeps:
         # node_3 不应直接依赖 node_0 或 node_1
         assert "node_0" not in g.nodes["node_3"].dependencies
         assert "node_1" not in g.nodes["node_3"].dependencies
+
+
+class TestPostValidate:
+    def test_post_validate_after_schedule(self):
+        """调度后校验通过。"""
+        g = _make_linear_chain()
+        g = run(g)
+        errors = post_validate(g)
+        assert errors == []
+
+    def test_post_validate_missing_schedule_order(self):
+        """未调度的节点报错。"""
+        g = _make_linear_chain()
+        # 不运行 scheduler，直接校验
+        errors = post_validate(g)
+        assert len(errors) > 0
+        assert any("schedule_order" in e for e in errors)

@@ -81,6 +81,18 @@ def _try_absorb(graph: Graph, rule: dict) -> tuple[int, int]:
     return len(nodes_to_remove), len(tensors_to_remove)
 
 
+def post_validate(graph: Graph) -> list[str]:
+    """op_absorption 后的校验：被吸收节点已清理，absorbed_inputs 引用的 tensor 存在。"""
+    errors: list[str] = []
+    for node in graph.nodes.values():
+        for param_name, tid in node.absorbed_inputs.items():
+            if tid not in graph.tensors:
+                errors.append(
+                    f"节点 {node.id} 的 absorbed_inputs[{param_name}] 引用了不存在的 tensor {tid}"
+                )
+    return errors
+
+
 def run(graph: Graph, config: dict) -> Graph:
     """执行参数吸收 pass。"""
     total_absorbed = 0
