@@ -4,11 +4,14 @@ from .config_loader import load_config
 from .errors import (
     AbsorptionError,
     CodegenError,
+    CompileDiagnostic,
     CompilerError,
     ConfigError,
     DecompositionError,
+    DiagnosticCollector,
     MappingError,
     MemoryPlanError,
+    Severity,
     ValidationError,
 )
 from .graph_ir import Graph, Node, Tensor
@@ -29,4 +32,7 @@ __all__ = [
     "ValidationError",
     "MemoryPlanError",
     "CodegenError",
+    "Severity",
+    "CompileDiagnostic",
+    "DiagnosticCollector",
 ]

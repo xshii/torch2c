@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from npu_compiler.common import Graph, get_logger, load_config
+from npu_compiler.common import DiagnosticCollector, Graph, get_logger, load_config
 from npu_compiler.codegen import c_emitter, golden_exporter, weight_exporter
 from npu_compiler.codegen.c_project import (
     cmake_emitter, main_emitter, mock_emitter, utils_emitter,
@@ -100,6 +100,17 @@ def _run_golden(
     return inputs, outputs
 
 
+def _run_post_validation(
+    collector: DiagnosticCollector,
+    phase: str,
+    graph: Graph,
+) -> None:
+    """收集指定阶段的校验诊断。"""
+    for msg in graph.validate_phase(phase):
+        collector.warn(phase, msg)
+        logger.warning("Pass %s 校验: %s", phase, msg)
+
+
 def compile(
     model: nn.Module,
     dummy_input: torch.Tensor,
@@ -124,26 +135,24 @@ def compile(
     """
     logger.info("=== 编译管线开始 ===")
     configs = _load_configs(config_dir)
+    collector = DiagnosticCollector()
 
     # Pass ① graph_capture
     logger.info("Pass ① graph_capture 开始")
     graph = graph_capture.capture(model, dummy_input, mask=mask)
-    for w in graph.validate_phase("graph_capture"):
-        logger.warning("Pass ① 校验: %s", w)
+    _run_post_validation(collector, "graph_capture", graph)
     logger.info("Pass ① 完成: %s", graph.summary())
 
     # Pass ② op_mapping
     logger.info("Pass ② op_mapping 开始")
     graph = op_mapping.run(graph, configs["mapping"])
-    for w in graph.validate_phase("op_mapping"):
-        logger.warning("Pass ② 校验: %s", w)
+    _run_post_validation(collector, "op_mapping", graph)
     logger.info("Pass ② 完成")
 
     # Pass ③ op_decomposition
     logger.info("Pass ③ op_decomposition 开始")
     graph = op_decomposition.run(graph, configs["decomposition"])
-    for w in graph.validate_phase("op_decomposition"):
-        logger.warning("Pass ③ 校验: %s", w)
+    _run_post_validation(collector, "op_decomposition", graph)
     logger.info("Pass ③ 完成: %s", graph.summary())
 
     # Pass ④ op_absorption
@@ -155,8 +164,7 @@ def compile(
     logger.info("Pass ⑤ format_annotator 开始")
     graph = format_annotator.run(graph, configs["format"])
     _propagate_input_dtypes(graph)
-    for w in graph.validate_phase("format_annotator"):
-        logger.warning("Pass ⑤ 校验: %s", w)
+    _run_post_validation(collector, "format_annotator", graph)
     logger.info("Pass ⑤ 完成")
 
     # Pass ⑥ validator
@@ -168,14 +176,15 @@ def compile(
     # Pass ⑦ memory_planner
     logger.info("Pass ⑦ memory_planner 开始")
     graph, dma_plans = memory_planner.run(graph, configs["hardware"])
-    for w in graph.validate_phase("memory_planner"):
-        logger.warning("Pass ⑦ 校验: %s", w)
+    _run_post_validation(collector, "memory_planner", graph)
     logger.info("Pass ⑦ 完成")
 
     # Pass ⑧ scheduler
     logger.info("Pass ⑧ scheduler 开始")
     graph = scheduler.run(graph)
     logger.info("Pass ⑧ 完成")
+
+    logger.info(collector.summary())
 
     # Pass ⑨ codegen
     logger.info("Pass ⑨ codegen 开始")

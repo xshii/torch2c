@@ -181,12 +181,11 @@ def _handle_getitem(fx_node, fx_map):
         fx_map[fx_node.name] = source_tids[index]
 
 
-def _handle_call(graph, fx_node, fx_map, tgen, ngen):
-    """处理 call_function 节点（ATen 算子调用）。"""
-    op = _op_name(fx_node.target)
-    nid = ngen.next()
-    tensor_overload = _is_tensor_overload(op)
-
+def _parse_call_args(
+    graph: Graph, fx_node, fx_map: dict, tgen: _IdGen, nid: str,
+    op: str, tensor_overload: bool,
+) -> tuple[list[str], dict]:
+    """解析 FX call 的 args/kwargs，返回 (input_tids, params)。"""
     input_tids: list[str] = []
     params: dict = {}
     pi = 0
@@ -197,10 +196,8 @@ def _handle_call(graph, fx_node, fx_map, tgen, ngen):
             if isinstance(resolved, str):
                 input_tids.append(resolved)
             elif isinstance(resolved, list):
-                # 多输出节点直接引用（未经 getitem），取第一个输出
                 input_tids.append(resolved[0])
         elif isinstance(arg, (int, float)) and tensor_overload and i > 0:
-            # .Tensor 重载中的标量 → 常量 tensor
             scalar_tid = tgen.next()
             scalar_t = Tensor(id=scalar_tid, shape=[1], dtype="fp32",
                               is_weight=True)
@@ -222,18 +219,29 @@ def _handle_call(graph, fx_node, fx_map, tgen, ngen):
         elif isinstance(v, (list, tuple)):
             params[k] = list(v)
 
-    # addmm 输入重排: [bias, mat1, mat2] → [mat1, mat2, bias]
+    return input_tids, params
+
+
+def _normalize_op_inputs(
+    op: str, input_tids: list[str], params: dict,
+) -> tuple[list[str], dict]:
+    """addmm 输入重排 + 参数重命名。"""
     if op == "aten.addmm.default" and len(input_tids) >= 3:
         input_tids = [input_tids[1], input_tids[2], input_tids[0]]
 
-    # 参数重命名: p0/p1 → codegen 期望的语义名
     renames = _PARAM_RENAMES.get(op)
     if renames:
         for old_key, new_key in renames.items():
             if old_key in params and new_key not in params:
                 params[new_key] = params.pop(old_key)
 
-    # 创建输出 tensor
+    return input_tids, params
+
+
+def _create_call_outputs(
+    graph: Graph, fx_node, fx_map: dict, tgen: _IdGen, nid: str,
+) -> list[str]:
+    """创建输出 tensor 并更新 fx_map，返回 output_tids。"""
     val = fx_node.meta.get("val")
     output_tids: list[str] = []
 
@@ -253,7 +261,21 @@ def _handle_call(graph, fx_node, fx_map, tgen, ngen):
         output_tids.append(out_tid)
         fx_map[fx_node.name] = out_tid
 
-    # 更新输入 tensor 的 consumer 列表
+    return output_tids
+
+
+def _handle_call(graph, fx_node, fx_map, tgen, ngen):
+    """处理 call_function 节点（ATen 算子调用）。"""
+    op = _op_name(fx_node.target)
+    nid = ngen.next()
+    tensor_overload = _is_tensor_overload(op)
+
+    input_tids, params = _parse_call_args(
+        graph, fx_node, fx_map, tgen, nid, op, tensor_overload,
+    )
+    input_tids, params = _normalize_op_inputs(op, input_tids, params)
+    output_tids = _create_call_outputs(graph, fx_node, fx_map, tgen, nid)
+
     for itid in input_tids:
         t = graph.get_tensor(itid)
         if t and nid not in t.consumer_node_ids:
