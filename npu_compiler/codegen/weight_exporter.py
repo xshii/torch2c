@@ -12,14 +12,16 @@ logger = get_logger("codegen.weight_exporter")
 
 _DTYPE_NP = {"fp16": np.float16, "fp32": np.float32, "int8": np.int8}
 
+_HEX_BYTES_PER_LINE = 16
+
 
 def _array_to_hex(arr: np.ndarray) -> str:
     """将 numpy 数组转为 C 十六进制字节初始化列表。"""
     raw = arr.tobytes()
     parts = [f"0x{b:02x}" for b in raw]
     lines = []
-    for i in range(0, len(parts), 16):
-        lines.append("    " + ", ".join(parts[i : i + 16]))
+    for i in range(0, len(parts), _HEX_BYTES_PER_LINE):
+        lines.append("    " + ", ".join(parts[i : i + _HEX_BYTES_PER_LINE]))
     return ",\n".join(lines)
 
 

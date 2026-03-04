@@ -43,6 +43,9 @@ def align_up(offset: int, alignment: int) -> int:
     return ((offset + alignment - 1) // alignment) * alignment
 
 
+_FRACTAL_MIN_NDIM = 2  # 分形格式 (nz/nc1hwc0) 最少需要 2 维
+
+
 def calc_padded_size(shape: list[int], dtype: str, fmt: str, cube_size: int) -> int:
     """计算 padding 后的字节数。
 
@@ -50,7 +53,7 @@ def calc_padded_size(shape: list[int], dtype: str, fmt: str, cube_size: int) -> 
     nd 格式直接按原始 shape 计算。
     """
     elem_bytes = dtype_bytes(dtype)
-    if fmt in ("nz", "nc1hwc0") and len(shape) >= 2:
+    if fmt in ("nz", "nc1hwc0") and len(shape) >= _FRACTAL_MIN_NDIM:
         padded = list(shape)
         padded[-1] = math.ceil(shape[-1] / cube_size) * cube_size
         padded[-2] = math.ceil(shape[-2] / cube_size) * cube_size

@@ -26,14 +26,18 @@ def emit_data_loader_c() -> str:
     return _load_template("data_loader.c.tmpl").format()
 
 
+_MAX_TENSOR_NDIM = 8
+_NAME_BUF_LEN = 16  # dtype / format 字段的 C 缓冲区长度
+
+
 def emit_data_loader_h() -> str:
     body = (
         "#include <stddef.h>\n\n"
         "typedef struct {\n"
-        "    int shape[8];\n"
+        f"    int shape[{_MAX_TENSOR_NDIM}];\n"
         "    int ndim;\n"
-        "    char dtype[16];\n"
-        "    char format[16];\n"
+        f"    char dtype[{_NAME_BUF_LEN}];\n"
+        f"    char format[{_NAME_BUF_LEN}];\n"
         "    size_t total_bytes;\n"
         "} tensor_desc_t;\n\n"
         "int parse_desc(const char* desc_path, tensor_desc_t* desc);\n"
@@ -101,10 +105,11 @@ def emit_data_dumper_h() -> str:
 
 def emit_tensor_utils_h() -> str:
     body = (
-        "#include <stddef.h>\n\n"
+        "#include <stddef.h>\n"
+        "#include <string.h>\n\n"
         "static inline size_t dtype_size(const char* dtype) {\n"
-        "    if (dtype[0] == 'f' && dtype[1] == 'p' && dtype[2] == '3') return 4;\n"
-        "    return 2; /* fp16, bf16, int16 default */\n"
+        '    if (strncmp(dtype, "fp32", 4) == 0 || strncmp(dtype, "int32", 5) == 0) return 4;\n'
+        "    return 2; /* fp16, bf16, int8, int16 default */\n"
         "}\n\n"
         "static inline size_t elem_count(const int* shape, int ndim) {\n"
         "    size_t n = 1;\n"

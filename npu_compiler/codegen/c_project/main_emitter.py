@@ -44,7 +44,8 @@ def emit_main_c(
         end = (t.get("hbm_offset", 0) or 0) + (t.get("hbm_size", 0) or 0)
         hbm_size = max(hbm_size, end)
 
-    l1_size = hw_config.get("l1_capacity", 16 * 1024 * 1024)
+    _DEFAULT_L1_BYTES = 16 * 1024 * 1024  # 16 MB
+    l1_size = hw_config.get("l1_capacity", _DEFAULT_L1_BYTES)
 
     # 生成 load_inputs 代码
     load_lines: list[str] = []

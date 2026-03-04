@@ -235,8 +235,10 @@ def _normalize_op_inputs(
     params: dict,
 ) -> tuple[list[str], dict]:
     """addmm 输入重排 + 参数重命名。"""
-    if op == "aten.addmm.default" and len(input_tids) >= 3:
-        input_tids = [input_tids[1], input_tids[2], input_tids[0]]
+    # addmm(bias, mat1, mat2) → NPU 期望 (mat1, mat2, bias)
+    _ADDMM_REORDER = [1, 2, 0]
+    if op == "aten.addmm.default" and len(input_tids) >= len(_ADDMM_REORDER):
+        input_tids = [input_tids[i] for i in _ADDMM_REORDER]
 
     renames = _PARAM_RENAMES.get(op)
     if renames:
