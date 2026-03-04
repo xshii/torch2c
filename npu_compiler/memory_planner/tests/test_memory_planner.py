@@ -128,6 +128,10 @@ class TestNoOverlap:
                 t2_end = _get_last_use(g, t2)
                 # 生命周期有交集 → 地址区间不得重叠
                 if t1_start <= t2_end and t2_start <= t1_end:
+                    assert t1.hbm_offset is not None
+                    assert t1.hbm_size is not None
+                    assert t2.hbm_offset is not None
+                    assert t2.hbm_size is not None
                     end1 = t1.hbm_offset + t1.hbm_size
                     end2 = t2.hbm_offset + t2.hbm_size
                     overlap = t1.hbm_offset < end2 and t2.hbm_offset < end1
@@ -265,6 +269,10 @@ class TestNoOverlapLongChain:
                 t2_start = _get_first_use(g, t2)
                 t2_end = _get_last_use(g, t2)
                 if t1_start <= t2_end and t2_start <= t1_end:
+                    assert t1.hbm_offset is not None
+                    assert t1.hbm_size is not None
+                    assert t2.hbm_offset is not None
+                    assert t2.hbm_size is not None
                     end1 = t1.hbm_offset + t1.hbm_size
                     end2 = t2.hbm_offset + t2.hbm_size
                     overlap = t1.hbm_offset < end2 and t2.hbm_offset < end1

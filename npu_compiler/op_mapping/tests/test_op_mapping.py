@@ -69,6 +69,7 @@ def test_unmapped_preserved():
     run(g, config)
 
     n = g.get_node("unknown")
+    assert n is not None
     assert not n.is_mapped
     assert n.npu_op is None
 
@@ -79,9 +80,15 @@ def test_compute_unit():
     config = load_config(_CONFIG_PATH, required_keys=["mappings"])
     run(graph, config)
 
-    assert graph.get_node("n0").compute_unit == "cube"  # mm
-    assert graph.get_node("n1").compute_unit == "vector"  # add
-    assert graph.get_node("n4").compute_unit == "scalar"  # view/reshape
+    n0 = graph.get_node("n0")
+    assert n0 is not None
+    assert n0.compute_unit == "cube"  # mm
+    n1 = graph.get_node("n1")
+    assert n1 is not None
+    assert n1.compute_unit == "vector"  # add
+    n4 = graph.get_node("n4")
+    assert n4 is not None
+    assert n4.compute_unit == "scalar"  # view/reshape
 
 
 def test_empty_graph():
@@ -112,7 +119,9 @@ def test_already_mapped_skipped():
     run(g, config)
 
     # 应保持原有映射，不被覆盖
-    assert g.get_node("n0").npu_op == "custom_op"
+    n0 = g.get_node("n0")
+    assert n0 is not None
+    assert n0.npu_op == "custom_op"
 
 
 def test_mixed_mapped_unmapped():
@@ -130,9 +139,15 @@ def test_mixed_mapped_unmapped():
     config = load_config(_CONFIG_PATH, required_keys=["mappings"])
     run(g, config)
 
-    assert g.get_node("n0").is_mapped  # mm → npu_matmul
-    assert not g.get_node("n1").is_mapped  # layer_norm 不在直接映射表
-    assert g.get_node("n2").is_mapped  # add → npu_add
+    n0 = g.get_node("n0")
+    assert n0 is not None
+    assert n0.is_mapped  # mm → npu_matmul
+    n1 = g.get_node("n1")
+    assert n1 is not None
+    assert not n1.is_mapped  # layer_norm 不在直接映射表
+    n2 = g.get_node("n2")
+    assert n2 is not None
+    assert n2.is_mapped  # add → npu_add
 
 
 class TestPostValidate:

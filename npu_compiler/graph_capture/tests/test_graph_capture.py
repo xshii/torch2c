@@ -23,8 +23,8 @@ def test_addmm_inputs_reordered():
     if addmm_nodes:
         node = addmm_nodes[0]
         # input_0 应是 mat1（模型输入），input_2 应是 bias（权重）
-        graph.get_tensor(node.inputs[0])  # mat1 — verified by existence
         t2 = graph.get_tensor(node.inputs[2])
+        assert t2 is not None
         # mat1 是模型输入或由前序节点产出，bias 是权重
         assert t2.is_weight, "addmm input[2] (bias) 应为权重"
 

@@ -116,6 +116,7 @@ def test_intermediate_tensor_created():
 
     for tid in new_tids:
         t = g.get_tensor(tid)
+        assert t is not None
         assert t.shape == [1, 32, 64], f"Intermediate shape should be [1,32,64], got {t.shape}"
 
 
@@ -140,7 +141,9 @@ def test_already_mapped_skipped():
     run(g, config)
 
     assert "n0" in g.nodes  # 未被裂解
-    assert g.get_node("n0").is_mapped
+    n0 = g.get_node("n0")
+    assert n0 is not None
+    assert n0.is_mapped
 
 
 def test_no_rule_preserved():
@@ -161,7 +164,9 @@ def test_no_rule_preserved():
     run(g, config)
 
     assert "n0" in g.nodes
-    assert not g.get_node("n0").is_mapped
+    n0 = g.get_node("n0")
+    assert n0 is not None
+    assert not n0.is_mapped
 
 
 def test_execution_order_after_decompose():
@@ -207,11 +212,13 @@ def test_producer_consumer_after_decompose():
 
     # 输入 tensor 的 consumer 应从原节点转移到 step_0
     t_in = g.get_tensor("t_in")
+    assert t_in is not None
     assert "n0" not in t_in.consumer_node_ids
     assert "n0_step_0" in t_in.consumer_node_ids
 
     # 输出 tensor 的 producer 应转移到最后一个 step
     t_out = g.get_tensor("t_out")
+    assert t_out is not None
     assert t_out.producer_node_id == "n0_step_1"
 
     # 中间 tensor 的 producer/consumer 正确
@@ -237,6 +244,7 @@ def test_layernorm_part2_has_orig_input():
     )
     # 原始输入 tensor 的 consumer 应包含 part2 节点
     t_in = g.get_tensor("t_in")
+    assert t_in is not None
     assert part2.id in t_in.consumer_node_ids
 
 
@@ -248,11 +256,14 @@ def test_multi_output_decompose():
 
     # 第一个输出 (t_out) 的 producer 应是最后一个 step
     t_out = g.get_tensor("t_out")
+    assert t_out is not None
     assert t_out.producer_node_id == "n0_step_1"
 
     # mean 和 rstd 的 producer 应为 None（已失去生产者）
     t_mean = g.get_tensor("t_mean")
+    assert t_mean is not None
     t_rstd = g.get_tensor("t_rstd")
+    assert t_rstd is not None
     assert t_mean.producer_node_id is None
     assert t_rstd.producer_node_id is None
 
