@@ -14,14 +14,18 @@ logger = get_logger("codegen._helpers")
 DTYPE_MAP = {k: v.c_enum for k, v in DTYPE_INFO.items()}
 
 FORMAT_MAP = {
-    "nd": "NPU_FORMAT_ND", "nz": "NPU_FORMAT_NZ",
+    "nd": "NPU_FORMAT_ND",
+    "nz": "NPU_FORMAT_NZ",
     "nc1hwc0": "NPU_FORMAT_NC1HWC0",
 }
 
 # param type → C type 映射
 PARAM_TYPE_C = {
-    "addr": "void*", "int": "int", "float": "float",
-    "enum": "int", "int_array": "const int*",
+    "addr": "void*",
+    "int": "int",
+    "float": "float",
+    "enum": "int",
+    "int_array": "const int*",
 }
 
 # ---- 配置加载 ----
@@ -45,6 +49,7 @@ def load_signatures(config_dir: str | None = None) -> dict:
 
 # ---- 文件输出 ----
 
+
 def write_file(path: str, content: str) -> None:
     """写入文件并记录日志。"""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -61,6 +66,7 @@ def write_files(directory: str, files: list[tuple[str, str]]) -> None:
 
 
 # ---- C 代码生成辅助 ----
+
 
 def c_header_guard(guard_name: str, body: str) -> str:
     """生成带 include guard 的 C 头文件。"""

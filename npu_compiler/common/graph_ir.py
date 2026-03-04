@@ -38,7 +38,6 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import asdict, dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -49,14 +48,14 @@ class Tensor:
     shape: list[int]
     dtype: str
     format: str = "nd"
-    hbm_offset: Optional[int] = None
-    hbm_size: Optional[int] = None
-    l1_offset: Optional[int] = None
+    hbm_offset: int | None = None
+    hbm_size: int | None = None
+    l1_offset: int | None = None
     is_weight: bool = False
     is_model_input: bool = False
     is_model_output: bool = False
-    name: Optional[str] = None
-    producer_node_id: Optional[str] = None
+    name: str | None = None
+    producer_node_id: str | None = None
     consumer_node_ids: list[str] = field(default_factory=list)
 
 
@@ -69,11 +68,11 @@ class Node:
     inputs: list[str] = field(default_factory=list)
     outputs: list[str] = field(default_factory=list)
     params: dict = field(default_factory=dict)
-    compute_unit: Optional[str] = None
-    npu_op: Optional[str] = None
+    compute_unit: str | None = None
+    npu_op: str | None = None
     is_mapped: bool = False
-    format_annotation: Optional[dict] = None
-    schedule_order: Optional[int] = None
+    format_annotation: dict | None = None
+    schedule_order: int | None = None
     dependencies: list[str] = field(default_factory=list)
     absorbed_inputs: dict = field(default_factory=dict)
 
@@ -112,10 +111,10 @@ class Graph:
 
     # ---- 查询 ----
 
-    def get_node(self, node_id: str) -> Optional[Node]:
+    def get_node(self, node_id: str) -> Node | None:
         return self.nodes.get(node_id)
 
-    def get_tensor(self, tensor_id: str) -> Optional[Tensor]:
+    def get_tensor(self, tensor_id: str) -> Tensor | None:
         return self.tensors.get(tensor_id)
 
     # ---- 拓扑排序 ----
@@ -124,7 +123,7 @@ class Graph:
         """基于张量依赖的拓扑排序，返回节点 ID 列表。"""
         # 构建 producer → consumers 的邻接表
         adj: dict[str, list[str]] = {nid: [] for nid in self.nodes}
-        in_degree: dict[str, int] = {nid: 0 for nid in self.nodes}
+        in_degree: dict[str, int] = dict.fromkeys(self.nodes, 0)
 
         tensor_producer: dict[str, str] = {}
         for nid, node in self.nodes.items():

@@ -8,9 +8,7 @@ from ...common.config_loader import load_config
 from ...common.graph_ir import Graph, Node, Tensor
 from ..op_decomposition import post_validate, run
 
-_CONFIG_PATH = str(
-    pathlib.Path(__file__).parent.parent / "config" / "decompositions.yaml"
-)
+_CONFIG_PATH = str(pathlib.Path(__file__).parent.parent / "config" / "decompositions.yaml")
 
 
 def _load_rules() -> dict:
@@ -20,24 +18,26 @@ def _load_rules() -> dict:
 def _make_layernorm_graph() -> Graph:
     """创建包含一个未映射 layer_norm 的测试图。"""
     g = Graph()
-    g.add_tensor(Tensor(id="t_in", shape=[1, 32, 64], dtype="fp16",
-                        is_model_input=True))
+    g.add_tensor(Tensor(id="t_in", shape=[1, 32, 64], dtype="fp16", is_model_input=True))
     g.add_tensor(Tensor(id="t_w", shape=[64], dtype="fp16", is_weight=True))
     g.add_tensor(Tensor(id="t_b", shape=[64], dtype="fp16", is_weight=True))
-    g.add_tensor(Tensor(id="t_out", shape=[1, 32, 64], dtype="fp16",
-                        producer_node_id="n0",
-                        consumer_node_ids=[]))
-    g.add_tensor(Tensor(id="t_mean", shape=[1, 32, 1], dtype="fp32",
-                        producer_node_id="n0"))
-    g.add_tensor(Tensor(id="t_rstd", shape=[1, 32, 1], dtype="fp32",
-                        producer_node_id="n0"))
+    g.add_tensor(
+        Tensor(
+            id="t_out", shape=[1, 32, 64], dtype="fp16", producer_node_id="n0", consumer_node_ids=[]
+        )
+    )
+    g.add_tensor(Tensor(id="t_mean", shape=[1, 32, 1], dtype="fp32", producer_node_id="n0"))
+    g.add_tensor(Tensor(id="t_rstd", shape=[1, 32, 1], dtype="fp32", producer_node_id="n0"))
 
-    g.add_node(Node(
-        id="n0", op_type="aten.native_layer_norm.default",
-        inputs=["t_in", "t_w", "t_b"],
-        outputs=["t_out", "t_mean", "t_rstd"],
-        params={"p0": [64], "p1": 1e-5},
-    ))
+    g.add_node(
+        Node(
+            id="n0",
+            op_type="aten.native_layer_norm.default",
+            inputs=["t_in", "t_w", "t_b"],
+            outputs=["t_out", "t_mean", "t_rstd"],
+            params={"p0": [64], "p1": 1e-5},
+        )
+    )
     g.tensors["t_in"].consumer_node_ids = ["n0"]
     g.tensors["t_w"].consumer_node_ids = ["n0"]
     g.tensors["t_b"].consumer_node_ids = ["n0"]
@@ -47,20 +47,39 @@ def _make_layernorm_graph() -> Graph:
 def _make_softmax_graph() -> Graph:
     """创建包含一个未映射 softmax 的测试图。"""
     g = Graph()
-    g.add_tensor(Tensor(id="t_in", shape=[1, 4, 32, 32], dtype="fp16",
-                        is_model_input=True, consumer_node_ids=["n0"]))
-    g.add_tensor(Tensor(id="t_out", shape=[1, 4, 32, 32], dtype="fp16",
-                        producer_node_id="n0", is_model_output=True))
+    g.add_tensor(
+        Tensor(
+            id="t_in",
+            shape=[1, 4, 32, 32],
+            dtype="fp16",
+            is_model_input=True,
+            consumer_node_ids=["n0"],
+        )
+    )
+    g.add_tensor(
+        Tensor(
+            id="t_out",
+            shape=[1, 4, 32, 32],
+            dtype="fp16",
+            producer_node_id="n0",
+            is_model_output=True,
+        )
+    )
 
-    g.add_node(Node(
-        id="n0", op_type="aten._softmax.default",
-        inputs=["t_in"], outputs=["t_out"],
-        params={"p0": -1, "p1": False},
-    ))
+    g.add_node(
+        Node(
+            id="n0",
+            op_type="aten._softmax.default",
+            inputs=["t_in"],
+            outputs=["t_out"],
+            params={"p0": -1, "p1": False},
+        )
+    )
     return g
 
 
 # ---- tests ----
+
 
 def test_layernorm_decompose():
     """layer_norm 裂解为 2 个 part。"""
@@ -103,16 +122,20 @@ def test_intermediate_tensor_created():
 def test_already_mapped_skipped():
     """已映射的节点不被裂解。"""
     g = Graph()
-    g.add_tensor(Tensor(id="t0", shape=[1, 32, 64], dtype="fp16",
-                        consumer_node_ids=["n0"]))
-    g.add_tensor(Tensor(id="t1", shape=[1, 32, 64], dtype="fp16",
-                        producer_node_id="n0"))
+    g.add_tensor(Tensor(id="t0", shape=[1, 32, 64], dtype="fp16", consumer_node_ids=["n0"]))
+    g.add_tensor(Tensor(id="t1", shape=[1, 32, 64], dtype="fp16", producer_node_id="n0"))
 
-    g.add_node(Node(
-        id="n0", op_type="aten.native_layer_norm.default",
-        inputs=["t0"], outputs=["t1"],
-        npu_op="npu_matmul", compute_unit="cube", is_mapped=True,
-    ))
+    g.add_node(
+        Node(
+            id="n0",
+            op_type="aten.native_layer_norm.default",
+            inputs=["t0"],
+            outputs=["t1"],
+            npu_op="npu_matmul",
+            compute_unit="cube",
+            is_mapped=True,
+        )
+    )
     config = _load_rules()
     run(g, config)
 
@@ -123,15 +146,17 @@ def test_already_mapped_skipped():
 def test_no_rule_preserved():
     """没有裂解规则的未映射节点保持原样。"""
     g = Graph()
-    g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16",
-                        consumer_node_ids=["n0"]))
-    g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16",
-                        producer_node_id="n0"))
+    g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16", consumer_node_ids=["n0"]))
+    g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16", producer_node_id="n0"))
 
-    g.add_node(Node(
-        id="n0", op_type="aten.unknown_op.default",
-        inputs=["t0"], outputs=["t1"],
-    ))
+    g.add_node(
+        Node(
+            id="n0",
+            op_type="aten.unknown_op.default",
+            inputs=["t0"],
+            outputs=["t1"],
+        )
+    )
     config = _load_rules()
     run(g, config)
 
@@ -142,18 +167,30 @@ def test_no_rule_preserved():
 def test_execution_order_after_decompose():
     """裂解后 execution_order 正确反映新节点顺序。"""
     g = Graph()
-    g.add_tensor(Tensor(id="t0", shape=[1, 32, 64], dtype="fp16",
-                        consumer_node_ids=["n0"]))
-    g.add_tensor(Tensor(id="t1", shape=[1, 32, 64], dtype="fp16",
-                        producer_node_id="n0", consumer_node_ids=["n1"]))
-    g.add_tensor(Tensor(id="t2", shape=[1, 32, 64], dtype="fp16",
-                        producer_node_id="n1"))
+    g.add_tensor(Tensor(id="t0", shape=[1, 32, 64], dtype="fp16", consumer_node_ids=["n0"]))
+    g.add_tensor(
+        Tensor(
+            id="t1",
+            shape=[1, 32, 64],
+            dtype="fp16",
+            producer_node_id="n0",
+            consumer_node_ids=["n1"],
+        )
+    )
+    g.add_tensor(Tensor(id="t2", shape=[1, 32, 64], dtype="fp16", producer_node_id="n1"))
 
-    g.add_node(Node(id="n0", op_type="aten._softmax.default",
-                     inputs=["t0"], outputs=["t1"]))
-    g.add_node(Node(id="n1", op_type="aten.mm.default",
-                     inputs=["t1"], outputs=["t2"],
-                     npu_op="npu_matmul", compute_unit="cube", is_mapped=True))
+    g.add_node(Node(id="n0", op_type="aten._softmax.default", inputs=["t0"], outputs=["t1"]))
+    g.add_node(
+        Node(
+            id="n1",
+            op_type="aten.mm.default",
+            inputs=["t1"],
+            outputs=["t2"],
+            npu_op="npu_matmul",
+            compute_unit="cube",
+            is_mapped=True,
+        )
+    )
 
     config = _load_rules()
     run(g, config)
@@ -190,14 +227,11 @@ def test_layernorm_part2_has_orig_input():
     config = _load_rules()
     run(g, config)
 
-    part2_nodes = [n for n in g.nodes.values()
-                   if n.npu_op == "npu_layernorm_part2"]
+    part2_nodes = [n for n in g.nodes.values() if n.npu_op == "npu_layernorm_part2"]
     assert len(part2_nodes) == 1
     part2 = part2_nodes[0]
     # part2 应有 2 个输入: [intermediate, orig_input]
-    assert len(part2.inputs) == 2, (
-        f"layernorm_part2 should have 2 inputs, got {part2.inputs}"
-    )
+    assert len(part2.inputs) == 2, f"layernorm_part2 should have 2 inputs, got {part2.inputs}"
     assert part2.inputs[1] == "t_in", (
         f"layernorm_part2 input[1] should be orig input 't_in', got {part2.inputs[1]}"
     )
@@ -227,19 +261,33 @@ class TestPostValidate:
     def test_valid(self):
         g = Graph()
         g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16"))
-        g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16",
-                            producer_node_id="n0"))
-        g.add_node(Node(id="n0", op_type="npu_gelu", inputs=["t0"],
-                        outputs=["t1"], is_mapped=True, npu_op="npu_gelu",
-                        compute_unit="vector"))
+        g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16", producer_node_id="n0"))
+        g.add_node(
+            Node(
+                id="n0",
+                op_type="npu_gelu",
+                inputs=["t0"],
+                outputs=["t1"],
+                is_mapped=True,
+                npu_op="npu_gelu",
+                compute_unit="vector",
+            )
+        )
         assert post_validate(g) == []
 
     def test_missing_compute_unit(self):
         g = Graph()
         g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16"))
-        g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16",
-                            producer_node_id="n0"))
-        g.add_node(Node(id="n0", op_type="npu_gelu", inputs=["t0"],
-                        outputs=["t1"], is_mapped=True, npu_op="npu_gelu"))
+        g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16", producer_node_id="n0"))
+        g.add_node(
+            Node(
+                id="n0",
+                op_type="npu_gelu",
+                inputs=["t0"],
+                outputs=["t1"],
+                is_mapped=True,
+                npu_op="npu_gelu",
+            )
+        )
         errors = post_validate(g)
         assert any("compute_unit" in e for e in errors)

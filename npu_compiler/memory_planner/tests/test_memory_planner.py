@@ -5,18 +5,15 @@ import os
 import pytest
 
 from npu_compiler.common import Graph, Node, Tensor, load_config
+from npu_compiler.common.errors import MemoryPlanError
 from npu_compiler.memory_planner import run
 from npu_compiler.memory_planner.memory_planner import (
-    DmaPlan,
     align_up,
     calc_padded_size,
     post_validate,
 )
-from npu_compiler.common.errors import MemoryPlanError
 
-CONFIG_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "config", "hardware_config.yaml"
-)
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "hardware_config.yaml")
 
 
 def _load_config() -> dict:
@@ -32,15 +29,19 @@ _MEDIUM_SHAPE = [1, 1024, 2048]
 
 
 def _make_linear_chain(
-    n_ops: int = 5, shape: list[int] | None = None,
+    n_ops: int = 5,
+    shape: list[int] | None = None,
 ) -> Graph:
     """创建一个 n_ops 算子的线性链图。"""
     if shape is None:
         shape = _SMALL_SHAPE
     g = Graph()
     t_in = Tensor(
-        id="tensor_input", shape=shape, dtype="fp16",
-        is_model_input=True, consumer_node_ids=["node_0"],
+        id="tensor_input",
+        shape=shape,
+        dtype="fp16",
+        is_model_input=True,
+        consumer_node_ids=["node_0"],
     )
     g.add_tensor(t_in)
 
@@ -48,15 +49,21 @@ def _make_linear_chain(
     for i in range(n_ops):
         out_tid = f"tensor_{i}" if i < n_ops - 1 else "tensor_output"
         node = Node(
-            id=f"node_{i}", op_type="npu_add",
-            inputs=[prev_tid], outputs=[out_tid],
-            compute_unit="vector", npu_op="npu_add", is_mapped=True,
+            id=f"node_{i}",
+            op_type="npu_add",
+            inputs=[prev_tid],
+            outputs=[out_tid],
+            compute_unit="vector",
+            npu_op="npu_add",
+            is_mapped=True,
         )
         g.add_node(node)
 
         is_last = i == n_ops - 1
         t = Tensor(
-            id=out_tid, shape=shape, dtype="fp16",
+            id=out_tid,
+            shape=shape,
+            dtype="fp16",
             producer_node_id=f"node_{i}",
             consumer_node_ids=[] if is_last else [f"node_{i + 1}"],
             is_model_output=is_last,
@@ -112,11 +119,9 @@ class TestNoOverlap:
         g, _ = run(g, config)
 
         # 检查同时活跃的 tensor 不重叠
-        tensors_with_hbm = [
-            t for t in g.tensors.values() if t.hbm_offset is not None
-        ]
+        tensors_with_hbm = [t for t in g.tensors.values() if t.hbm_offset is not None]
         for i, t1 in enumerate(tensors_with_hbm):
-            for t2 in tensors_with_hbm[i + 1:]:
+            for t2 in tensors_with_hbm[i + 1 :]:
                 t1_start = _get_first_use(g, t1)
                 t1_end = _get_last_use(g, t1)
                 t2_start = _get_first_use(g, t2)
@@ -161,13 +166,9 @@ class TestAlignment:
 
         for t in g.tensors.values():
             if t.hbm_offset is not None:
-                assert t.hbm_offset % 512 == 0, (
-                    f"{t.id} HBM offset {t.hbm_offset} 不是 512 的倍数"
-                )
+                assert t.hbm_offset % 512 == 0, f"{t.id} HBM offset {t.hbm_offset} 不是 512 的倍数"
             if t.l1_offset is not None:
-                assert t.l1_offset % 32 == 0, (
-                    f"{t.id} L1 offset {t.l1_offset} 不是 32 的倍数"
-                )
+                assert t.l1_offset % 32 == 0, f"{t.id} L1 offset {t.l1_offset} 不是 32 的倍数"
 
 
 class TestReuse:
@@ -177,10 +178,7 @@ class TestReuse:
         config = _load_config()
         g, _ = run(g, config)
 
-        offsets = [
-            t.hbm_offset for t in g.tensors.values()
-            if t.hbm_offset is not None
-        ]
+        offsets = [t.hbm_offset for t in g.tensors.values() if t.hbm_offset is not None]
         # 线性链中有 6 个 tensor，但不是所有都需要独立空间
         unique_offsets = set(offsets)
         # 至少应有一些复用（unique < total）
@@ -216,17 +214,27 @@ class TestL1CapacityCheck:
         """L1 溢出时抛出 MemoryPlanError。"""
         g = Graph()
         huge_tensor = Tensor(
-            id="huge_input", shape=[1, 4096, 4096], dtype="fp32",
-            is_model_input=True, consumer_node_ids=["node_0"],
+            id="huge_input",
+            shape=[1, 4096, 4096],
+            dtype="fp32",
+            is_model_input=True,
+            consumer_node_ids=["node_0"],
         )
         huge_output = Tensor(
-            id="huge_output", shape=[1, 4096, 4096], dtype="fp32",
-            is_model_output=True, producer_node_id="node_0",
+            id="huge_output",
+            shape=[1, 4096, 4096],
+            dtype="fp32",
+            is_model_output=True,
+            producer_node_id="node_0",
         )
         node = Node(
-            id="node_0", op_type="npu_add",
-            inputs=["huge_input"], outputs=["huge_output"],
-            compute_unit="vector", npu_op="npu_add", is_mapped=True,
+            id="node_0",
+            op_type="npu_add",
+            inputs=["huge_input"],
+            outputs=["huge_output"],
+            compute_unit="vector",
+            npu_op="npu_add",
+            is_mapped=True,
         )
         g.add_tensor(huge_tensor)
         g.add_tensor(huge_output)
@@ -249,11 +257,9 @@ class TestNoOverlapLongChain:
         config = _load_config()
         g, _ = run(g, config)
 
-        tensors_with_hbm = [
-            t for t in g.tensors.values() if t.hbm_offset is not None
-        ]
+        tensors_with_hbm = [t for t in g.tensors.values() if t.hbm_offset is not None]
         for i, t1 in enumerate(tensors_with_hbm):
-            for t2 in tensors_with_hbm[i + 1:]:
+            for t2 in tensors_with_hbm[i + 1 :]:
                 t1_start = _get_first_use(g, t1)
                 t1_end = _get_last_use(g, t1)
                 t2_start = _get_first_use(g, t2)
@@ -274,51 +280,105 @@ class TestDmaStoreFormat:
     def test_store_uses_annotated_format(self):
         """构建 3 节点图（总 tensor > L1 容量）使其走 per-op 路径。"""
         g = Graph()
-        g.add_tensor(Tensor(
-            id="t_in", shape=_MEDIUM_SHAPE, dtype="fp16", format="nd",
-            is_model_input=True, consumer_node_ids=["node_0"],
-        ))
-        g.add_tensor(Tensor(
-            id="t_mid1", shape=_MEDIUM_SHAPE, dtype="fp16", format="nd",
-            producer_node_id="node_0", consumer_node_ids=["node_1"],
-        ))
-        g.add_tensor(Tensor(
-            id="t_mid2", shape=_MEDIUM_SHAPE, dtype="fp16", format="nd",
-            producer_node_id="node_1", consumer_node_ids=["node_2"],
-        ))
-        g.add_tensor(Tensor(
-            id="t_mid3", shape=_MEDIUM_SHAPE, dtype="fp16", format="nd",
-            producer_node_id="node_2", consumer_node_ids=["node_3"],
-        ))
-        g.add_tensor(Tensor(
-            id="t_out", shape=_MEDIUM_SHAPE, dtype="fp16", format="nd",
-            producer_node_id="node_3", is_model_output=True,
-        ))
+        g.add_tensor(
+            Tensor(
+                id="t_in",
+                shape=_MEDIUM_SHAPE,
+                dtype="fp16",
+                format="nd",
+                is_model_input=True,
+                consumer_node_ids=["node_0"],
+            )
+        )
+        g.add_tensor(
+            Tensor(
+                id="t_mid1",
+                shape=_MEDIUM_SHAPE,
+                dtype="fp16",
+                format="nd",
+                producer_node_id="node_0",
+                consumer_node_ids=["node_1"],
+            )
+        )
+        g.add_tensor(
+            Tensor(
+                id="t_mid2",
+                shape=_MEDIUM_SHAPE,
+                dtype="fp16",
+                format="nd",
+                producer_node_id="node_1",
+                consumer_node_ids=["node_2"],
+            )
+        )
+        g.add_tensor(
+            Tensor(
+                id="t_mid3",
+                shape=_MEDIUM_SHAPE,
+                dtype="fp16",
+                format="nd",
+                producer_node_id="node_2",
+                consumer_node_ids=["node_3"],
+            )
+        )
+        g.add_tensor(
+            Tensor(
+                id="t_out",
+                shape=_MEDIUM_SHAPE,
+                dtype="fp16",
+                format="nd",
+                producer_node_id="node_3",
+                is_model_output=True,
+            )
+        )
         # node_0 有 format_annotation，是测试目标
-        g.add_node(Node(
-            id="node_0", op_type="npu_matmul",
-            inputs=["t_in"], outputs=["t_mid1"],
-            compute_unit="cube", npu_op="npu_matmul", is_mapped=True,
-            format_annotation={
-                "inputs": [{"format": "nz", "dtype": "fp16"}],
-                "outputs": [{"format": "nz", "dtype": "fp16"}],
-            },
-        ))
-        g.add_node(Node(
-            id="node_1", op_type="npu_add",
-            inputs=["t_mid1"], outputs=["t_mid2"],
-            compute_unit="vector", npu_op="npu_add", is_mapped=True,
-        ))
-        g.add_node(Node(
-            id="node_2", op_type="npu_gelu",
-            inputs=["t_mid2"], outputs=["t_mid3"],
-            compute_unit="vector", npu_op="npu_gelu", is_mapped=True,
-        ))
-        g.add_node(Node(
-            id="node_3", op_type="npu_add",
-            inputs=["t_mid3"], outputs=["t_out"],
-            compute_unit="vector", npu_op="npu_add", is_mapped=True,
-        ))
+        g.add_node(
+            Node(
+                id="node_0",
+                op_type="npu_matmul",
+                inputs=["t_in"],
+                outputs=["t_mid1"],
+                compute_unit="cube",
+                npu_op="npu_matmul",
+                is_mapped=True,
+                format_annotation={
+                    "inputs": [{"format": "nz", "dtype": "fp16"}],
+                    "outputs": [{"format": "nz", "dtype": "fp16"}],
+                },
+            )
+        )
+        g.add_node(
+            Node(
+                id="node_1",
+                op_type="npu_add",
+                inputs=["t_mid1"],
+                outputs=["t_mid2"],
+                compute_unit="vector",
+                npu_op="npu_add",
+                is_mapped=True,
+            )
+        )
+        g.add_node(
+            Node(
+                id="node_2",
+                op_type="npu_gelu",
+                inputs=["t_mid2"],
+                outputs=["t_mid3"],
+                compute_unit="vector",
+                npu_op="npu_gelu",
+                is_mapped=True,
+            )
+        )
+        g.add_node(
+            Node(
+                id="node_3",
+                op_type="npu_add",
+                inputs=["t_mid3"],
+                outputs=["t_out"],
+                compute_unit="vector",
+                npu_op="npu_add",
+                is_mapped=True,
+            )
+        )
         g.execution_order = ["node_0", "node_1", "node_2", "node_3"]
 
         config = _load_config()
@@ -338,26 +398,55 @@ class TestL1OnlyOptimization:
     def test_small_graph_uses_global_layout(self):
         """小图所有 tensor 直接常驻 L1，DMA 只有首尾的 bulk load/store。"""
         g = Graph()
-        g.add_tensor(Tensor(
-            id="t_in", shape=[1, 4, 4], dtype="fp16",
-            is_model_input=True, consumer_node_ids=["node_0"],
-        ))
-        g.add_tensor(Tensor(
-            id="t_mid", shape=[1, 4, 4], dtype="fp16",
-            producer_node_id="node_0", consumer_node_ids=["node_1"],
-        ))
-        g.add_tensor(Tensor(
-            id="t_out", shape=[1, 4, 4], dtype="fp16",
-            producer_node_id="node_1", is_model_output=True,
-        ))
-        g.add_node(Node(
-            id="node_0", op_type="npu_add", inputs=["t_in"], outputs=["t_mid"],
-            compute_unit="vector", npu_op="npu_add", is_mapped=True,
-        ))
-        g.add_node(Node(
-            id="node_1", op_type="npu_gelu", inputs=["t_mid"], outputs=["t_out"],
-            compute_unit="vector", npu_op="npu_gelu", is_mapped=True,
-        ))
+        g.add_tensor(
+            Tensor(
+                id="t_in",
+                shape=[1, 4, 4],
+                dtype="fp16",
+                is_model_input=True,
+                consumer_node_ids=["node_0"],
+            )
+        )
+        g.add_tensor(
+            Tensor(
+                id="t_mid",
+                shape=[1, 4, 4],
+                dtype="fp16",
+                producer_node_id="node_0",
+                consumer_node_ids=["node_1"],
+            )
+        )
+        g.add_tensor(
+            Tensor(
+                id="t_out",
+                shape=[1, 4, 4],
+                dtype="fp16",
+                producer_node_id="node_1",
+                is_model_output=True,
+            )
+        )
+        g.add_node(
+            Node(
+                id="node_0",
+                op_type="npu_add",
+                inputs=["t_in"],
+                outputs=["t_mid"],
+                compute_unit="vector",
+                npu_op="npu_add",
+                is_mapped=True,
+            )
+        )
+        g.add_node(
+            Node(
+                id="node_1",
+                op_type="npu_gelu",
+                inputs=["t_mid"],
+                outputs=["t_out"],
+                compute_unit="vector",
+                npu_op="npu_gelu",
+                is_mapped=True,
+            )
+        )
         g.execution_order = ["node_0", "node_1"]
 
         config = _load_config()
@@ -375,15 +464,22 @@ class TestL1OnlyOptimization:
 class TestPostValidate:
     def test_valid(self):
         g = Graph()
-        g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16",
-                            is_model_output=True,
-                            hbm_offset=0, hbm_size=2, l1_offset=0))
+        g.add_tensor(
+            Tensor(
+                id="t0",
+                shape=[1],
+                dtype="fp16",
+                is_model_output=True,
+                hbm_offset=0,
+                hbm_size=2,
+                l1_offset=0,
+            )
+        )
         assert post_validate(g) == []
 
     def test_missing_offsets(self):
         g = Graph()
-        g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16",
-                            is_model_output=True))
+        g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16", is_model_output=True))
         errors = post_validate(g)
         assert any("hbm_offset" in e for e in errors)
         assert any("hbm_size" in e for e in errors)

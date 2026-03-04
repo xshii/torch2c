@@ -2,4 +2,4 @@
 
 from .format_annotator import load_format_config, post_validate, run
 
-__all__ = ["run", "load_format_config", "post_validate"]
+__all__ = ["load_format_config", "post_validate", "run"]

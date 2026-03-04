@@ -56,9 +56,7 @@ class EncoderModel(nn.Module):
 
     def __init__(self, d_model: int = 256, dim_ff: int = 512, num_layers: int = 2):
         super().__init__()
-        self.layers = nn.ModuleList(
-            [EncoderLayer(d_model, dim_ff) for _ in range(num_layers)]
-        )
+        self.layers = nn.ModuleList([EncoderLayer(d_model, dim_ff) for _ in range(num_layers)])
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
         for layer in self.layers:

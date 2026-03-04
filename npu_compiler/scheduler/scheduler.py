@@ -12,10 +12,7 @@ def _has_data_dependency(graph: Graph, pred_id: str, succ_id: str) -> bool:
     pred = graph.nodes[pred_id]
     succ = graph.nodes[succ_id]
     pred_outputs = set(pred.outputs)
-    for tid in succ.inputs:
-        if tid in pred_outputs:
-            return True
-    return False
+    return any(tid in pred_outputs for tid in succ.inputs)
 
 
 def run(graph: Graph, config: dict | None = None) -> Graph:

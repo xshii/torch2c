@@ -8,6 +8,7 @@ from enum import Enum
 
 class Severity(Enum):
     """诊断严重级别。"""
+
     WARNING = "warning"
     ERROR = "error"
 
@@ -15,6 +16,7 @@ class Severity(Enum):
 @dataclass(frozen=True)
 class CompileDiagnostic:
     """单条编译诊断信息。"""
+
     phase: str
     severity: Severity
     message: str

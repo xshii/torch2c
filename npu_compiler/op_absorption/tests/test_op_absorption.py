@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from npu_compiler.common import Graph, Node, Tensor
 from npu_compiler.op_absorption import run
 
@@ -13,24 +11,77 @@ def _make_absorption_graph() -> Graph:
     g = Graph()
 
     # tensors
-    g.add_tensor(Tensor(id="t_scores", shape=[1, 1, 32, 32], dtype="fp16",
-                        is_model_input=True, consumer_node_ids=["n_add"]))
-    g.add_tensor(Tensor(id="t_mask", shape=[1, 1, 32, 32], dtype="fp16",
-                        is_model_input=True, consumer_node_ids=["n_add"]))
-    g.add_tensor(Tensor(id="t_add_out", shape=[1, 1, 32, 32], dtype="fp16",
-                        producer_node_id="n_add", consumer_node_ids=["n_sp1"]))
-    g.add_tensor(Tensor(id="t_sp1_out", shape=[1, 1, 32, 32], dtype="fp16",
-                        producer_node_id="n_sp1", consumer_node_ids=["n_sp2"]))
-    g.add_tensor(Tensor(id="t_sp2_out", shape=[1, 1, 32, 32], dtype="fp16",
-                        producer_node_id="n_sp2"))
+    g.add_tensor(
+        Tensor(
+            id="t_scores",
+            shape=[1, 1, 32, 32],
+            dtype="fp16",
+            is_model_input=True,
+            consumer_node_ids=["n_add"],
+        )
+    )
+    g.add_tensor(
+        Tensor(
+            id="t_mask",
+            shape=[1, 1, 32, 32],
+            dtype="fp16",
+            is_model_input=True,
+            consumer_node_ids=["n_add"],
+        )
+    )
+    g.add_tensor(
+        Tensor(
+            id="t_add_out",
+            shape=[1, 1, 32, 32],
+            dtype="fp16",
+            producer_node_id="n_add",
+            consumer_node_ids=["n_sp1"],
+        )
+    )
+    g.add_tensor(
+        Tensor(
+            id="t_sp1_out",
+            shape=[1, 1, 32, 32],
+            dtype="fp16",
+            producer_node_id="n_sp1",
+            consumer_node_ids=["n_sp2"],
+        )
+    )
+    g.add_tensor(
+        Tensor(id="t_sp2_out", shape=[1, 1, 32, 32], dtype="fp16", producer_node_id="n_sp2")
+    )
 
     # nodes
-    g.add_node(Node(id="n_add", op_type="aten.add", npu_op="npu_add",
-                    inputs=["t_scores", "t_mask"], outputs=["t_add_out"], is_mapped=True))
-    g.add_node(Node(id="n_sp1", op_type="aten.softmax", npu_op="npu_softmax_part1",
-                    inputs=["t_add_out"], outputs=["t_sp1_out"], is_mapped=True))
-    g.add_node(Node(id="n_sp2", op_type="aten.softmax", npu_op="npu_softmax_part2",
-                    inputs=["t_sp1_out"], outputs=["t_sp2_out"], is_mapped=True))
+    g.add_node(
+        Node(
+            id="n_add",
+            op_type="aten.add",
+            npu_op="npu_add",
+            inputs=["t_scores", "t_mask"],
+            outputs=["t_add_out"],
+            is_mapped=True,
+        )
+    )
+    g.add_node(
+        Node(
+            id="n_sp1",
+            op_type="aten.softmax",
+            npu_op="npu_softmax_part1",
+            inputs=["t_add_out"],
+            outputs=["t_sp1_out"],
+            is_mapped=True,
+        )
+    )
+    g.add_node(
+        Node(
+            id="n_sp2",
+            op_type="aten.softmax",
+            npu_op="npu_softmax_part2",
+            inputs=["t_sp1_out"],
+            outputs=["t_sp2_out"],
+            is_mapped=True,
+        )
+    )
     return g
 
 
@@ -81,14 +132,19 @@ def test_intermediate_removed():
 def test_no_match_preserved():
     """不匹配规则的 add 保持不变（如残差 add）。"""
     g = Graph()
-    g.add_tensor(Tensor(id="t_a", shape=[32], dtype="fp16",
-                        consumer_node_ids=["n_residual_add"]))
-    g.add_tensor(Tensor(id="t_b", shape=[32], dtype="fp16",
-                        consumer_node_ids=["n_residual_add"]))
-    g.add_tensor(Tensor(id="t_c", shape=[32], dtype="fp16",
-                        producer_node_id="n_residual_add"))
-    g.add_node(Node(id="n_residual_add", op_type="aten.add", npu_op="npu_add",
-                    inputs=["t_a", "t_b"], outputs=["t_c"], is_mapped=True))
+    g.add_tensor(Tensor(id="t_a", shape=[32], dtype="fp16", consumer_node_ids=["n_residual_add"]))
+    g.add_tensor(Tensor(id="t_b", shape=[32], dtype="fp16", consumer_node_ids=["n_residual_add"]))
+    g.add_tensor(Tensor(id="t_c", shape=[32], dtype="fp16", producer_node_id="n_residual_add"))
+    g.add_node(
+        Node(
+            id="n_residual_add",
+            op_type="aten.add",
+            npu_op="npu_add",
+            inputs=["t_a", "t_b"],
+            outputs=["t_c"],
+            is_mapped=True,
+        )
+    )
     result = run(g, _RULES)
     # add 没有消费者是 softmax_part1，不吸收
     assert "n_residual_add" in result.nodes

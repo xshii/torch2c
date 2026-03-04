@@ -9,10 +9,8 @@ import shutil
 import pytest
 import torch
 
-from npu_compiler.common import Graph, load_config
 from npu_compiler.integration.demo.encoder_model import EncoderModel
 from npu_compiler.integration.pipeline import (
-    _build_codegen_plan,
     _build_validator_config,
     _load_configs,
     compile,
@@ -50,7 +48,7 @@ class TestLoadConfigs:
 
 
 class TestEndToEnd:
-    @pytest.fixture()
+    @pytest.fixture
     def output_dir(self, tmp_path):
         return str(tmp_path / "output")
 
@@ -153,7 +151,7 @@ class TestEndToEnd:
     reason="C 编译器不可用",
 )
 class TestCGoldenComparison:
-    @pytest.fixture()
+    @pytest.fixture
     def output_dir(self, tmp_path):
         return str(tmp_path / "output")
 
@@ -176,6 +174,4 @@ class TestCGoldenComparison:
         )
 
         result = validate_c(output_dir)
-        assert result["passed"], (
-            f"C golden 比对失败:\n{result['stdout']}\n{result['stderr']}"
-        )
+        assert result["passed"], f"C golden 比对失败:\n{result['stdout']}\n{result['stderr']}"

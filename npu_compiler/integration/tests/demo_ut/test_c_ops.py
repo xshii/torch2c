@@ -64,9 +64,14 @@ def _compile_and_run(c_code: str, workdir: str) -> str:
     mock_srcs = [os.path.join(mock_dir, s) for s in _MOCK_SOURCES]
 
     cmd = [
-        cc, "-std=c99", "-Wall", "-O2",
-        "-o", "test_op",
-        c_path, *mock_srcs,
+        cc,
+        "-std=c99",
+        "-Wall",
+        "-O2",
+        "-o",
+        "test_op",
+        c_path,
+        *mock_srcs,
         f"-I{os.path.join(mock_dir, 'include')}",
         "-lm",
     ]
@@ -74,14 +79,19 @@ def _compile_and_run(c_code: str, workdir: str) -> str:
     assert comp.returncode == 0, f"编译失败:\n{comp.stderr}"
 
     run = subprocess.run(
-        ["./test_op"], cwd=workdir, capture_output=True, text=True, timeout=10,
+        ["./test_op"],
+        cwd=workdir,
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     assert run.returncode == 0, f"运行失败 (rc={run.returncode}):\n{run.stderr}"
     return run.stdout
 
 
-def _compare(actual: np.ndarray, expected: np.ndarray,
-             atol: float = 1e-3, cos_tol: float = 0.999) -> dict:
+def _compare(
+    actual: np.ndarray, expected: np.ndarray, atol: float = 1e-3, cos_tol: float = 0.999
+) -> dict:
     diff = np.abs(actual.astype(np.float32) - expected.astype(np.float32))
     max_abs = float(diff.max())
     a = actual.astype(np.float64).flatten()
@@ -118,13 +128,13 @@ class TestMatmul:
 #include "npu_api.h"
 
 int main(void) {{
-    unsigned short a[{M*K}], b[{K*N}], out[{M*N}];
-    FILE* fa = fopen("a.bin", "rb"); fread(a, 2, {M*K}, fa); fclose(fa);
-    FILE* fb = fopen("b.bin", "rb"); fread(b, 2, {K*N}, fb); fclose(fb);
+    unsigned short a[{M * K}], b[{K * N}], out[{M * N}];
+    FILE* fa = fopen("a.bin", "rb"); fread(a, 2, {M * K}, fa); fclose(fa);
+    FILE* fb = fopen("b.bin", "rb"); fread(b, 2, {K * N}, fb); fclose(fb);
 
     npu_matmul(a, b, out, {M}, {N}, {K}, NPU_DTYPE_FP16, NPU_FORMAT_ND);
 
-    FILE* fo = fopen("out.bin", "wb"); fwrite(out, 2, {M*N}, fo); fclose(fo);
+    FILE* fo = fopen("out.bin", "wb"); fwrite(out, 2, {M * N}, fo); fclose(fo);
     return 0;
 }}
 """
@@ -143,8 +153,9 @@ class TestMatmulBias:
         a = rng.randn(M, K).astype(np.float16)
         b = rng.randn(K, N).astype(np.float16)
         bias = rng.randn(N).astype(np.float16)
-        expected = (a.astype(np.float32) @ b.astype(np.float32)
-                    + bias.astype(np.float32)).astype(np.float16)
+        expected = (a.astype(np.float32) @ b.astype(np.float32) + bias.astype(np.float32)).astype(
+            np.float16
+        )
 
         workdir = str(tmp_path)
         _write_bin(os.path.join(workdir, "a.bin"), a)
@@ -157,16 +168,16 @@ class TestMatmulBias:
 #include "npu_api.h"
 
 int main(void) {{
-    unsigned short a[{M*K}], b[{K*N}], bias[{N}], out[{M*N}];
+    unsigned short a[{M * K}], b[{K * N}], bias[{N}], out[{M * N}];
     FILE* f;
-    f = fopen("a.bin", "rb"); fread(a, 2, {M*K}, f); fclose(f);
-    f = fopen("b.bin", "rb"); fread(b, 2, {K*N}, f); fclose(f);
+    f = fopen("a.bin", "rb"); fread(a, 2, {M * K}, f); fclose(f);
+    f = fopen("b.bin", "rb"); fread(b, 2, {K * N}, f); fclose(f);
     f = fopen("bias.bin", "rb"); fread(bias, 2, {N}, f); fclose(f);
 
     npu_matmul_bias(a, b, bias, out, {M}, {N}, {K},
                     NPU_DTYPE_FP16, NPU_DTYPE_FP16, NPU_FORMAT_ND);
 
-    f = fopen("out.bin", "wb"); fwrite(out, 2, {M*N}, f); fclose(f);
+    f = fopen("out.bin", "wb"); fwrite(out, 2, {M * N}, f); fclose(f);
     return 0;
 }}
 """
@@ -341,18 +352,20 @@ class TestTranspose:
 #include "npu_api.h"
 
 int main(void) {{
-    unsigned short a[{rows*cols}], out[{rows*cols}];
+    unsigned short a[{rows * cols}], out[{rows * cols}];
     FILE* f;
-    f = fopen("a.bin", "rb"); fread(a, 2, {rows*cols}, f); fclose(f);
+    f = fopen("a.bin", "rb"); fread(a, 2, {rows * cols}, f); fclose(f);
 
     npu_transpose_2d(a, out, {rows}, {cols}, NPU_DTYPE_FP16);
 
-    f = fopen("out.bin", "wb"); fwrite(out, 2, {rows*cols}, f); fclose(f);
+    f = fopen("out.bin", "wb"); fwrite(out, 2, {rows * cols}, f); fclose(f);
     return 0;
 }}
 """
         _compile_and_run(c_code, workdir)
-        actual = _read_bin(os.path.join(workdir, "out.bin"), np.float16, rows * cols).reshape(cols, rows)
+        actual = _read_bin(os.path.join(workdir, "out.bin"), np.float16, rows * cols).reshape(
+            cols, rows
+        )
         r = _compare(actual, expected)
         assert r["passed"], f"transpose_2d: max_abs={r['max_abs']:.6f}, cosine={r['cosine']:.6f}"
 
@@ -481,8 +494,7 @@ class TestLayerNorm:
         mean = xf.mean(axis=-1, keepdims=True)
         var = xf.var(axis=-1, keepdims=True)
         norm = (xf - mean) / np.sqrt(var + eps)
-        expected = (norm * gamma.astype(np.float32)
-                    + beta.astype(np.float32)).astype(np.float16)
+        expected = (norm * gamma.astype(np.float32) + beta.astype(np.float32)).astype(np.float16)
         count = seq * hidden
 
         workdir = str(tmp_path)
@@ -530,8 +542,9 @@ class TestMatmulAddFusion:
         b = rng.randn(K, N).astype(np.float16)
         bias = rng.randn(N).astype(np.float16)
 
-        expected = (a.astype(np.float32) @ b.astype(np.float32)
-                    + bias.astype(np.float32)).astype(np.float16)
+        expected = (a.astype(np.float32) @ b.astype(np.float32) + bias.astype(np.float32)).astype(
+            np.float16
+        )
 
         workdir = str(tmp_path)
         _write_bin(os.path.join(workdir, "a.bin"), a)
@@ -543,16 +556,16 @@ class TestMatmulAddFusion:
 #include "npu_api.h"
 
 int main(void) {{
-    unsigned short a[{M*K}], b[{K*N}], bias[{N}], out[{M*N}];
+    unsigned short a[{M * K}], b[{K * N}], bias[{N}], out[{M * N}];
     FILE* f;
-    f = fopen("a.bin", "rb"); fread(a, 2, {M*K}, f); fclose(f);
-    f = fopen("b.bin", "rb"); fread(b, 2, {K*N}, f); fclose(f);
+    f = fopen("a.bin", "rb"); fread(a, 2, {M * K}, f); fclose(f);
+    f = fopen("b.bin", "rb"); fread(b, 2, {K * N}, f); fclose(f);
     f = fopen("bias.bin", "rb"); fread(bias, 2, {N}, f); fclose(f);
 
     npu_matmul_bias(a, b, bias, out, {M}, {N}, {K},
                     NPU_DTYPE_FP16, NPU_DTYPE_FP16, NPU_FORMAT_ND);
 
-    f = fopen("out.bin", "wb"); fwrite(out, 2, {M*N}, f); fclose(f);
+    f = fopen("out.bin", "wb"); fwrite(out, 2, {M * N}, f); fclose(f);
     return 0;
 }}
 """
@@ -588,25 +601,25 @@ class TestAttentionBlock:
 #include "npu_api.h"
 
 int main(void) {{
-    unsigned short q[{seq*d}], k[{seq*d}], v[{seq*d}];
-    unsigned short kt[{seq*d}], scores[{seq*seq}], sm_inter[{seq*seq}];
-    unsigned short attn[{seq*seq}], out[{seq*d}];
+    unsigned short q[{seq * d}], k[{seq * d}], v[{seq * d}];
+    unsigned short kt[{seq * d}], scores[{seq * seq}], sm_inter[{seq * seq}];
+    unsigned short attn[{seq * seq}], out[{seq * d}];
     FILE* f;
-    f = fopen("q.bin", "rb"); fread(q, 2, {seq*d}, f); fclose(f);
-    f = fopen("k.bin", "rb"); fread(k, 2, {seq*d}, f); fclose(f);
-    f = fopen("v.bin", "rb"); fread(v, 2, {seq*d}, f); fclose(f);
+    f = fopen("q.bin", "rb"); fread(q, 2, {seq * d}, f); fclose(f);
+    f = fopen("k.bin", "rb"); fread(k, 2, {seq * d}, f); fclose(f);
+    f = fopen("v.bin", "rb"); fread(v, 2, {seq * d}, f); fclose(f);
 
     /* K^T */
     npu_transpose_2d(k, kt, {seq}, {d}, NPU_DTYPE_FP16);
     /* scores = Q @ K^T */
     npu_matmul(q, kt, scores, {seq}, {seq}, {d}, NPU_DTYPE_FP16, NPU_FORMAT_ND);
     /* softmax */
-    npu_softmax_part1(scores, sm_inter, {seq}, {seq*seq}, NPU_DTYPE_FP16);
-    npu_softmax_part2(sm_inter, attn, {seq*seq*2}, NPU_DTYPE_FP16);
+    npu_softmax_part1(scores, sm_inter, {seq}, {seq * seq}, NPU_DTYPE_FP16);
+    npu_softmax_part2(sm_inter, attn, {seq * seq * 2}, NPU_DTYPE_FP16);
     /* out = attn @ V */
     npu_matmul(attn, v, out, {seq}, {d}, {seq}, NPU_DTYPE_FP16, NPU_FORMAT_ND);
 
-    f = fopen("out.bin", "wb"); fwrite(out, 2, {seq*d}, f); fclose(f);
+    f = fopen("out.bin", "wb"); fwrite(out, 2, {seq * d}, f); fclose(f);
     return 0;
 }}
 """

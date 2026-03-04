@@ -13,13 +13,13 @@ _project_root = str(Path(__file__).resolve().parents[3])
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from npu_compiler.codegen import (
+from npu_compiler.codegen import (  # noqa: E402
     c_emitter,
     cmake_emitter,
     mock_emitter,
     utils_emitter,
 )
-from npu_compiler.common import get_logger
+from npu_compiler.common import get_logger  # noqa: E402
 
 logger = get_logger("codegen.demo")
 
@@ -27,21 +27,21 @@ logger = get_logger("codegen.demo")
 def generate_test_memory_c(plan: dict) -> str:
     """生成 test_memory_layout.c：检查 tensor 偏移不重叠。"""
     lines = [
-        '#include <stdio.h>',
-        '#include <stdlib.h>',
+        "#include <stdio.h>",
+        "#include <stdlib.h>",
         '#include "model_memory.h"',
-        '',
-        'static int _test_count = 0;',
-        'static int _pass_count = 0;',
-        '#define RUN_TEST(fn) do { _test_count++; '
+        "",
+        "static int _test_count = 0;",
+        "static int _pass_count = 0;",
+        "#define RUN_TEST(fn) do { _test_count++; "
         'printf("  [RUN] %s ... ", #fn); fn(); '
         '_pass_count++; printf("PASS\\n"); } while(0)',
-        '#define ASSERT_TRUE(cond) do { if (!(cond)) { '
+        "#define ASSERT_TRUE(cond) do { if (!(cond)) { "
         'printf("FAIL\\n    %s:%d\\n", __FILE__, __LINE__); '
-        'exit(1); } } while(0)',
+        "exit(1); } } while(0)",
         '#define TEST_SUMMARY() printf("\\n=== %d/%d tests passed ===\\n", '
-        '_pass_count, _test_count)',
-        '',
+        "_pass_count, _test_count)",
+        "",
     ]
     # 生成偏移对齐测试
     lines.append("static void test_offsets_non_negative(void) {")
@@ -88,9 +88,11 @@ def main() -> None:
     weights_h = output_dir / "src" / "model_weights.h"
     if not weights_h.exists():
         with open(weights_h, "w") as f:
-            f.write("#ifndef MODEL_WEIGHTS_H\n#define MODEL_WEIGHTS_H\n"
-                    "static inline void load_weights(unsigned char* hbm)"
-                    " { (void)hbm; }\n#endif\n")
+            f.write(
+                "#ifndef MODEL_WEIGHTS_H\n#define MODEL_WEIGHTS_H\n"
+                "static inline void load_weights(unsigned char* hbm)"
+                " { (void)hbm; }\n#endif\n"
+            )
 
     # 生成 test_memory_layout.c
     tests_dir = output_dir / "tests"
@@ -102,7 +104,7 @@ def main() -> None:
     # 检查期望文件
     expected_path = demo_dir / "expected_files.txt"
     with open(expected_path) as f:
-        expected = [l.strip() for l in f if l.strip()]
+        expected = [line.strip() for line in f if line.strip()]
     missing = [fp for fp in expected if not (output_dir / fp).exists()]
     if missing:
         logger.error("缺少文件: %s", missing)
@@ -112,12 +114,16 @@ def main() -> None:
     # gcc -fsyntax-only 验证
     model_c = str(output_dir / "src" / "model_graph.c")
     mock_h = str(output_dir / "npu_mock.h")
-    cmd = ["gcc", "-fsyntax-only", "-std=c99",
-           f"-include{mock_h}",
-           f"-I{output_dir / 'src'}",
-           f"-I{output_dir / 'utils'}",
-           f"-I{output_dir}",
-           model_c]
+    cmd = [
+        "gcc",
+        "-fsyntax-only",
+        "-std=c99",
+        f"-include{mock_h}",
+        f"-I{output_dir / 'src'}",
+        f"-I{output_dir / 'utils'}",
+        f"-I{output_dir}",
+        model_c,
+    ]
     logger.info("语法检查: %s", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:

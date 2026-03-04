@@ -2,4 +2,4 @@
 
 from .op_absorption import load_absorption_config, run
 
-__all__ = ["run", "load_absorption_config"]
+__all__ = ["load_absorption_config", "run"]

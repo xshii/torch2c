@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 from npu_compiler.common import Graph, get_logger, setup_logging
-
 from npu_compiler.format_annotator import load_format_config, run
 
 logger = get_logger(__name__)
@@ -29,11 +28,13 @@ def main() -> None:
 
     # 验证 matmul 输出 tensor format 变为 nz
     mm_out = result.get_tensor("tensor_mm_out")
-    assert mm_out is not None and mm_out.format == "nz"
+    assert mm_out is not None
+    assert mm_out.format == "nz"
 
     # 验证 add 输出 tensor format 保持 nd
     add_out = result.get_tensor("tensor_add_out")
-    assert add_out is not None and add_out.format == "nd"
+    assert add_out is not None
+    assert add_out.format == "nd"
 
     # 验证 annotation 结构
     mm_node = result.get_node("node_matmul")

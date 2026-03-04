@@ -46,7 +46,7 @@ def _dtype_str(dt: torch.dtype) -> str:
 def _op_name(target: Any) -> str:
     """提取 ATen 算子全称，如 'aten.mm.default'。"""
     s = str(target)
-    return s[len("torch.ops."):] if s.startswith("torch.ops.") else s
+    return s[len("torch.ops.") :] if s.startswith("torch.ops.") else s
 
 
 def _is_tensor_overload(op_name: str) -> bool:
@@ -71,15 +71,14 @@ class _IdGen:
 def _make_tensor(tid: str, val: Any, **kwargs) -> Tensor:
     """根据 FakeTensor 元信息创建 Tensor 对象。"""
     if isinstance(val, torch.Tensor):
-        return Tensor(id=tid, shape=list(val.shape),
-                      dtype=_dtype_str(val.dtype), **kwargs)
+        return Tensor(id=tid, shape=list(val.shape), dtype=_dtype_str(val.dtype), **kwargs)
     return Tensor(id=tid, shape=[1], dtype="fp32", **kwargs)
 
 
 # ---- 主入口 ----
 
-def capture(model: nn.Module, dummy_input: torch.Tensor,
-            mask: torch.Tensor | None = None) -> Graph:
+
+def capture(model: nn.Module, dummy_input: torch.Tensor, mask: torch.Tensor | None = None) -> Graph:
     """将 PyTorch 模型导出为 Graph IR。
 
     Args:
@@ -127,8 +126,12 @@ def capture(model: nn.Module, dummy_input: torch.Tensor,
             logger.warning("图校验警告: %s", err)
 
     weight_count = sum(1 for t in graph.tensors.values() if t.is_weight)
-    logger.info("图捕获完成，节点数: %d, tensor数: %d, 权重tensor数: %d",
-                len(graph.nodes), len(graph.tensors), weight_count)
+    logger.info(
+        "图捕获完成，节点数: %d, tensor数: %d, 权重tensor数: %d",
+        len(graph.nodes),
+        len(graph.tensors),
+        weight_count,
+    )
     return graph
 
 
@@ -159,13 +162,13 @@ def _resolve_negative_dims(graph: Graph) -> None:
 
 # ---- 内部处理函数 ----
 
+
 def _handle_placeholder(graph, fx_node, fx_map, tgen, param_names):
     """处理 placeholder 节点（模型输入或参数）。"""
     tid = tgen.next()
     val = fx_node.meta.get("val")
     is_weight = fx_node.name in param_names
-    t = _make_tensor(tid, val, is_weight=is_weight,
-                     is_model_input=not is_weight)
+    t = _make_tensor(tid, val, is_weight=is_weight, is_model_input=not is_weight)
     if is_weight:
         t.name = param_names[fx_node.name]
     graph.add_tensor(t)
@@ -182,8 +185,13 @@ def _handle_getitem(fx_node, fx_map):
 
 
 def _parse_call_args(
-    graph: Graph, fx_node, fx_map: dict, tgen: _IdGen, nid: str,
-    op: str, tensor_overload: bool,
+    graph: Graph,
+    fx_node,
+    fx_map: dict,
+    tgen: _IdGen,
+    nid: str,
+    op: str,
+    tensor_overload: bool,
 ) -> tuple[list[str], dict]:
     """解析 FX call 的 args/kwargs，返回 (input_tids, params)。"""
     input_tids: list[str] = []
@@ -199,8 +207,7 @@ def _parse_call_args(
                 input_tids.append(resolved[0])
         elif isinstance(arg, (int, float)) and tensor_overload and i > 0:
             scalar_tid = tgen.next()
-            scalar_t = Tensor(id=scalar_tid, shape=[1], dtype="fp32",
-                              is_weight=True)
+            scalar_t = Tensor(id=scalar_tid, shape=[1], dtype="fp32", is_weight=True)
             scalar_t.consumer_node_ids.append(nid)
             graph.add_tensor(scalar_t)
             input_tids.append(scalar_tid)
@@ -223,7 +230,9 @@ def _parse_call_args(
 
 
 def _normalize_op_inputs(
-    op: str, input_tids: list[str], params: dict,
+    op: str,
+    input_tids: list[str],
+    params: dict,
 ) -> tuple[list[str], dict]:
     """addmm 输入重排 + 参数重命名。"""
     if op == "aten.addmm.default" and len(input_tids) >= 3:
@@ -239,7 +248,11 @@ def _normalize_op_inputs(
 
 
 def _create_call_outputs(
-    graph: Graph, fx_node, fx_map: dict, tgen: _IdGen, nid: str,
+    graph: Graph,
+    fx_node,
+    fx_map: dict,
+    tgen: _IdGen,
+    nid: str,
 ) -> list[str]:
     """创建输出 tensor 并更新 fx_map，返回 output_tids。"""
     val = fx_node.meta.get("val")
@@ -271,7 +284,13 @@ def _handle_call(graph, fx_node, fx_map, tgen, ngen):
     tensor_overload = _is_tensor_overload(op)
 
     input_tids, params = _parse_call_args(
-        graph, fx_node, fx_map, tgen, nid, op, tensor_overload,
+        graph,
+        fx_node,
+        fx_map,
+        tgen,
+        nid,
+        op,
+        tensor_overload,
     )
     input_tids, params = _normalize_op_inputs(op, input_tids, params)
     output_tids = _create_call_outputs(graph, fx_node, fx_map, tgen, nid)
@@ -281,11 +300,9 @@ def _handle_call(graph, fx_node, fx_map, tgen, ngen):
         if t and nid not in t.consumer_node_ids:
             t.consumer_node_ids.append(nid)
 
-    node = Node(id=nid, op_type=op, inputs=input_tids,
-                outputs=output_tids, params=params)
+    node = Node(id=nid, op_type=op, inputs=input_tids, outputs=output_tids, params=params)
     graph.add_node(node)
-    logger.debug("节点 %s: op=%s, inputs=%s, outputs=%s",
-                 nid, op, input_tids, output_tids)
+    logger.debug("节点 %s: op=%s, inputs=%s, outputs=%s", nid, op, input_tids, output_tids)
 
 
 def post_validate(graph: Graph) -> list[str]:

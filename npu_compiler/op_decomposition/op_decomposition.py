@@ -28,8 +28,7 @@ def run(graph: Graph, config: dict) -> Graph:
     rules = config.get("decompositions", {})
 
     # 收集待裂解节点（不能在迭代时修改 dict）
-    targets = [n for n in graph.nodes.values()
-               if not n.is_mapped and n.op_type in rules]
+    targets = [n for n in graph.nodes.values() if not n.is_mapped and n.op_type in rules]
 
     total_new_nodes = 0
     total_new_tensors = 0
@@ -39,8 +38,12 @@ def run(graph: Graph, config: dict) -> Graph:
         total_new_nodes += nn_count
         total_new_tensors += nt_count
 
-    logger.info("裂解完成。裂解了%d个算子，新增%d个节点，新增%d个中间tensor",
-                len(targets), total_new_nodes, total_new_tensors)
+    logger.info(
+        "裂解完成。裂解了%d个算子，新增%d个节点，新增%d个中间tensor",
+        len(targets),
+        total_new_nodes,
+        total_new_tensors,
+    )
     return graph
 
 
@@ -83,16 +86,18 @@ def _decompose_node(graph: Graph, node: Node, rule: dict) -> tuple[int, int]:
         else:
             outputs = [intermediates[i]]
 
-        new_nodes.append(Node(
-            id=nid,
-            op_type=step["npu_op"],
-            inputs=inputs,
-            outputs=outputs,
-            params=dict(node.params),
-            npu_op=step["npu_op"],
-            compute_unit=step["compute_unit"],
-            is_mapped=True,
-        ))
+        new_nodes.append(
+            Node(
+                id=nid,
+                op_type=step["npu_op"],
+                inputs=inputs,
+                outputs=outputs,
+                params=dict(node.params),
+                npu_op=step["npu_op"],
+                compute_unit=step["compute_unit"],
+                is_mapped=True,
+            )
+        )
 
     # 更新中间 tensor 的 producer/consumer 引用
     for i, inter_tid in enumerate(intermediates):

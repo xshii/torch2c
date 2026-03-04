@@ -43,9 +43,7 @@ def align_up(offset: int, alignment: int) -> int:
     return ((offset + alignment - 1) // alignment) * alignment
 
 
-def calc_padded_size(
-    shape: list[int], dtype: str, fmt: str, cube_size: int
-) -> int:
+def calc_padded_size(shape: list[int], dtype: str, fmt: str, cube_size: int) -> int:
     """计算 padding 后的字节数。
 
     分形格式 (nz/nc1hwc0) 将最后两维分别对齐到 cube_size 的整数倍，
@@ -97,9 +95,7 @@ def _analyze_lifetimes(
         if t.is_model_output:
             last_use = max_order
         elif t.consumer_node_ids:
-            consumer_orders = [
-                order_map[c] for c in t.consumer_node_ids if c in order_map
-            ]
+            consumer_orders = [order_map[c] for c in t.consumer_node_ids if c in order_map]
             if consumer_orders:
                 last_use = max(consumer_orders)
             else:
@@ -143,9 +139,7 @@ def _allocate_hbm(
             if other_t.hbm_offset is None:
                 continue
             if lifetimes[other_tid][1] < current_first:
-                free_blocks.append(
-                    [other_t.hbm_offset, align_up(other_t.hbm_size, hbm_alignment)]
-                )
+                free_blocks.append([other_t.hbm_offset, align_up(other_t.hbm_size, hbm_alignment)])
                 freed_set.add(other_tid)
 
         # Best-fit: 找最小的满足 aligned_size 的空闲块
@@ -223,9 +217,7 @@ def _plan_l1_layout(
 
     total = align_up(offset, l1_alignment)
     if total > l1_capacity:
-        raise MemoryPlanError(
-            f"L1 溢出: 节点 {node_id} 需要 {total} 字节, 容量 {l1_capacity} 字节"
-        )
+        raise MemoryPlanError(f"L1 溢出: 节点 {node_id} 需要 {total} 字节, 容量 {l1_capacity} 字节")
     return layout
 
 
@@ -350,18 +342,30 @@ def _build_bulk_dma(graph: Graph, cube_size: int) -> list[DmaPlan]:
         size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
         # 输入/权重: 开头 bulk load
         if t.is_model_input or t.is_weight:
-            bulk_load.loads.append(DmaInstruction(
-                op="load", tensor_id=t.id,
-                hbm_offset=t.hbm_offset, l1_offset=t.l1_offset,
-                size_bytes=size, src_format=t.format, dst_format=t.format,
-            ))
+            bulk_load.loads.append(
+                DmaInstruction(
+                    op="load",
+                    tensor_id=t.id,
+                    hbm_offset=t.hbm_offset,
+                    l1_offset=t.l1_offset,
+                    size_bytes=size,
+                    src_format=t.format,
+                    dst_format=t.format,
+                )
+            )
         # 输出: 结尾 bulk store
         if t.is_model_output:
-            bulk_store.stores.append(DmaInstruction(
-                op="store", tensor_id=t.id,
-                hbm_offset=t.hbm_offset, l1_offset=t.l1_offset,
-                size_bytes=size, src_format=t.format, dst_format=t.format,
-            ))
+            bulk_store.stores.append(
+                DmaInstruction(
+                    op="store",
+                    tensor_id=t.id,
+                    hbm_offset=t.hbm_offset,
+                    l1_offset=t.l1_offset,
+                    size_bytes=size,
+                    src_format=t.format,
+                    dst_format=t.format,
+                )
+            )
 
     return [bulk_load, bulk_store]
 
@@ -418,7 +422,9 @@ def run(graph: Graph, config: dict) -> tuple[Graph, list[DmaPlan]]:
     allocated = sum(1 for t in graph.tensors.values() if t.hbm_offset is not None)
     logger.info(
         "Pass 完成。HBM 分配: %d 个张量, 复用: %d, DMA 计划: %d 个算子",
-        allocated, reuse_count, len(dma_plans),
+        allocated,
+        reuse_count,
+        len(dma_plans),
     )
     return graph, dma_plans
 

@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import Callable, Optional
 
 import numpy as np
 import torch
 import torch.nn as nn
 
-from npu_compiler.common import DiagnosticCollector, Graph, get_logger, load_config
 from npu_compiler.codegen import c_emitter, golden_exporter, weight_exporter
 from npu_compiler.codegen.c_project import (
-    cmake_emitter, main_emitter, mock_emitter, utils_emitter,
+    cmake_emitter,
+    main_emitter,
+    mock_emitter,
+    utils_emitter,
 )
+from npu_compiler.common import DiagnosticCollector, Graph, get_logger, load_config
 from npu_compiler.format_annotator import format_annotator
 from npu_compiler.graph_capture import graph_capture
 from npu_compiler.memory_planner import memory_planner
@@ -29,15 +32,17 @@ logger = get_logger(__name__)
 
 # ---- 声明式 Pass 描述 ----
 
+
 @dataclass(frozen=True)
 class _PassDesc:
     """中间 Pass 的声明式描述。"""
+
     name: str
     number: str
     run_fn: Callable
-    config_key: Optional[str]
-    validate_fn: Optional[Callable] = None
-    post_hook: Optional[Callable] = None
+    config_key: str | None
+    validate_fn: Callable | None = None
+    post_hook: Callable | None = None
 
 
 def _propagate_input_dtypes(graph: Graph) -> None:
@@ -63,17 +68,28 @@ def _propagate_input_dtypes(graph: Graph) -> None:
 
 
 _MIDDLE_PASSES: list[_PassDesc] = [
-    _PassDesc("op_mapping", "②", op_mapping.run, "mapping",
-              op_mapping.post_validate),
-    _PassDesc("op_decomposition", "③", op_decomposition.run, "decomposition",
-              op_decomposition.post_validate),
+    _PassDesc("op_mapping", "②", op_mapping.run, "mapping", op_mapping.post_validate),
+    _PassDesc(
+        "op_decomposition",
+        "③",
+        op_decomposition.run,
+        "decomposition",
+        op_decomposition.post_validate,
+    ),
     _PassDesc("op_absorption", "④", op_absorption.run, "absorption"),
-    _PassDesc("format_annotator", "⑤", format_annotator.run, "format",
-              format_annotator.post_validate, _propagate_input_dtypes),
+    _PassDesc(
+        "format_annotator",
+        "⑤",
+        format_annotator.run,
+        "format",
+        format_annotator.post_validate,
+        _propagate_input_dtypes,
+    ),
 ]
 
 
 # ---- 工具函数 ----
+
 
 def _load_configs(config_dir: str) -> dict:
     """加载全部配置文件。"""
@@ -103,7 +119,8 @@ def _build_codegen_plan(graph: Graph, dma_plans: list) -> dict:
 
 
 def _run_golden(
-    model: nn.Module, dummy_input: torch.Tensor,
+    model: nn.Module,
+    dummy_input: torch.Tensor,
     mask: torch.Tensor | None = None,
 ) -> tuple[list[np.ndarray], list[np.ndarray]]:
     """前向推理获取 golden 输入/输出。"""
@@ -138,6 +155,7 @@ def _run_post_validation(
 
 
 # ---- 主入口 ----
+
 
 def compile(
     model: nn.Module,
@@ -206,8 +224,7 @@ def compile(
 
     c_emitter.run(plan, output_dir, config_dir=config_dir)
     mock_emitter.run(output_dir, config_dir=config_dir)
-    main_emitter.run(plan, configs["hardware"], output_dir,
-                     atol=atol, cosine_tol=cosine_tol)
+    main_emitter.run(plan, configs["hardware"], output_dir, atol=atol, cosine_tol=cosine_tol)
     cmake_emitter.run(output_dir)
     utils_emitter.run(output_dir)
 
@@ -218,7 +235,9 @@ def compile(
         if t.get("is_weight") and t.get("name")
     }
     weight_exporter.export_weights(
-        model.state_dict(), weight_path, offsets=weight_offsets,
+        model.state_dict(),
+        weight_path,
+        offsets=weight_offsets,
     )
 
     golden_dir = os.path.join(output_dir, "golden")

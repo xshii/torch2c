@@ -12,7 +12,6 @@ from ._helpers import (
     FORMAT_MAP,
     c_header_guard,
     load_signatures,
-    resolve_config_dir,
     write_files,
 )
 
@@ -104,6 +103,7 @@ def _format_value(val, ptype: str) -> str:
 
 # ---- 代码生成 ----
 
+
 def _gen_op_call(npu_op: str, sig: dict, node: dict, tensors: dict) -> str:
     """生成单个算子的 C 调用语句。"""
     resolver = SourceResolver(node, tensors)
@@ -128,12 +128,16 @@ def _gen_dma_line(instr: dict) -> str:
     src_fmt = FORMAT_MAP.get(instr.get("src_format", "nd"), "NPU_FORMAT_ND")
     dst_fmt = FORMAT_MAP.get(instr.get("dst_format", "nd"), "NPU_FORMAT_ND")
     if instr["op"] == "load":
-        return (f"npu_dma_load((void*)(l1 + {instr['l1_offset']}), "
-                f"(void*)(hbm + {instr['hbm_offset']}), "
-                f"{instr['size_bytes']}, {src_fmt}, {dst_fmt});")
-    return (f"npu_dma_store((void*)(hbm + {instr['hbm_offset']}), "
-            f"(void*)(l1 + {instr['l1_offset']}), "
-            f"{instr['size_bytes']}, {src_fmt}, {dst_fmt});")
+        return (
+            f"npu_dma_load((void*)(l1 + {instr['l1_offset']}), "
+            f"(void*)(hbm + {instr['hbm_offset']}), "
+            f"{instr['size_bytes']}, {src_fmt}, {dst_fmt});"
+        )
+    return (
+        f"npu_dma_store((void*)(hbm + {instr['hbm_offset']}), "
+        f"(void*)(l1 + {instr['l1_offset']}), "
+        f"{instr['size_bytes']}, {src_fmt}, {dst_fmt});"
+    )
 
 
 def _gen_dma_block(instructions: list[dict], indent: str) -> str:
@@ -141,8 +145,7 @@ def _gen_dma_block(instructions: list[dict], indent: str) -> str:
     return "\n".join(f"{indent}{_gen_dma_line(i)}" for i in instructions)
 
 
-def gen_op_block(node: dict, tensors: dict, dma_plan: dict,
-                 signatures: dict) -> str:
+def gen_op_block(node: dict, tensors: dict, dma_plan: dict, signatures: dict) -> str:
     """为单个算子生成完整的三段式代码块。"""
     npu_op = node.get("npu_op", "unknown")
     sig = signatures.get("compute_ops", {}).get(npu_op)
@@ -154,8 +157,7 @@ def gen_op_block(node: dict, tensors: dict, dma_plan: dict,
     loads = _gen_dma_block(dma_plan.get("loads", []), indent)
     stores = _gen_dma_block(dma_plan.get("stores", []), indent)
 
-    lines = [f"{indent}/* === {node['id']}: {npu_op} "
-             f"({node.get('compute_unit', '?')}) === */"]
+    lines = [f"{indent}/* === {node['id']}: {npu_op} ({node.get('compute_unit', '?')}) === */"]
     if loads:
         lines.append(loads)
         lines.append(f"{indent}npu_dma_barrier();")
@@ -167,6 +169,7 @@ def gen_op_block(node: dict, tensors: dict, dma_plan: dict,
 
 
 # ---- 文件级生成 ----
+
 
 def _gen_bulk_dma(dma_plan: dict, label: str) -> str:
     """生成 bulk DMA (load/store) 代码块。"""
@@ -253,9 +256,12 @@ def run(plan: dict, output_dir: str, config_dir: str | None = None) -> None:
     logger.info("c_emitter: 开始生成 model_graph 文件")
     sigs = load_signatures(config_dir)
     src_dir = os.path.join(output_dir, "src")
-    write_files(src_dir, [
-        ("model_graph.c", emit_model_graph_c(plan, sigs)),
-        ("model_graph.h", emit_model_graph_h()),
-        ("model_memory.h", emit_model_memory_h(plan)),
-        ("model_params.h", emit_model_params_h(plan)),
-    ])
+    write_files(
+        src_dir,
+        [
+            ("model_graph.c", emit_model_graph_c(plan, sigs)),
+            ("model_graph.h", emit_model_graph_h()),
+            ("model_memory.h", emit_model_memory_h(plan)),
+            ("model_params.h", emit_model_params_h(plan)),
+        ],
+    )

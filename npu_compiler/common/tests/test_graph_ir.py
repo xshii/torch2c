@@ -91,7 +91,6 @@ class TestValidate:
         assert len(errors) == 1
 
 
-
 class TestSummary:
     def test_summary_content(self):
         g = _make_linear_graph()

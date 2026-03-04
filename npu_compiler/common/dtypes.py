@@ -8,6 +8,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class DtypeInfo:
     """单个 dtype 的元信息。"""
+
     bytes: int
     c_enum: str
 

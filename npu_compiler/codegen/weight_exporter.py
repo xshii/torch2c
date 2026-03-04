@@ -19,28 +19,34 @@ def _array_to_hex(arr: np.ndarray) -> str:
     parts = [f"0x{b:02x}" for b in raw]
     lines = []
     for i in range(0, len(parts), 16):
-        lines.append("    " + ", ".join(parts[i:i + 16]))
+        lines.append("    " + ", ".join(parts[i : i + 16]))
     return ",\n".join(lines)
 
 
-def emit_weights_h(weights: dict[str, np.ndarray],
-                   offsets: dict[str, int] | list[int] | None = None) -> str:
+def emit_weights_h(
+    weights: dict[str, np.ndarray], offsets: dict[str, int] | list[int] | None = None
+) -> str:
     """生成 model_weights.h 内容。
 
     Args:
         weights: {state_dict_key: numpy_array} 映射。
         offsets: 权重名→HBM 偏移的字典，或与 weights 顺序一致的列表。
     """
-    lines = ["#ifndef MODEL_WEIGHTS_H", "#define MODEL_WEIGHTS_H", "",
-             "#include <stddef.h>", "#include <string.h>", ""]
+    lines = [
+        "#ifndef MODEL_WEIGHTS_H",
+        "#define MODEL_WEIGHTS_H",
+        "",
+        "#include <stddef.h>",
+        "#include <string.h>",
+        "",
+    ]
 
     entries: list[tuple[str, str, int]] = []  # (safe_name, tid, offset)
     for tid, arr in weights.items():
         safe = tid.replace(".", "_").replace("-", "_")
         nbytes = arr.nbytes
         hex_data = _array_to_hex(arr)
-        lines.append(f"/* {tid}: shape={list(arr.shape)}, "
-                     f"dtype={arr.dtype}, {nbytes} bytes */")
+        lines.append(f"/* {tid}: shape={list(arr.shape)}, dtype={arr.dtype}, {nbytes} bytes */")
         lines.append(f"static const unsigned char {safe}_data[{nbytes}] = {{")
         lines.append(hex_data)
         lines.append("};")
@@ -57,9 +63,7 @@ def emit_weights_h(weights: dict[str, np.ndarray],
     lines.append("static inline void load_weights(unsigned char* hbm) {")
     if all(e[2] is not None for e in entries):
         for safe, _tid, offset in entries:
-            lines.append(
-                f"    memcpy(hbm + {offset}, {safe}_data, sizeof({safe}_data));"
-            )
+            lines.append(f"    memcpy(hbm + {offset}, {safe}_data, sizeof({safe}_data));")
     else:
         lines.append("    (void)hbm;")
     lines.append("}")
@@ -67,9 +71,12 @@ def emit_weights_h(weights: dict[str, np.ndarray],
     return "\n".join(lines)
 
 
-def export_weights(state_dict: dict, output_path: str,
-                   dtype: str = "fp16",
-                   offsets: dict[str, int] | list[int] | None = None) -> None:
+def export_weights(
+    state_dict: dict,
+    output_path: str,
+    dtype: str = "fp16",
+    offsets: dict[str, int] | list[int] | None = None,
+) -> None:
     """将 PyTorch state_dict 导出为 model_weights.h。"""
     logger.info("weight_exporter: 导出权重到 %s", output_path)
     np_dtype = _DTYPE_NP.get(dtype)

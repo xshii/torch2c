@@ -10,14 +10,13 @@ import math
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.nn.functional as F  # noqa: N812
 
 
 class DemoEncoder(nn.Module):
     """2 层 Transformer Encoder，用于演示图捕获。"""
 
-    def __init__(self, hidden_size: int = 64, num_heads: int = 4,
-                 ffn_dim: int = 256):
+    def __init__(self, hidden_size: int = 64, num_heads: int = 4, ffn_dim: int = 256):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
@@ -43,9 +42,15 @@ class DemoEncoder(nn.Module):
         self.ff2_1 = nn.Linear(hidden_size, ffn_dim)
         self.ff2_2 = nn.Linear(ffn_dim, hidden_size)
 
-    def _attention(self, x: torch.Tensor, mask: torch.Tensor,
-                   wq: nn.Linear, wk: nn.Linear,
-                   wv: nn.Linear, wo: nn.Linear) -> torch.Tensor:
+    def _attention(
+        self,
+        x: torch.Tensor,
+        mask: torch.Tensor,
+        wq: nn.Linear,
+        wk: nn.Linear,
+        wv: nn.Linear,
+        wo: nn.Linear,
+    ) -> torch.Tensor:
         B, S, _ = x.shape
         q = wq(x).view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
         k = wk(x).view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
@@ -68,8 +73,9 @@ class DemoEncoder(nn.Module):
         out = out.transpose(1, 2).reshape(B, S, self.num_heads * self.head_dim)
         return wo(out)
 
-    def _encoder_layer(self, x: torch.Tensor, mask: torch.Tensor,
-                       ln1, wq, wk, wv, wo, ln2, ff1, ff2) -> torch.Tensor:
+    def _encoder_layer(
+        self, x: torch.Tensor, mask: torch.Tensor, ln1, wq, wk, wv, wo, ln2, ff1, ff2
+    ) -> torch.Tensor:
         h = ln1(x)
         h = self._attention(h, mask, wq, wk, wv, wo)
         x = x + h
@@ -81,10 +87,28 @@ class DemoEncoder(nn.Module):
         return x
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        x = self._encoder_layer(x, mask,
-                                self.ln1_1, self.wq1, self.wk1, self.wv1,
-                                self.wo1, self.ln1_2, self.ff1_1, self.ff1_2)
-        x = self._encoder_layer(x, mask,
-                                self.ln2_1, self.wq2, self.wk2, self.wv2,
-                                self.wo2, self.ln2_2, self.ff2_1, self.ff2_2)
+        x = self._encoder_layer(
+            x,
+            mask,
+            self.ln1_1,
+            self.wq1,
+            self.wk1,
+            self.wv1,
+            self.wo1,
+            self.ln1_2,
+            self.ff1_1,
+            self.ff1_2,
+        )
+        x = self._encoder_layer(
+            x,
+            mask,
+            self.ln2_1,
+            self.wq2,
+            self.wk2,
+            self.wv2,
+            self.wo2,
+            self.ln2_2,
+            self.ff2_1,
+            self.ff2_2,
+        )
         return x

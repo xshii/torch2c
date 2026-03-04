@@ -28,21 +28,44 @@ _CONFIG = {
 def _make_graph() -> Graph:
     """创建 matmul → add 的测试图。"""
     g = Graph()
-    g.add_tensor(Tensor(id="t_a", shape=[1, 32, 64], dtype="fp16",
-                        consumer_node_ids=["n_mm"]))
-    g.add_tensor(Tensor(id="t_b", shape=[64, 64], dtype="fp16",
-                        is_weight=True, consumer_node_ids=["n_mm"]))
-    g.add_tensor(Tensor(id="t_mm_out", shape=[1, 32, 64], dtype="fp16",
-                        producer_node_id="n_mm", consumer_node_ids=["n_add"]))
-    g.add_tensor(Tensor(id="t_bias", shape=[64], dtype="fp16",
-                        is_weight=True, consumer_node_ids=["n_add"]))
-    g.add_tensor(Tensor(id="t_add_out", shape=[1, 32, 64], dtype="fp16",
-                        producer_node_id="n_add"))
+    g.add_tensor(Tensor(id="t_a", shape=[1, 32, 64], dtype="fp16", consumer_node_ids=["n_mm"]))
+    g.add_tensor(
+        Tensor(id="t_b", shape=[64, 64], dtype="fp16", is_weight=True, consumer_node_ids=["n_mm"])
+    )
+    g.add_tensor(
+        Tensor(
+            id="t_mm_out",
+            shape=[1, 32, 64],
+            dtype="fp16",
+            producer_node_id="n_mm",
+            consumer_node_ids=["n_add"],
+        )
+    )
+    g.add_tensor(
+        Tensor(id="t_bias", shape=[64], dtype="fp16", is_weight=True, consumer_node_ids=["n_add"])
+    )
+    g.add_tensor(Tensor(id="t_add_out", shape=[1, 32, 64], dtype="fp16", producer_node_id="n_add"))
 
-    g.add_node(Node(id="n_mm", op_type="aten.mm", npu_op="npu_matmul",
-                    inputs=["t_a", "t_b"], outputs=["t_mm_out"], is_mapped=True))
-    g.add_node(Node(id="n_add", op_type="aten.add", npu_op="npu_add",
-                    inputs=["t_mm_out", "t_bias"], outputs=["t_add_out"], is_mapped=True))
+    g.add_node(
+        Node(
+            id="n_mm",
+            op_type="aten.mm",
+            npu_op="npu_matmul",
+            inputs=["t_a", "t_b"],
+            outputs=["t_mm_out"],
+            is_mapped=True,
+        )
+    )
+    g.add_node(
+        Node(
+            id="n_add",
+            op_type="aten.add",
+            npu_op="npu_add",
+            inputs=["t_mm_out", "t_bias"],
+            outputs=["t_add_out"],
+            is_mapped=True,
+        )
+    )
     return g
 
 
@@ -99,15 +122,13 @@ def test_annotation_structure():
 class TestPostValidate:
     def test_valid(self):
         g = Graph()
-        g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16",
-                            producer_node_id="n0"))
+        g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16", producer_node_id="n0"))
         g.add_node(Node(id="n0", op_type="op", outputs=["t0"]))
         assert post_validate(g) == []
 
     def test_missing_dtype(self):
         g = Graph()
-        g.add_tensor(Tensor(id="t0", shape=[1], dtype="",
-                            producer_node_id="n0"))
+        g.add_tensor(Tensor(id="t0", shape=[1], dtype="", producer_node_id="n0"))
         g.add_node(Node(id="n0", op_type="op", outputs=["t0"]))
         errors = post_validate(g)
         assert any("dtype" in e for e in errors)

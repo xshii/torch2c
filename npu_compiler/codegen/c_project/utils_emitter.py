@@ -21,6 +21,7 @@ def _load_template(name: str) -> str:
 
 # ---- data_loader ----
 
+
 def emit_data_loader_c() -> str:
     return _load_template("data_loader.c.tmpl").format()
 
@@ -43,6 +44,7 @@ def emit_data_loader_h() -> str:
 
 
 # ---- comparator ----
+
 
 def emit_comparator_c() -> str:
     return _load_template("comparator.c.tmpl").format()
@@ -68,6 +70,7 @@ def emit_comparator_h() -> str:
 
 
 # ---- data_dumper ----
+
 
 def emit_data_dumper_c() -> str:
     return (
@@ -95,6 +98,7 @@ def emit_data_dumper_h() -> str:
 
 # ---- tensor_utils ----
 
+
 def emit_tensor_utils_h() -> str:
     body = (
         "#include <stddef.h>\n\n"
@@ -113,14 +117,18 @@ def emit_tensor_utils_h() -> str:
 
 # ---- 批量生成 ----
 
+
 def run(output_dir: str) -> None:
     logger.info("utils_emitter: 开始生成辅助工具代码")
-    write_files(os.path.join(output_dir, "utils"), [
-        ("data_loader.c", emit_data_loader_c()),
-        ("data_loader.h", emit_data_loader_h()),
-        ("comparator.c", emit_comparator_c()),
-        ("comparator.h", emit_comparator_h()),
-        ("data_dumper.c", emit_data_dumper_c()),
-        ("data_dumper.h", emit_data_dumper_h()),
-        ("tensor_utils.h", emit_tensor_utils_h()),
-    ])
+    write_files(
+        os.path.join(output_dir, "utils"),
+        [
+            ("data_loader.c", emit_data_loader_c()),
+            ("data_loader.h", emit_data_loader_h()),
+            ("comparator.c", emit_comparator_c()),
+            ("comparator.h", emit_comparator_h()),
+            ("data_dumper.c", emit_data_dumper_c()),
+            ("data_dumper.h", emit_data_dumper_h()),
+            ("tensor_utils.h", emit_tensor_utils_h()),
+        ],
+    )

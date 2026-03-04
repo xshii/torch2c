@@ -19,8 +19,9 @@ def _load_template(name: str) -> str:
         return f.read()
 
 
-def emit_main_c(plan: dict, hw_config: dict, *,
-                atol: float = 1e-2, cosine_tol: float = 0.999) -> str:
+def emit_main_c(
+    plan: dict, hw_config: dict, *, atol: float = 1e-2, cosine_tol: float = 0.999
+) -> str:
     """生成 main.c 内容。
 
     从 plan 的 tensors 中找到 model_input/model_output，
@@ -54,9 +55,7 @@ def emit_main_c(plan: dict, hw_config: dict, *,
             f"    if (load_tensor(hbm, {offset}, "
             f'"golden/input_{i}.bin", "golden/input_{i}.desc") != 0) {{'
         )
-        load_lines.append(
-            f'        fprintf(stderr, "Failed to load input {i}\\n");'
-        )
+        load_lines.append(f'        fprintf(stderr, "Failed to load input {i}\\n");')
         load_lines.append("        return 1;")
         load_lines.append("    }")
 
@@ -66,9 +65,7 @@ def emit_main_c(plan: dict, hw_config: dict, *,
         offset = t.get("hbm_offset", 0) or 0
         size = t.get("hbm_size", 0) or 0
         compare_lines.append(f'    printf("Comparing output {i}...\\n");')
-        compare_lines.append(
-            f'    dump_tensor(hbm, {offset}, {size}, "actual_output_{i}.bin");'
-        )
+        compare_lines.append(f'    dump_tensor(hbm, {offset}, {size}, "actual_output_{i}.bin");')
         compare_lines.append(
             f"    if (compare_tensors("
             f'"actual_output_{i}.bin", "golden/output_{i}.bin", '
@@ -97,8 +94,9 @@ def emit_main_c(plan: dict, hw_config: dict, *,
     )
 
 
-def run(plan: dict, hw_config: dict, output_dir: str, *,
-        atol: float = 1e-2, cosine_tol: float = 0.999) -> None:
+def run(
+    plan: dict, hw_config: dict, output_dir: str, *, atol: float = 1e-2, cosine_tol: float = 0.999
+) -> None:
     """生成 main.c 到 output_dir。"""
     logger.info("main_emitter: 开始生成 main.c")
     content = emit_main_c(plan, hw_config, atol=atol, cosine_tol=cosine_tol)

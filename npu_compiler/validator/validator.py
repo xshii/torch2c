@@ -21,9 +21,7 @@ def run(graph: Graph, config: dict) -> Graph:
 
     for node in graph.nodes.values():
         if node.npu_op not in supported:
-            unsupported.append(
-                f"{node.id}: {node.op_type} (npu_op={node.npu_op})"
-            )
+            unsupported.append(f"{node.id}: {node.op_type} (npu_op={node.npu_op})")
 
     if unsupported:
         raise ValidationError(f"以下算子未映射: {unsupported}")

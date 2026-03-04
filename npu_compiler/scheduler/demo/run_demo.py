@@ -31,9 +31,7 @@ def main() -> None:
     for i in range(1, len(graph.execution_order)):
         curr = graph.execution_order[i]
         prev = graph.execution_order[i - 1]
-        assert prev in graph.nodes[curr].dependencies, (
-            f"{curr} 应依赖 {prev}"
-        )
+        assert prev in graph.nodes[curr].dependencies, f"{curr} 应依赖 {prev}"
     print("\n验证通过!")
 
 

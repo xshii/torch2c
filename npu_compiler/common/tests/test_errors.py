@@ -1,7 +1,6 @@
 """DiagnosticCollector 单元测试。"""
 
 from npu_compiler.common.errors import (
-    CompileDiagnostic,
     DiagnosticCollector,
     Severity,
 )

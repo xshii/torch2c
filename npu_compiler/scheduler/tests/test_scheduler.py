@@ -14,8 +14,11 @@ def _make_linear_chain() -> Graph:
         ("node_3", "npu_gelu", "vector"),
     ]
     t_in = Tensor(
-        id="tensor_input", shape=[1, 32, 64], dtype="fp16",
-        is_model_input=True, consumer_node_ids=["node_0"],
+        id="tensor_input",
+        shape=[1, 32, 64],
+        dtype="fp16",
+        is_model_input=True,
+        consumer_node_ids=["node_0"],
     )
     g.add_tensor(t_in)
 
@@ -23,13 +26,20 @@ def _make_linear_chain() -> Graph:
     for i, (nid, op, unit) in enumerate(ops):
         out_tid = f"tensor_{i}" if i < len(ops) - 1 else "tensor_output"
         node = Node(
-            id=nid, op_type=op, inputs=[prev_tid], outputs=[out_tid],
-            compute_unit=unit, npu_op=op, is_mapped=True,
+            id=nid,
+            op_type=op,
+            inputs=[prev_tid],
+            outputs=[out_tid],
+            compute_unit=unit,
+            npu_op=op,
+            is_mapped=True,
         )
         g.add_node(node)
         is_last = i == len(ops) - 1
         t = Tensor(
-            id=out_tid, shape=[1, 32, 64], dtype="fp16",
+            id=out_tid,
+            shape=[1, 32, 64],
+            dtype="fp16",
             producer_node_id=nid,
             consumer_node_ids=[] if is_last else [ops[i + 1][0]],
             is_model_output=is_last,
@@ -49,30 +59,64 @@ def _make_parallel_graph() -> Graph:
     两者无数据依赖。
     """
     g = Graph()
-    g.add_tensor(Tensor(
-        id="input_a", shape=[1, 32, 64], dtype="fp16",
-        is_model_input=True, consumer_node_ids=["node_a"],
-    ))
-    g.add_tensor(Tensor(
-        id="input_b", shape=[1, 32, 64], dtype="fp16",
-        is_model_input=True, consumer_node_ids=["node_b"],
-    ))
-    g.add_tensor(Tensor(
-        id="out_a", shape=[1, 32, 64], dtype="fp16",
-        producer_node_id="node_a", is_model_output=True,
-    ))
-    g.add_tensor(Tensor(
-        id="out_b", shape=[1, 32, 64], dtype="fp16",
-        producer_node_id="node_b", is_model_output=True,
-    ))
-    g.add_node(Node(
-        id="node_a", op_type="npu_matmul", inputs=["input_a"], outputs=["out_a"],
-        compute_unit="cube", npu_op="npu_matmul", is_mapped=True,
-    ))
-    g.add_node(Node(
-        id="node_b", op_type="npu_add", inputs=["input_b"], outputs=["out_b"],
-        compute_unit="vector", npu_op="npu_add", is_mapped=True,
-    ))
+    g.add_tensor(
+        Tensor(
+            id="input_a",
+            shape=[1, 32, 64],
+            dtype="fp16",
+            is_model_input=True,
+            consumer_node_ids=["node_a"],
+        )
+    )
+    g.add_tensor(
+        Tensor(
+            id="input_b",
+            shape=[1, 32, 64],
+            dtype="fp16",
+            is_model_input=True,
+            consumer_node_ids=["node_b"],
+        )
+    )
+    g.add_tensor(
+        Tensor(
+            id="out_a",
+            shape=[1, 32, 64],
+            dtype="fp16",
+            producer_node_id="node_a",
+            is_model_output=True,
+        )
+    )
+    g.add_tensor(
+        Tensor(
+            id="out_b",
+            shape=[1, 32, 64],
+            dtype="fp16",
+            producer_node_id="node_b",
+            is_model_output=True,
+        )
+    )
+    g.add_node(
+        Node(
+            id="node_a",
+            op_type="npu_matmul",
+            inputs=["input_a"],
+            outputs=["out_a"],
+            compute_unit="cube",
+            npu_op="npu_matmul",
+            is_mapped=True,
+        )
+    )
+    g.add_node(
+        Node(
+            id="node_b",
+            op_type="npu_add",
+            inputs=["input_b"],
+            outputs=["out_b"],
+            compute_unit="vector",
+            npu_op="npu_add",
+            is_mapped=True,
+        )
+    )
     g.execution_order = ["node_a", "node_b"]
     return g
 
@@ -80,30 +124,64 @@ def _make_parallel_graph() -> Graph:
 def _make_same_unit_graph() -> Graph:
     """创建两个无数据依赖、相同 compute_unit 的算子。"""
     g = Graph()
-    g.add_tensor(Tensor(
-        id="input_a", shape=[1, 32, 64], dtype="fp16",
-        is_model_input=True, consumer_node_ids=["node_a"],
-    ))
-    g.add_tensor(Tensor(
-        id="input_b", shape=[1, 32, 64], dtype="fp16",
-        is_model_input=True, consumer_node_ids=["node_b"],
-    ))
-    g.add_tensor(Tensor(
-        id="out_a", shape=[1, 32, 64], dtype="fp16",
-        producer_node_id="node_a", is_model_output=True,
-    ))
-    g.add_tensor(Tensor(
-        id="out_b", shape=[1, 32, 64], dtype="fp16",
-        producer_node_id="node_b", is_model_output=True,
-    ))
-    g.add_node(Node(
-        id="node_a", op_type="npu_add", inputs=["input_a"], outputs=["out_a"],
-        compute_unit="vector", npu_op="npu_add", is_mapped=True,
-    ))
-    g.add_node(Node(
-        id="node_b", op_type="npu_gelu", inputs=["input_b"], outputs=["out_b"],
-        compute_unit="vector", npu_op="npu_gelu", is_mapped=True,
-    ))
+    g.add_tensor(
+        Tensor(
+            id="input_a",
+            shape=[1, 32, 64],
+            dtype="fp16",
+            is_model_input=True,
+            consumer_node_ids=["node_a"],
+        )
+    )
+    g.add_tensor(
+        Tensor(
+            id="input_b",
+            shape=[1, 32, 64],
+            dtype="fp16",
+            is_model_input=True,
+            consumer_node_ids=["node_b"],
+        )
+    )
+    g.add_tensor(
+        Tensor(
+            id="out_a",
+            shape=[1, 32, 64],
+            dtype="fp16",
+            producer_node_id="node_a",
+            is_model_output=True,
+        )
+    )
+    g.add_tensor(
+        Tensor(
+            id="out_b",
+            shape=[1, 32, 64],
+            dtype="fp16",
+            producer_node_id="node_b",
+            is_model_output=True,
+        )
+    )
+    g.add_node(
+        Node(
+            id="node_a",
+            op_type="npu_add",
+            inputs=["input_a"],
+            outputs=["out_a"],
+            compute_unit="vector",
+            npu_op="npu_add",
+            is_mapped=True,
+        )
+    )
+    g.add_node(
+        Node(
+            id="node_b",
+            op_type="npu_gelu",
+            inputs=["input_b"],
+            outputs=["out_b"],
+            compute_unit="vector",
+            npu_op="npu_gelu",
+            is_mapped=True,
+        )
+    )
     g.execution_order = ["node_a", "node_b"]
     return g
 

@@ -8,9 +8,7 @@ from ...common.config_loader import load_config
 from ...common.graph_ir import Graph, Node, Tensor
 from ..op_mapping import post_validate, run
 
-_CONFIG_PATH = str(
-    pathlib.Path(__file__).parent.parent / "config" / "direct_mappings.yaml"
-)
+_CONFIG_PATH = str(pathlib.Path(__file__).parent.parent / "config" / "direct_mappings.yaml")
 
 
 def _make_5node_graph() -> Graph:
@@ -29,8 +27,9 @@ def _make_5node_graph() -> Graph:
         ("t_gelu", [1, 32, 64], False, False),
         ("t_out", [1, 32, 64], False, False),
     ]:
-        g.add_tensor(Tensor(id=tid, shape=shape, dtype="fp16",
-                            is_weight=is_w, is_model_input=is_in))
+        g.add_tensor(
+            Tensor(id=tid, shape=shape, dtype="fp16", is_weight=is_w, is_model_input=is_in)
+        )
 
     for nid, op, ins, outs in [
         ("n0", "aten.mm.default", ["t_in", "t_w"], ["t_mm"]),
@@ -45,6 +44,7 @@ def _make_5node_graph() -> Graph:
 
 
 # ---- tests ----
+
 
 def test_basic_mapping():
     """5 个算子全部映射成功。"""
@@ -63,8 +63,7 @@ def test_unmapped_preserved():
     g = Graph()
     g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16"))
     g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16"))
-    g.add_node(Node(id="unknown", op_type="aten.fake_op.default",
-                     inputs=["t0"], outputs=["t1"]))
+    g.add_node(Node(id="unknown", op_type="aten.fake_op.default", inputs=["t0"], outputs=["t1"]))
 
     config = load_config(_CONFIG_PATH, required_keys=["mappings"])
     run(g, config)
@@ -80,7 +79,7 @@ def test_compute_unit():
     config = load_config(_CONFIG_PATH, required_keys=["mappings"])
     run(graph, config)
 
-    assert graph.get_node("n0").compute_unit == "cube"    # mm
+    assert graph.get_node("n0").compute_unit == "cube"  # mm
     assert graph.get_node("n1").compute_unit == "vector"  # add
     assert graph.get_node("n4").compute_unit == "scalar"  # view/reshape
 
@@ -97,9 +96,17 @@ def test_already_mapped_skipped():
     g = Graph()
     g.add_tensor(Tensor(id="t0", shape=[1, 32, 64], dtype="fp16"))
     g.add_tensor(Tensor(id="t1", shape=[1, 32, 64], dtype="fp16"))
-    g.add_node(Node(id="n0", op_type="aten.mm.default",
-                     inputs=["t0"], outputs=["t1"],
-                     npu_op="custom_op", compute_unit="cube", is_mapped=True))
+    g.add_node(
+        Node(
+            id="n0",
+            op_type="aten.mm.default",
+            inputs=["t0"],
+            outputs=["t1"],
+            npu_op="custom_op",
+            compute_unit="cube",
+            is_mapped=True,
+        )
+    )
 
     config = load_config(_CONFIG_PATH, required_keys=["mappings"])
     run(g, config)
@@ -114,12 +121,11 @@ def test_mixed_mapped_unmapped():
     for tid in ["t0", "t1", "t2", "t3"]:
         g.add_tensor(Tensor(id=tid, shape=[1], dtype="fp16"))
 
-    g.add_node(Node(id="n0", op_type="aten.mm.default",
-                     inputs=["t0"], outputs=["t1"]))
-    g.add_node(Node(id="n1", op_type="aten.native_layer_norm.default",
-                     inputs=["t1"], outputs=["t2"]))
-    g.add_node(Node(id="n2", op_type="aten.add.Tensor",
-                     inputs=["t2"], outputs=["t3"]))
+    g.add_node(Node(id="n0", op_type="aten.mm.default", inputs=["t0"], outputs=["t1"]))
+    g.add_node(
+        Node(id="n1", op_type="aten.native_layer_norm.default", inputs=["t1"], outputs=["t2"])
+    )
+    g.add_node(Node(id="n2", op_type="aten.add.Tensor", inputs=["t2"], outputs=["t3"]))
 
     config = load_config(_CONFIG_PATH, required_keys=["mappings"])
     run(g, config)
@@ -133,18 +139,23 @@ class TestPostValidate:
     def test_valid(self):
         g = Graph()
         g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16"))
-        g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16",
-                            producer_node_id="n0"))
-        g.add_node(Node(id="n0", op_type="npu_add", inputs=["t0"],
-                        outputs=["t1"], is_mapped=True, npu_op="npu_add"))
+        g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16", producer_node_id="n0"))
+        g.add_node(
+            Node(
+                id="n0",
+                op_type="npu_add",
+                inputs=["t0"],
+                outputs=["t1"],
+                is_mapped=True,
+                npu_op="npu_add",
+            )
+        )
         assert post_validate(g) == []
 
     def test_missing_npu_op(self):
         g = Graph()
         g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16"))
-        g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16",
-                            producer_node_id="n0"))
-        g.add_node(Node(id="n0", op_type="npu_add", inputs=["t0"],
-                        outputs=["t1"], is_mapped=True))
+        g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16", producer_node_id="n0"))
+        g.add_node(Node(id="n0", op_type="npu_add", inputs=["t0"], outputs=["t1"], is_mapped=True))
         errors = post_validate(g)
         assert any("npu_op" in e for e in errors)

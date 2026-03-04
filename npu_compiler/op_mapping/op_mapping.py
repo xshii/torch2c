@@ -37,8 +37,9 @@ def run(graph: Graph, config: dict) -> Graph:
             node.compute_unit = entry["compute_unit"]
             node.is_mapped = True
             mapped_count += 1
-            logger.debug("映射 %s: %s → %s (%s)",
-                         node.id, node.op_type, node.npu_op, node.compute_unit)
+            logger.debug(
+                "映射 %s: %s → %s (%s)", node.id, node.op_type, node.npu_op, node.compute_unit
+            )
         else:
             unmapped_count += 1
             logger.debug("未映射 %s: %s", node.id, node.op_type)
