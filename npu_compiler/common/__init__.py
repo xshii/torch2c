@@ -17,6 +17,7 @@ from .errors import (
 )
 from .graph_ir import Graph, Node, Tensor
 from .logger import get_logger, setup_logging
+from .pass_protocol import CompilerPass
 
 __all__ = [
     "Graph",
@@ -40,4 +41,5 @@ __all__ = [
     "DTYPE_INFO",
     "dtype_bytes",
     "dtype_c_enum",
+    "CompilerPass",
 ]
