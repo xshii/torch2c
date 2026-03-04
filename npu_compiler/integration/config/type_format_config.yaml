@@ -136,6 +136,24 @@ op_format_requirements:
     supports_format_convert: true
     supports_dtype_cast: true
 
+  npu_broadcast:
+    inputs:
+      - { format: nd, dtype: fp16 }
+    outputs:
+      - { format: nd, dtype: fp16 }
+    compute_dtype: fp16
+    supports_format_convert: false
+    supports_dtype_cast: false
+
+  npu_copy:
+    inputs:
+      - { format: nd, dtype: fp16 }
+    outputs:
+      - { format: nd, dtype: fp16 }
+    compute_dtype: fp16
+    supports_format_convert: false
+    supports_dtype_cast: false
+
   npu_softmax_part2:
     inputs:
       - { format: nd, dtype: fp16 }

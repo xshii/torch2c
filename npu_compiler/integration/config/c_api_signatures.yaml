@@ -133,6 +133,20 @@ compute_ops:
       - { name: "size",   type: "int",   source: "tensor.input_0.hbm_size" }
       - { name: "dtype",  type: "enum",  source: "tensor.input_0.dtype" }
 
+  npu_broadcast:
+    params:
+      - { name: "input",  type: "addr",  source: "tensor.input_0.l1_offset" }
+      - { name: "out",    type: "addr",  source: "tensor.output_0.l1_offset" }
+      - { name: "size",   type: "int",   source: "tensor.input_0.hbm_size" }
+      - { name: "dtype",  type: "enum",  source: "tensor.input_0.dtype" }
+
+  npu_copy:
+    params:
+      - { name: "input",  type: "addr",  source: "tensor.input_0.l1_offset" }
+      - { name: "out",    type: "addr",  source: "tensor.output_0.l1_offset" }
+      - { name: "size",   type: "int",   source: "tensor.input_0.hbm_size" }
+      - { name: "dtype",  type: "enum",  source: "tensor.input_0.dtype" }
+
 dma_ops:
   npu_dma_load:
     params:
