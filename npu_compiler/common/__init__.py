@@ -1,6 +1,7 @@
 """common — 基础设施模块。"""
 
 from .config_loader import load_config
+from .dtypes import DTYPE_INFO, DtypeInfo, dtype_bytes, dtype_c_enum
 from .errors import (
     AbsorptionError,
     CodegenError,
@@ -35,4 +36,8 @@ __all__ = [
     "Severity",
     "CompileDiagnostic",
     "DiagnosticCollector",
+    "DtypeInfo",
+    "DTYPE_INFO",
+    "dtype_bytes",
+    "dtype_c_enum",
 ]

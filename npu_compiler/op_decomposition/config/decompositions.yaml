@@ -8,6 +8,7 @@ decompositions:
         compute_unit: vector
       - npu_op: npu_layernorm_part2
         compute_unit: vector
+        extra_inputs: ["original.0"]
   aten._softmax.default:
     steps:
       - npu_op: npu_softmax_part1

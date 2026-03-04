@@ -70,9 +70,13 @@ def _decompose_node(graph: Graph, node: Node, rule: dict) -> tuple[int, int]:
             inputs = list(node.inputs)
         else:
             inputs = [intermediates[i - 1]]
-            # layernorm_part2 需要原始输入作为第二输入
-            if step["npu_op"] == "npu_layernorm_part2" and node.inputs:
-                inputs.append(node.inputs[0])
+            # extra_inputs: 声明式引用原始输入（如 "original.0"）
+            for ref in step.get("extra_inputs", []):
+                parts = ref.split(".")
+                if parts[0] == "original" and node.inputs:
+                    idx = int(parts[1])
+                    if idx < len(node.inputs):
+                        inputs.append(node.inputs[idx])
 
         if i == len(steps) - 1:
             outputs = [node.outputs[0]] if node.outputs else []

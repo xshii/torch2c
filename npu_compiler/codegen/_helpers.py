@@ -5,17 +5,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from npu_compiler.common import get_logger, load_config
+from npu_compiler.common import DTYPE_INFO, get_logger, load_config
 
 logger = get_logger("codegen._helpers")
 
 # ---- NPU C 枚举映射 ----
 
-DTYPE_MAP = {
-    "fp16": "NPU_DTYPE_FP16", "fp32": "NPU_DTYPE_FP32",
-    "bf16": "NPU_DTYPE_BF16", "int8": "NPU_DTYPE_INT8",
-    "int32": "NPU_DTYPE_INT32",
-}
+DTYPE_MAP = {k: v.c_enum for k, v in DTYPE_INFO.items()}
 
 FORMAT_MAP = {
     "nd": "NPU_FORMAT_ND", "nz": "NPU_FORMAT_NZ",

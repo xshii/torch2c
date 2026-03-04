@@ -5,11 +5,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from npu_compiler.common import Graph, MemoryPlanError, get_logger
+from npu_compiler.common import Graph, MemoryPlanError, dtype_bytes, get_logger
 
 logger = get_logger("memory_planner")
-
-DTYPE_BYTES = {"fp16": 2, "fp32": 4, "bf16": 2, "int8": 1, "int32": 4}
 
 
 # ── 数据结构 ──────────────────────────────────────────────
@@ -53,7 +51,7 @@ def calc_padded_size(
     分形格式 (nz/nc1hwc0) 将最后两维分别对齐到 cube_size 的整数倍，
     nd 格式直接按原始 shape 计算。
     """
-    elem_bytes = DTYPE_BYTES.get(dtype, 2)
+    elem_bytes = dtype_bytes(dtype)
     if fmt in ("nz", "nc1hwc0") and len(shape) >= 2:
         padded = list(shape)
         padded[-1] = math.ceil(shape[-1] / cube_size) * cube_size

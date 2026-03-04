@@ -21,69 +21,79 @@ logger = get_logger("codegen.c_emitter")
 
 # ---- 参数解析 ----
 
-def _resolve_param(param: dict, node: dict, tensors: dict) -> str:
-    """根据 source 规则解析参数值为 C 字符串。"""
-    source = param.get("source", "")
-    parts = source.split(".")
 
-    if parts[0] == "tensor":
-        tensor_key, field = parts[1], parts[2]
-        t = _find_tensor(tensor_key, node, tensors)
+class SourceResolver:
+    """将 c_api_signatures 中的 source 规则解析为 C 字符串。"""
+
+    def __init__(self, node: dict, tensors: dict):
+        self._node = node
+        self._tensors = tensors
+
+    def resolve(self, param: dict) -> str:
+        """解析单个参数的 source → C 字符串。"""
+        source = param.get("source", "")
+        parts = source.split(".")
+
+        if parts[0] == "tensor":
+            return self._resolve_tensor_ref(parts[1], parts[2], parts[3:], param)
+        if parts[0] == "param":
+            return self._resolve_param_ref(parts[1], param)
+        raise CodegenError(f"未知 source 格式: {source}")
+
+    def find_tensor(self, key: str):
+        """根据 key (input_0, output_0, mask 等) 查找 tensor。"""
+        if key.startswith("input_"):
+            idx = int(key.split("_")[1])
+            inputs = self._node.get("inputs", [])
+            absorbed_tids = set(self._node.get("absorbed_inputs", {}).values())
+            regular = [tid for tid in inputs if tid not in absorbed_tids]
+            return self._tensors.get(regular[idx]) if idx < len(regular) else None
+        if key.startswith("output_"):
+            idx = int(key.split("_")[1])
+            outputs = self._node.get("outputs", [])
+            return self._tensors.get(outputs[idx]) if idx < len(outputs) else None
+        if key == "mask":
+            mask_tid = self._node.get("absorbed_inputs", {}).get("mask")
+            return self._tensors.get(mask_tid) if mask_tid else None
+        return None
+
+    def _resolve_tensor_ref(self, tensor_key, field, extra, param):
+        t = self.find_tensor(tensor_key)
         if t is None:
             default = param.get("default")
             if default is not None:
                 return str(default)
-            raise CodegenError(f"张量 {tensor_key} 未找到: node={node['id']}")
-        return _extract_tensor_field(t, field, parts[3:])
+            raise CodegenError(f"张量 {tensor_key} 未找到: node={self._node['id']}")
+        return self._extract_field(t, field, extra)
 
-    if parts[0] == "param":
-        val = node.get("params", {}).get(parts[1])
+    def _resolve_param_ref(self, param_name, param):
+        val = self._node.get("params", {}).get(param_name)
         if val is None:
             default = param.get("default")
             if default is not None:
                 return str(default)
-            raise CodegenError(f"参数 {parts[1]} 未找到: node={node['id']}")
+            raise CodegenError(f"参数 {param_name} 未找到: node={self._node['id']}")
         return _format_value(val, param["type"])
 
-    raise CodegenError(f"未知 source 格式: {source}")
-
-
-def _find_tensor(key: str, node: dict, tensors: dict):
-    """根据 key (input_0, output_0, mask 等) 查找 tensor。"""
-    if key.startswith("input_"):
-        idx = int(key.split("_")[1])
-        inputs = node.get("inputs", [])
-        absorbed_tids = set(node.get("absorbed_inputs", {}).values())
-        regular = [tid for tid in inputs if tid not in absorbed_tids]
-        return tensors.get(regular[idx]) if idx < len(regular) else None
-    if key.startswith("output_"):
-        idx = int(key.split("_")[1])
-        outputs = node.get("outputs", [])
-        return tensors.get(outputs[idx]) if idx < len(outputs) else None
-    if key == "mask":
-        mask_tid = node.get("absorbed_inputs", {}).get("mask")
-        return tensors.get(mask_tid) if mask_tid else None
-    return None
-
-
-def _extract_tensor_field(t: dict, field: str, extra: list[str]) -> str:
-    """从 tensor dict 提取字段值。"""
-    if field in ("l1_offset", "hbm_offset"):
-        offset = t.get(field, 0) or 0
-        buf = "l1" if field == "l1_offset" else "hbm"
-        return f"(void*)({buf} + {offset})"
-    if field == "dtype":
-        return DTYPE_MAP.get(t.get("dtype", "fp16"), "NPU_DTYPE_FP16")
-    if field == "format":
-        return FORMAT_MAP.get(t.get("format", "nd"), "NPU_FORMAT_ND")
-    if field == "shape":
-        shape = t.get("shape", [])
-        return str(shape[int(extra[0])]) if extra else str(shape)
-    if field == "ndim":
-        return str(len(t.get("shape", [])))
-    if field == "elem_count":
-        return str(math.prod(t.get("shape", [1])))
-    return str(t.get(field, 0))
+    @staticmethod
+    def _extract_field(t: dict, field: str, extra: list[str]) -> str:
+        """从 tensor dict 提取字段值。"""
+        if field in ("l1_offset", "hbm_offset"):
+            offset = t.get(field, 0) or 0
+            buf = "l1" if field == "l1_offset" else "hbm"
+            return f"(void*)({buf} + {offset})"
+        if field == "dtype":
+            return DTYPE_MAP.get(t.get("dtype", "fp16"), "NPU_DTYPE_FP16")
+        if field == "format":
+            return FORMAT_MAP.get(t.get("format", "nd"), "NPU_FORMAT_ND")
+        if field == "shape":
+            shape = t.get("shape", [])
+            return str(shape[int(extra[0])]) if extra else str(shape)
+        if field == "ndim":
+            return str(len(t.get("shape", [])))
+        if field == "elem_count":
+            return str(math.prod(t.get("shape", [1])))
+        return str(t.get(field, 0))
 
 
 def _format_value(val, ptype: str) -> str:
@@ -96,18 +106,19 @@ def _format_value(val, ptype: str) -> str:
 
 def _gen_op_call(npu_op: str, sig: dict, node: dict, tensors: dict) -> str:
     """生成单个算子的 C 调用语句。"""
+    resolver = SourceResolver(node, tensors)
     args = []
     for p in sig.get("params", []):
         if p["type"] == "int_array":
             parts = p["source"].split(".")
-            t = _find_tensor(parts[1], node, tensors)
+            t = resolver.find_tensor(parts[1])
             shape = t.get("shape", []) if t else []
             args.append(f"(const int[]){{{', '.join(str(s) for s in shape)}}}")
         else:
-            args.append(_resolve_param(p, node, tensors))
+            args.append(resolver.resolve(p))
 
     for p in sig.get("optional_params", []):
-        args.append(_resolve_param(p, node, tensors))
+        args.append(resolver.resolve(p))
 
     return f"{npu_op}({', '.join(args)})"
 

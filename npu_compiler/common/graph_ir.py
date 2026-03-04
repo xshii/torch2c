@@ -1,4 +1,38 @@
-"""Graph IR 核心数据结构：Graph / Node / Tensor。"""
+"""Graph IR 核心数据结构：Graph / Node / Tensor。
+
+Field Ownership Table
+=====================
+每个字段由哪个 Pass 写入 (W)、谁读取 (R)。
+
+Node 字段:
+  id              W: graph_capture        R: all
+  op_type         W: graph_capture        R: op_mapping, op_decomposition
+  inputs          W: graph_capture/decomp R: all
+  outputs         W: graph_capture/decomp R: all
+  params          W: graph_capture        R: codegen
+  compute_unit    W: op_mapping/decomp    R: scheduler, codegen
+  npu_op          W: op_mapping/decomp    R: format_annotator, validator, codegen
+  is_mapped       W: op_mapping/decomp    R: op_decomposition, validator
+  format_annotation W: format_annotator   R: memory_planner, codegen
+  schedule_order  W: scheduler            R: codegen
+  dependencies    W: scheduler            R: codegen
+  absorbed_inputs W: op_absorption        R: memory_planner, codegen
+
+Tensor 字段:
+  id              W: graph_capture        R: all
+  shape           W: graph_capture        R: memory_planner, codegen
+  dtype           W: graph_capture/fmt_ann R: memory_planner, codegen
+  format          W: format_annotator     R: memory_planner, codegen
+  hbm_offset      W: memory_planner       R: codegen
+  hbm_size        W: memory_planner       R: codegen
+  l1_offset       W: memory_planner       R: codegen
+  is_weight       W: graph_capture        R: memory_planner, codegen
+  is_model_input  W: graph_capture        R: memory_planner, codegen
+  is_model_output W: graph_capture        R: memory_planner, codegen
+  name            W: graph_capture        R: codegen (weight export)
+  producer_node_id W: graph_capture/decomp R: memory_planner
+  consumer_node_ids W: graph_capture/decomp R: memory_planner
+"""
 
 from __future__ import annotations
 
