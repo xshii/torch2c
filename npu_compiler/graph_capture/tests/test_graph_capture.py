@@ -10,6 +10,68 @@ from ...common.graph_ir import Graph
 from ..graph_capture import capture
 
 
+# ---- WI-3 新增: addmm/param/dim 处理测试 ----
+
+def test_addmm_inputs_reordered():
+    """addmm 的输入从 [bias, mat1, mat2] 重排为 [mat1, mat2, bias]。"""
+    model = nn.Linear(16, 16, bias=True)
+    model.eval()
+    dummy = torch.randn(1, 16)
+    graph = capture(model, dummy)
+
+    addmm_nodes = [n for n in graph.nodes.values()
+                   if "addmm" in n.op_type]
+    if addmm_nodes:
+        node = addmm_nodes[0]
+        # input_0 应是 mat1（模型输入），input_2 应是 bias（权重）
+        t0 = graph.get_tensor(node.inputs[0])
+        t2 = graph.get_tensor(node.inputs[2])
+        # mat1 是模型输入或由前序节点产出，bias 是权重
+        assert t2.is_weight, "addmm input[2] (bias) 应为权重"
+
+
+def test_param_renames_transpose():
+    """transpose 的 p0/p1 参数被重命名为 dim0/dim1。"""
+    class TransposeModel(nn.Module):
+        def forward(self, x):
+            return x.transpose(1, 2)
+
+    model = TransposeModel()
+    model.eval()
+    dummy = torch.randn(1, 4, 8)
+    graph = capture(model, dummy)
+
+    tr_nodes = [n for n in graph.nodes.values()
+                if "transpose" in n.op_type]
+    assert len(tr_nodes) >= 1
+    node = tr_nodes[0]
+    assert "dim0" in node.params, f"Expected dim0 in params, got {node.params}"
+    assert "dim1" in node.params, f"Expected dim1 in params, got {node.params}"
+    assert "p0" not in node.params
+    assert "p1" not in node.params
+
+
+def test_negative_dim_resolved():
+    """softmax 的负 dim 索引转为维度大小值。"""
+    class SoftmaxModel(nn.Module):
+        def forward(self, x):
+            return F.softmax(x, dim=-1)
+
+    model = SoftmaxModel()
+    model.eval()
+    dummy = torch.randn(1, 4, 8)
+    graph = capture(model, dummy)
+
+    sm_nodes = [n for n in graph.nodes.values()
+                if "softmax" in n.op_type]
+    assert len(sm_nodes) >= 1
+    node = sm_nodes[0]
+    # dim=-1 对 shape [1,4,8] 应转为 8 (最后一维的大小)
+    assert node.params.get("dim") == 8, (
+        f"Expected dim=8 (size of last dim), got {node.params.get('dim')}"
+    )
+
+
 # ---- test_capture_linear ----
 
 def test_capture_linear():

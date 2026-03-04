@@ -70,6 +70,9 @@ def _decompose_node(graph: Graph, node: Node, rule: dict) -> tuple[int, int]:
             inputs = list(node.inputs)
         else:
             inputs = [intermediates[i - 1]]
+            # layernorm_part2 需要原始输入作为第二输入
+            if step["npu_op"] == "npu_layernorm_part2" and node.inputs:
+                inputs.append(node.inputs[0])
 
         if i == len(steps) - 1:
             outputs = [node.outputs[0]] if node.outputs else []
@@ -100,6 +103,15 @@ def _decompose_node(graph: Graph, node: Node, rule: dict) -> tuple[int, int]:
             t.consumer_node_ids.remove(node.id)
         if t and new_nodes[0].id not in t.consumer_node_ids:
             t.consumer_node_ids.append(new_nodes[0].id)
+
+    # 为后续 step 引用的原始输入更新 consumer（如 layernorm_part2）
+    orig_input_set = set(node.inputs)
+    for new_n in new_nodes[1:]:
+        for tid in new_n.inputs:
+            if tid in orig_input_set:
+                t = graph.get_tensor(tid)
+                if t and new_n.id not in t.consumer_node_ids:
+                    t.consumer_node_ids.append(new_n.id)
 
     # 更新第一个输出 tensor 的 producer
     if node.outputs:

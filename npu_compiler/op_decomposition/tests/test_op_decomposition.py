@@ -184,6 +184,28 @@ def test_producer_consumer_after_decompose():
     assert "n0_step_1" in inter.consumer_node_ids
 
 
+def test_layernorm_part2_has_orig_input():
+    """layernorm_part2 应包含原始输入作为第二输入。"""
+    g = _make_layernorm_graph()
+    config = _load_rules()
+    run(g, config)
+
+    part2_nodes = [n for n in g.nodes.values()
+                   if n.npu_op == "npu_layernorm_part2"]
+    assert len(part2_nodes) == 1
+    part2 = part2_nodes[0]
+    # part2 应有 2 个输入: [intermediate, orig_input]
+    assert len(part2.inputs) == 2, (
+        f"layernorm_part2 should have 2 inputs, got {part2.inputs}"
+    )
+    assert part2.inputs[1] == "t_in", (
+        f"layernorm_part2 input[1] should be orig input 't_in', got {part2.inputs[1]}"
+    )
+    # 原始输入 tensor 的 consumer 应包含 part2 节点
+    t_in = g.get_tensor("t_in")
+    assert part2.id in t_in.consumer_node_ids
+
+
 def test_multi_output_decompose():
     """多输出节点裂解后，次要输出 tensor 的 producer 被清空。"""
     g = _make_layernorm_graph()

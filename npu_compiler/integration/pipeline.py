@@ -25,33 +25,6 @@ from npu_compiler.validator import validator
 
 logger = get_logger(__name__)
 
-# graph_capture 产出的 positional param 名 → codegen 期望的 param 名
-_PARAM_RENAMES: dict[str, dict[str, str]] = {
-    "aten.transpose.int": {"p0": "dim0", "p1": "dim1"},
-    "aten._softmax.default": {"p0": "dim"},
-    "aten.native_layer_norm.default": {"p1": "epsilon", "eps": "epsilon"},
-}
-
-
-def _normalize_graph(graph: Graph) -> None:
-    """规范化 graph_capture 输出，使其适配后续 Pass 和 codegen。
-
-    1. addmm 输入重排: [bias, mat1, mat2] → [mat1, mat2, bias]
-    2. 参数名重命名: p0/p1 → codegen 期望的语义名
-    """
-    for node in graph.nodes.values():
-        # addmm 输入重排
-        if node.op_type == "aten.addmm.default" and len(node.inputs) >= 3:
-            node.inputs = [node.inputs[1], node.inputs[2], node.inputs[0]]
-
-        # 参数重命名
-        renames = _PARAM_RENAMES.get(node.op_type)
-        if renames:
-            for old_key, new_key in renames.items():
-                if old_key in node.params and new_key not in node.params:
-                    node.params[new_key] = node.params.pop(old_key)
-
-
 def _propagate_input_dtypes(graph: Graph) -> None:
     """将输入 tensor 的 dtype 设为其首个消费节点的标注 dtype。
 
@@ -78,54 +51,6 @@ def _propagate_input_dtypes(graph: Graph) -> None:
                 break
         if idx is not None and idx < len(ann.get("inputs", [])):
             t.dtype = ann["inputs"][idx]["dtype"]
-
-
-def _resolve_negative_dims(graph: Graph) -> None:
-    """将 softmax 等算子的 dim 参数从维度索引转为维度大小。
-
-    PyTorch softmax 的 dim 是维度索引（如 -1 表示最后一维），
-    但 npu_cpu_mock 的 softmax_part1 期望 dim 为该维度的大小（元素数）。
-    同时处理负索引转正。
-    """
-    _DIM_TO_SIZE_OPS = {"aten._softmax.default"}
-    for node in graph.nodes.values():
-        dim_val = node.params.get("dim")
-        if dim_val is None or not isinstance(dim_val, int):
-            continue
-        if not node.inputs:
-            continue
-        t = graph.get_tensor(node.inputs[0])
-        if t is None or not t.shape:
-            continue
-        ndim = len(t.shape)
-        # 负索引转正
-        if dim_val < 0:
-            dim_val = dim_val + ndim
-        # softmax: 将维度索引转为该维度的大小
-        if node.op_type in _DIM_TO_SIZE_OPS:
-            node.params["dim"] = t.shape[dim_val]
-        else:
-            node.params["dim"] = dim_val
-
-
-def _fix_layernorm_decomp(graph: Graph) -> None:
-    """为 layernorm_part2 补充原始输入张量作为第二输入。
-
-    decomposition 仅将中间 tensor 作为 part2 的输入，
-    但 codegen 签名中 part2 需要 input_1 = 原始输入。
-    """
-    for nid, node in list(graph.nodes.items()):
-        if node.npu_op != "npu_layernorm_part2":
-            continue
-        base_id = nid.replace("_step_1", "_step_0")
-        part1 = graph.get_node(base_id)
-        if part1 and part1.inputs:
-            orig_tid = part1.inputs[0]
-            if orig_tid not in node.inputs:
-                node.inputs.append(orig_tid)
-                t = graph.get_tensor(orig_tid)
-                if t and nid not in t.consumer_node_ids:
-                    t.consumer_node_ids.append(nid)
 
 
 def _load_configs(config_dir: str) -> dict:
@@ -203,19 +128,22 @@ def compile(
     # Pass ① graph_capture
     logger.info("Pass ① graph_capture 开始")
     graph = graph_capture.capture(model, dummy_input, mask=mask)
-    _normalize_graph(graph)
-    _resolve_negative_dims(graph)
+    for w in graph.validate_phase("graph_capture"):
+        logger.warning("Pass ① 校验: %s", w)
     logger.info("Pass ① 完成: %s", graph.summary())
 
     # Pass ② op_mapping
     logger.info("Pass ② op_mapping 开始")
     graph = op_mapping.run(graph, configs["mapping"])
+    for w in graph.validate_phase("op_mapping"):
+        logger.warning("Pass ② 校验: %s", w)
     logger.info("Pass ② 完成")
 
     # Pass ③ op_decomposition
     logger.info("Pass ③ op_decomposition 开始")
     graph = op_decomposition.run(graph, configs["decomposition"])
-    _fix_layernorm_decomp(graph)
+    for w in graph.validate_phase("op_decomposition"):
+        logger.warning("Pass ③ 校验: %s", w)
     logger.info("Pass ③ 完成: %s", graph.summary())
 
     # Pass ④ op_absorption
@@ -227,6 +155,8 @@ def compile(
     logger.info("Pass ⑤ format_annotator 开始")
     graph = format_annotator.run(graph, configs["format"])
     _propagate_input_dtypes(graph)
+    for w in graph.validate_phase("format_annotator"):
+        logger.warning("Pass ⑤ 校验: %s", w)
     logger.info("Pass ⑤ 完成")
 
     # Pass ⑥ validator
@@ -238,6 +168,8 @@ def compile(
     # Pass ⑦ memory_planner
     logger.info("Pass ⑦ memory_planner 开始")
     graph, dma_plans = memory_planner.run(graph, configs["hardware"])
+    for w in graph.validate_phase("memory_planner"):
+        logger.warning("Pass ⑦ 校验: %s", w)
     logger.info("Pass ⑦ 完成")
 
     # Pass ⑧ scheduler

@@ -1,234 +1,167 @@
+# Clean Code / Clean Architecture 重构计划
 
-╭────────────────────────────────────────────────────────────────────────────────╮
-│ Plan to implement                                                              │
-│                                                                                │
-│ 整改优化方案：4 项架构改进                                                     │
-│                                                                                │
-│ Context                                                                        │
-│                                                                                │
-│ 集成调试中发现 5 类跨模块问题（权重错配、参数命名、dim 语义、memcpy            │
-│ 字节/元素混淆、配置双份不同步）。                                              │
-│ 根因：4 个 Agent 并行开发时接口约定不充分，缺乏 Pass 边界校验。                │
-│ 本方案按用户决策执行 4 项整改，目标：消除已知缺陷类别，防止新算子重复踩坑。    │
-│                                                                                │
-│ ---                                                                            │
-│ WI-1: 配置单一源（删除 codegen 副本）                                          │
-│                                                                                │
-│ 改动范围小，其他 WI 依赖它先完成                                               │
-│                                                                                │
-│ ┌───────────────────────────────────────────────────┬────────────────────────┐ │
-│ │                       文件                        │          操作          │ │
-│ ├───────────────────────────────────────────────────┼────────────────────────┤ │
-│ │ npu_compiler/codegen/config/c_api_signatures.yaml │ 删除                   │ │
-│ ├───────────────────────────────────────────────────┼────────────────────────┤ │
-│ │                                                   │ _DEFAULT_CONFIG_DIR    │ │
-│ │ npu_compiler/codegen/_helpers.py:33               │ 改指向                 │ │
-│ │                                                   │ integration/config     │ │
-│ ├───────────────────────────────────────────────────┼────────────────────────┤ │
-│ │ npu_compiler/codegen/tests/test_c_emitter.py:16   │ _CONFIG_DIR 改指向     │ │
-│ │                                                   │ integration/config     │ │
-│ ├───────────────────────────────────────────────────┼────────────────────────┤ │
-│ │ 同文件 test_optional_mask_null (L127)             │ 删除 — integration     │ │
-│ │                                                   │ 配置无 optional_params │ │
-│ ├───────────────────────────────────────────────────┼────────────────────────┤ │
-│ │ 同文件 test_softmax_with_absorbed_mask (L180)     │ 删除 — 同上            │ │
-│ ├───────────────────────────────────────────────────┼────────────────────────┤ │
-│ │ 同文件 test_softmax_without_mask_is_null (L198)   │ 删除 — 同上            │ │
-│ └───────────────────────────────────────────────────┴────────────────────────┘ │
-│                                                                                │
-│ 验证：pytest npu_compiler/codegen/tests/ && pytest                             │
-│ npu_compiler/integration/tests/                                                │
-│                                                                                │
-│ ---                                                                            │
-│ WI-2: Mock memcpy 统一用字节数                                                 │
-│                                                                                │
-│ 3 个 memcpy 函数改为接收字节数，与 DMA 函数一致                                │
-│                                                                                │
-│ C 侧                                                                           │
-│                                                                                │
-│ ┌───────────────────────────────────────────┬───────────────────────────────┐  │
-│ │                   文件                    │             改动              │  │
-│ ├───────────────────────────────────────────┼───────────────────────────────┤  │
-│ │                                           │ 3 个函数参数名 count/hidden → │  │
-│ │ npu_cpu_mock/include/npu_api.h            │  size（语义：字节数），保留   │  │
-│ │                                           │ dtype 不删                    │  │
-│ ├───────────────────────────────────────────┼───────────────────────────────┤  │
-│ │ npu_cpu_mock/src/npu_compute_transpose.c  │ memcpy(out, input,            │  │
-│ │ npu_reshape                               │ (size_t)size); 去掉 *         │  │
-│ │                                           │ npu_dtype_size                │  │
-│ ├───────────────────────────────────────────┼───────────────────────────────┤  │
-│ │ npu_cpu_mock/src/npu_compute_softmax.c    │ memcpy(out, inter,            │  │
-│ │ npu_softmax_part2                         │ (size_t)size); 去掉 *         │  │
-│ │                                           │ npu_dtype_size                │  │
-│ ├───────────────────────────────────────────┼───────────────────────────────┤  │
-│ │ npu_cpu_mock/src/npu_compute_norm.c       │ memcpy(out, inter,            │  │
-│ │ npu_layernorm_part2                       │ (size_t)size); 去掉 *         │  │
-│ │                                           │ npu_dtype_size                │  │
-│ └───────────────────────────────────────────┴───────────────────────────────┘  │
-│                                                                                │
-│ C 测试（已有的 mock UT）                                                       │
-│                                                                                │
-│ ┌───────────────────────────┬───────────────────────────────────────────────┐  │
-│ │           文件            │                     改动                      │  │
-│ ├───────────────────────────┼───────────────────────────────────────────────┤  │
-│ │ test_softmax.c:52         │ 已传 4*sizeof(float)=16 字节 →                │  │
-│ │                           │ 不改（现在实现正确了）                        │  │
-│ ├───────────────────────────┼───────────────────────────────────────────────┤  │
-│ │ test_norm.c:59            │ 已传 8*sizeof(float)=32 字节 → 不改           │  │
-│ ├───────────────────────────┼───────────────────────────────────────────────┤  │
-│ │ test_transpose.c          │ 当前传元素数 6 → 改为 6 * (int)sizeof(float)  │  │
-│ │ test_reshape              │                                               │  │
-│ └───────────────────────────┴───────────────────────────────────────────────┘  │
-│                                                                                │
-│ 配置 YAML                                                                      │
-│                                                                                │
-│ integration/config/c_api_signatures.yaml 3 处 source 改动：                    │
-│                                                                                │
-│ ┌───────────────────┬─────┬────────────────────────┬───────────────────────┐   │
-│ │       算子        │ 参  │       旧 source        │       新 source       │   │
-│ │                   │ 数  │                        │                       │   │
-│ ├───────────────────┼─────┼────────────────────────┼───────────────────────┤   │
-│ │ npu_reshape       │ siz │ tensor.input_0.elem_co │ tensor.input_0.hbm_si │   │
-│ │                   │ e   │ unt                    │ ze                    │   │
-│ ├───────────────────┼─────┼────────────────────────┼───────────────────────┤   │
-│ │ npu_softmax_part2 │ siz │ tensor.input_0.elem_co │ tensor.input_0.hbm_si │   │
-│ │                   │ e   │ unt                    │ ze                    │   │
-│ ├───────────────────┼─────┼────────────────────────┼───────────────────────┤   │
-│ │ npu_layernorm_par │ siz │ tensor.input_0.elem_co │ tensor.input_0.hbm_si │   │
-│ │ t2                │ e   │ unt                    │ ze                    │   │
-│ └───────────────────┴─────┴────────────────────────┴───────────────────────┘   │
-│                                                                                │
-│ Python 集成测试                                                                │
-│                                                                                │
-│ integration/tests/demo_ut/test_c_ops.py — 所有手写 C 调用改传字节数：          │
-│ - TestReshape: npu_reshape(x, out, {n*2}, ...) (FP16=2 bytes)                  │
-│ - TestSoftmax: npu_softmax_part2(inter, out, {count*2}, ...)                   │
-│ - TestLayerNorm: npu_layernorm_part2(inter, x, out, {count*2}, ...)            │
-│ - TestAttentionBlock: npu_softmax_part2(sm_inter, attn, {seq*seq*2}, ...)      │
-│                                                                                │
-│ 验证：cd npu_cpu_mock/build && cmake .. && make && ctest + pytest              │
-│ integration/tests/                                                             │
-│                                                                                │
-│ ---                                                                            │
-│ WI-3: 修正上游模块（移除 pipeline 补丁）                                       │
-│                                                                                │
-│ 将 4 个适配函数回归到 graph_capture / op_decomposition                         │
-│                                                                                │
-│ 3.1 addmm 输入重排 → graph_capture.py                                          │
-│                                                                                │
-│ _handle_call() 中，在构建 input_tids 之后、创建 Node 之前：                    │
-│ if op == "aten.addmm.default" and len(input_tids) >= 3:                        │
-│     input_tids = [input_tids[1], input_tids[2], input_tids[0]]                 │
-│                                                                                │
-│ 3.2 参数重命名 → graph_capture.py                                              │
-│                                                                                │
-│ 模块级定义 _PARAM_RENAMES 字典（从 pipeline.py 迁移），在 _handle_call() 中    │
-│ params 构建完成后应用：                                                        │
-│ renames = _PARAM_RENAMES.get(op)                                               │
-│ if renames:                                                                    │
-│     for old_key, new_key in renames.items():                                   │
-│         if old_key in params and new_key not in params:                        │
-│             params[new_key] = params.pop(old_key)                              │
-│                                                                                │
-│ 3.3 负索引 dim 解析 → graph_capture.py                                         │
-│                                                                                │
-│ 在 capture() 中，graph 构建完成后、validate() 之前调用                         │
-│ _resolve_negative_dims(graph)。                                                │
-│ 函数体从 pipeline.py 整体迁移（含 softmax dim→size 转换逻辑）。                │
-│                                                                                │
-│ 3.4 layernorm part2 缺失输入 → op_decomposition.py                             │
-│                                                                                │
-│ _decompose_node() L69-72，对 layernorm_part2 步骤追加原始输入：                │
-│ if i == 0:                                                                     │
-│     inputs = list(node.inputs)                                                 │
-│ else:                                                                          │
-│     inputs = [intermediates[i - 1]]                                            │
-│     if step["npu_op"] == "npu_layernorm_part2" and node.inputs:                │
-│         inputs.append(node.inputs[0])                                          │
-│                                                                                │
-│ 同时在 L96-102 的 consumer 更新循环之后，为 part2 引用的原始输入更新           │
-│ consumer_node_ids。                                                            │
-│                                                                                │
-│ 3.5 pipeline.py 清理                                                           │
-│                                                                                │
-│ 删除：_PARAM_RENAMES、_normalize_graph()、_resolve_negative_dims()、_fix_layer │
-│ norm_decomp()                                                                  │
-│ 删除 compile() 中的 3 处调用。                                                 │
-│ 保留 _propagate_input_dtypes()（format_annotator 的遗留问题，范围外）。        │
-│                                                                                │
-│ 测试更新                                                                       │
-│                                                                                │
-│ ┌───────────────────────────┬───────────────────────────────────────────────┐  │
-│ │         测试文件          │                   新增用例                    │  │
-│ ├───────────────────────────┼───────────────────────────────────────────────┤  │
-│ │ graph_capture/tests/test_ │ test_addmm_inputs_reordered、test_param_renam │  │
-│ │ graph_capture.py          │ es_transpose、test_negative_dim_resolved      │  │
-│ ├───────────────────────────┼───────────────────────────────────────────────┤  │
-│ │ op_decomposition/tests/te │ test_layernorm_part2_has_orig_input           │  │
-│ │ st_op_decomposition.py    │                                               │  │
-│ └───────────────────────────┴───────────────────────────────────────────────┘  │
-│                                                                                │
-│ 验证：pytest npu_compiler/graph_capture/tests/ && pytest                       │
-│ npu_compiler/op_decomposition/tests/ && pytest npu_compiler/integration/tests/ │
-│                                                                                │
-│ ---                                                                            │
-│ WI-4: Pass 边界 Schema 校验                                                    │
-│                                                                                │
-│ Graph.validate_phase() — 在每个 Pass 之后检查关键字段                          │
-│                                                                                │
-│ graph_ir.py 新增                                                               │
-│                                                                                │
-│ def validate_phase(self, phase: str) -> list[str]:                             │
-│     errors = self.validate()                                                   │
-│     validator = _PHASE_VALIDATORS.get(phase)                                   │
-│     if validator:                                                              │
-│         errors.extend(validator(self))                                         │
-│     return errors                                                              │
-│                                                                                │
-│ 5 个阶段校验函数（模块级私有）：                                               │
-│                                                                                │
-│ ┌──────────────────┬─────────────────────────────────────────────────────────┐ │
-│ │       阶段       │                        校验规则                         │ │
-│ ├──────────────────┼─────────────────────────────────────────────────────────┤ │
-│ │ graph_capture    │ 权重 tensor 必须有 name；模型输入必须有                 │ │
-│ │                  │ dtype/shape；节点必须有 op_type                         │ │
-│ ├──────────────────┼─────────────────────────────────────────────────────────┤ │
-│ │ op_mapping       │ is_mapped=True 的节点必须有 npu_op                      │ │
-│ ├──────────────────┼─────────────────────────────────────────────────────────┤ │
-│ │ op_decomposition │ 所有节点必须 is_mapped、有 npu_op、有 compute_unit      │ │
-│ ├──────────────────┼─────────────────────────────────────────────────────────┤ │
-│ │ format_annotator │ 有 producer 的 tensor 必须有 dtype                      │ │
-│ ├──────────────────┼─────────────────────────────────────────────────────────┤ │
-│ │ memory_planner   │ 有 consumer 或是 output 的 tensor 必须有                │ │
-│ │                  │ hbm_offset/hbm_size/l1_offset                           │ │
-│ └──────────────────┴─────────────────────────────────────────────────────────┘ │
-│                                                                                │
-│ pipeline.py 集成                                                               │
-│                                                                                │
-│ 每个 Pass 之后调用 graph.validate_phase("xxx")，校验不通过时                   │
-│ logger.warning（不抛异常，避免阻断现有流程）。                                 │
-│                                                                                │
-│ 测试                                                                           │
-│                                                                                │
-│ common/tests/test_graph_ir.py 新增 TestValidatePhase                           │
-│ 类，覆盖每个阶段的正向和反向用例。                                             │
-│                                                                                │
-│ 验证：pytest npu_compiler/common/tests/ && pytest                              │
-│ npu_compiler/integration/tests/                                                │
-│                                                                                │
-│ ---                                                                            │
-│ 执行顺序                                                                       │
-│                                                                                │
-│ WI-1 (配置单一源)                                                              │
-│   ↓                                                                            │
-│ WI-2 (Mock 字节数)  ←  依赖 WI-1（只改一份 yaml）                              │
-│   ↓                                                                            │
-│ WI-4 (Schema 校验)  ←  独立，纯新增                                            │
-│   ↓                                                                            │
-│ WI-3 (上游修正)     ←  最高风险，受益于 WI-4 的校验保护                        │
-│                                                                                │
-│ 最终验证                                                                       │
-│                                                                                │
-│ cd npu_cpu_mock/build && cmake .. && make && ctest --output-on-failure         │
-│ .venv/bin/python3 -m pytest --tb=short -q   # 全量 120 测试                    │
-╰───────────────────────────────────────────────────────────────────
+## Context
+
+前一轮 4 项整改已完成（WI-1~4），全量 133+6 测试通过。本轮针对架构层面的 10 项 Clean Code / Clean Architecture 优化，按优先级分 4 阶段执行，每阶段结束跑全量测试保证绿色。
+
+---
+
+## Phase 1 (P0): 基础改进 — 无交叉依赖，可并行
+
+### P0-1: 错误处理统一
+
+**问题**：5 种不同错误策略（raise/warning/静默）混用。
+**方案**：`common/errors.py` 新增 `Severity` 枚举、`CompileDiagnostic`（frozen dataclass）、`DiagnosticCollector`（warn/error/has_errors/summary）。pipeline.py 内部创建 collector，每个 Pass 后收集诊断，统一日志输出。保留现有异常类。
+
+| 文件 | 操作 |
+|------|------|
+| `common/errors.py` | 新增 3 个类型 (~35 行) |
+| `common/__init__.py` | 导出新类型 |
+| `integration/pipeline.py` | 创建 collector，替换 validate_phase 循环为 `_run_post_validation()` |
+| **新建** `common/tests/test_errors.py` | 3 个用例 |
+
+### P0-2: 拆分 `_handle_call`
+
+**问题**：`graph_capture.py` `_handle_call` ~80 行做 5 件事。
+**方案**：提取 3 个子函数，`_handle_call` 降至 ~15 行编排器。
+
+| 新函数 | 职责 | 行数 |
+|--------|------|------|
+| `_parse_call_args()` | 解析 FX args/kwargs → op, nid, input_tids, params | ~35 |
+| `_normalize_op_inputs()` | addmm 重排 + 参数重命名 | ~12 |
+| `_create_call_outputs()` | 创建输出 tensor + 更新 fx_map | ~20 |
+| `_handle_call()` | 调用上述 3 个 + 更新 consumer + add_node | ~15 |
+
+文件：`graph_capture/graph_capture.py`，无测试变更（12 个现有用例通过 `capture()` 覆盖）。
+
+---
+
+## Phase 2 (P1): 架构改进 — 依赖 Phase 1
+
+### P1-1: validate_phase 解耦 — 核心层不再知道 pipeline 阶段
+
+**问题**：`graph_ir.py` 包含 `_PHASE_VALIDATORS` 和 5 个阶段校验函数，核心实体反向依赖管线知识（违反 CA 依赖规则）。
+**方案**：每个 Pass 模块导出 `post_validate(graph) -> list[str]`，pipeline 直接调用。graph_ir.py 只保留结构性 `validate()`。
+
+| 文件 | 操作 |
+|------|------|
+| `common/graph_ir.py` | **删除** `validate_phase()`、5 个 `_validate_*`、`_PHASE_VALIDATORS` |
+| `graph_capture/graph_capture.py` | 新增 `post_validate()` (迁移自 `_validate_graph_capture`) |
+| `op_mapping/op_mapping.py` | 新增 `post_validate()` |
+| `op_decomposition/op_decomposition.py` | 新增 `post_validate()` |
+| `format_annotator/format_annotator.py` | 新增 `post_validate()` |
+| `memory_planner/memory_planner.py` | 新增 `post_validate()` |
+| `integration/pipeline.py` | 替换 `graph.validate_phase("xxx")` 为 `module.post_validate(graph)` |
+| `common/tests/test_graph_ir.py` | **删除** `TestValidatePhase` 类 |
+| 各 Pass test 文件 (5个) | 迁入对应的 post_validate 测试用例 |
+
+### P1-2: 裂解规则声明化
+
+**问题**：`op_decomposition.py` 硬编码 `if step["npu_op"] == "npu_layernorm_part2"`。
+**方案**：YAML 新增 `extra_inputs` 字段（如 `["original.0"]`），Python 通用解析。
+
+| 文件 | 操作 |
+|------|------|
+| `integration/config/decompositions.yaml` | layernorm_part2 加 `extra_inputs: ["original.0"]` |
+| `op_decomposition/config/decompositions.yaml` | 同上 |
+| `op_decomposition/op_decomposition.py` | 硬编码 if → 通用 extra_inputs 解析 (~6 行) |
+
+### P1-3: 提取 SourceResolver 类
+
+**问题**：`c_emitter.py` 的 3 个函数（`_resolve_param`/`_find_tensor`/`_extract_tensor_field`）耦合紧密。
+**方案**：封装为 `SourceResolver` 类，方法：`resolve(param)`、`find_tensor(key)`、`_resolve_tensor_ref()`、`_resolve_param_ref()`、`_extract_field()`。`_gen_op_call` 改用 resolver。
+
+| 文件 | 操作 |
+|------|------|
+| `codegen/c_emitter.py` | 3 个函数 → `SourceResolver` 类 (~50 行) |
+
+---
+
+## Phase 3 (P2): 结构优化 — 依赖 Phase 2
+
+### P2-1: Pass Protocol 定义
+
+**新建** `common/pass_protocol.py`：
+
+```python
+@runtime_checkable
+class CompilerPass(Protocol):
+    def run(self, graph: Graph, config: dict) -> Graph: ...
+```
+
+文档性质。memory_planner（返回 tuple）和 scheduler（config 可选）不强制适配。
+
+| 文件 | 操作 |
+|------|------|
+| **新建** `common/pass_protocol.py` | ~20 行 |
+| `common/__init__.py` | 导出 `CompilerPass` |
+
+### P2-2: Graph 字段归属文档
+
+`graph_ir.py` 模块 docstring 新增 **Field Ownership Table**：明确每个字段由哪个 Pass 写入、谁可以读。纯文档，无代码变更。
+
+### P2-3: 统一 DTYPE 元信息
+
+**问题**：`DTYPE_BYTES`（memory_planner）和 `DTYPE_MAP`（codegen）分别维护。
+**方案**：**新建** `common/dtypes.py`。
+
+| 文件 | 操作 |
+|------|------|
+| **新建** `common/dtypes.py` | `DtypeInfo(bytes, c_enum)` + `DTYPE_INFO` + `dtype_bytes()` + `dtype_c_enum()` (~35 行) |
+| `memory_planner/memory_planner.py` | 删除 `DTYPE_BYTES`，改用 `dtype_bytes()` |
+| `codegen/_helpers.py` | `DTYPE_MAP` 改为从 `DTYPE_INFO` 派生 |
+| `common/__init__.py` | 导出新类型 |
+| **新建** `common/tests/test_dtypes.py` | 3 个用例 |
+
+---
+
+## Phase 4 (P3): 管线优化
+
+### P3-1: 声明式管线
+
+**方案**：定义 `_PassDesc(name, number, run_fn, config_key, validate_fn)` 列表，`compile()` 中 7 个中间 Pass 改为循环。graph_capture (Pass 1) 和 codegen (Pass 9) 保持特殊处理。~50 行重复 → ~20 行循环。
+
+| 文件 | 操作 |
+|------|------|
+| `integration/pipeline.py` | 新增 `_PassDesc` + `_MIDDLE_PASSES` 列表，compile() 重写中间段 |
+
+### P3-2: 配置收敛 (仅文档)
+
+每个模块本地 `config/` 的 YAML 头部加注释：`# TEST FIXTURE — 生产配置在 integration/config/`。
+
+### P3-3: DRY 配置加载 (不动)
+
+各模块 `load_xxx_config()` 仅供 demo 脚本使用，保留不改。
+
+---
+
+## 新增文件汇总
+
+| 文件 | 用途 | 行数 |
+|------|------|------|
+| `common/dtypes.py` | 统一 dtype 元信息 | ~35 |
+| `common/pass_protocol.py` | CompilerPass Protocol | ~20 |
+| `common/tests/test_errors.py` | DiagnosticCollector 测试 | ~25 |
+| `common/tests/test_dtypes.py` | Dtype 元信息测试 | ~15 |
+
+## 提交策略
+
+```
+Commit 1: P0-1 + P0-2       (错误处理 + 拆分函数)
+    ↓ pytest 全绿
+Commit 2: P1-1               (validate_phase 解耦 — 改动最多，独立提交)
+    ↓ pytest 全绿
+Commit 3: P1-2 + P1-3 + P2-2 + P2-3  (声明裂解 + SourceResolver + 文档 + dtypes)
+    ↓ pytest 全绿
+Commit 4: P2-1               (Pass Protocol)
+    ↓ pytest 全绿
+Commit 5: P3-1 + P3-2        (声明式管线 + 配置注释)
+    ↓ pytest 全绿 (最终验证：133+ Python + 6 C)
+```
+
+## 最终验证
+
+```bash
+cd npu_cpu_mock/build && cmake .. && make && ctest --output-on-failure
+.venv/bin/python3 -m pytest --tb=short -q
+```

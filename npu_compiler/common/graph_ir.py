@@ -155,6 +155,16 @@ class Graph:
         g.execution_order = list(data.get("execution_order", []))
         return g
 
+    # ---- 阶段校验 ----
+
+    def validate_phase(self, phase: str) -> list[str]:
+        """校验指定编译阶段后图应满足的约束，返回错误列表。"""
+        errors = self.validate()
+        validator = _PHASE_VALIDATORS.get(phase)
+        if validator:
+            errors.extend(validator(self))
+        return errors
+
     # ---- 摘要 ----
 
     def summary(self) -> str:
@@ -168,3 +178,72 @@ class Graph:
         for op, cnt in sorted(op_counts.items()):
             lines.append(f"  {op}: {cnt}")
         return "\n".join(lines)
+
+
+# ---- 阶段校验函数 ----
+
+def _validate_graph_capture(g: Graph) -> list[str]:
+    errors: list[str] = []
+    for t in g.tensors.values():
+        if t.is_weight and not t.name:
+            errors.append(f"权重 tensor {t.id} 缺少 name 字段")
+        if t.is_model_input and not t.dtype:
+            errors.append(f"模型输入 tensor {t.id} 缺少 dtype")
+        if t.is_model_input and not t.shape:
+            errors.append(f"模型输入 tensor {t.id} 缺少 shape")
+    for n in g.nodes.values():
+        if not n.op_type:
+            errors.append(f"节点 {n.id} 缺少 op_type")
+    return errors
+
+
+def _validate_op_mapping(g: Graph) -> list[str]:
+    errors: list[str] = []
+    for n in g.nodes.values():
+        if n.is_mapped and not n.npu_op:
+            errors.append(f"已映射节点 {n.id} 缺少 npu_op")
+    return errors
+
+
+def _validate_op_decomposition(g: Graph) -> list[str]:
+    errors: list[str] = []
+    for n in g.nodes.values():
+        if not n.is_mapped:
+            errors.append(f"节点 {n.id} 未映射 (is_mapped=False)")
+        if not n.npu_op:
+            errors.append(f"节点 {n.id} 缺少 npu_op")
+        if not n.compute_unit:
+            errors.append(f"节点 {n.id} 缺少 compute_unit")
+    return errors
+
+
+def _validate_format_annotator(g: Graph) -> list[str]:
+    errors: list[str] = []
+    for t in g.tensors.values():
+        if t.producer_node_id is not None and not t.dtype:
+            errors.append(f"有 producer 的 tensor {t.id} 缺少 dtype")
+    return errors
+
+
+def _validate_memory_planner(g: Graph) -> list[str]:
+    errors: list[str] = []
+    for t in g.tensors.values():
+        needs_mem = t.consumer_node_ids or t.is_model_output
+        if not needs_mem:
+            continue
+        if t.hbm_offset is None:
+            errors.append(f"tensor {t.id} 缺少 hbm_offset")
+        if t.hbm_size is None:
+            errors.append(f"tensor {t.id} 缺少 hbm_size")
+        if t.l1_offset is None:
+            errors.append(f"tensor {t.id} 缺少 l1_offset")
+    return errors
+
+
+_PHASE_VALIDATORS: dict[str, callable] = {
+    "graph_capture": _validate_graph_capture,
+    "op_mapping": _validate_op_mapping,
+    "op_decomposition": _validate_op_decomposition,
+    "format_annotator": _validate_format_annotator,
+    "memory_planner": _validate_memory_planner,
+}

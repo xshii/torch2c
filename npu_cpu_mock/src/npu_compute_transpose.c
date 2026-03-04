@@ -46,6 +46,7 @@ void npu_transpose_2d(void* input, void* out, int rows, int cols, npu_dtype_t dt
     }
 }
 
-void npu_reshape(void* input, void* out, int count, npu_dtype_t dtype) {
-    memcpy(out, input, (size_t)count * npu_dtype_size(dtype));
+void npu_reshape(void* input, void* out, int size, npu_dtype_t dtype) {
+    (void)dtype;
+    memcpy(out, input, (size_t)size);
 }

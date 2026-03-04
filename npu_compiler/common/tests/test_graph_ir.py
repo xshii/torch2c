@@ -91,6 +91,119 @@ class TestValidate:
         assert len(errors) == 1
 
 
+class TestValidatePhase:
+    """validate_phase 各阶段校验。"""
+
+    def test_graph_capture_valid(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1, 16], dtype="fp16",
+                            is_model_input=True))
+        g.add_tensor(Tensor(id="tw", shape=[16, 16], dtype="fp16",
+                            is_weight=True, name="linear.weight"))
+        g.add_tensor(Tensor(id="t1", shape=[1, 16], dtype="fp16",
+                            producer_node_id="n0"))
+        g.add_node(Node(id="n0", op_type="aten.mm", inputs=["t0", "tw"],
+                        outputs=["t1"]))
+        assert g.validate_phase("graph_capture") == []
+
+    def test_graph_capture_missing_weight_name(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="tw", shape=[16], dtype="fp16",
+                            is_weight=True))
+        g.add_tensor(Tensor(id="t1", shape=[16], dtype="fp16",
+                            producer_node_id="n0"))
+        g.add_node(Node(id="n0", op_type="aten.mm", inputs=["tw"],
+                        outputs=["t1"]))
+        errors = g.validate_phase("graph_capture")
+        assert any("name" in e for e in errors)
+
+    def test_graph_capture_missing_input_dtype(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1, 16], dtype="",
+                            is_model_input=True))
+        g.add_tensor(Tensor(id="t1", shape=[1, 16], dtype="fp16",
+                            producer_node_id="n0"))
+        g.add_node(Node(id="n0", op_type="aten.mm", inputs=["t0"],
+                        outputs=["t1"]))
+        errors = g.validate_phase("graph_capture")
+        assert any("dtype" in e for e in errors)
+
+    def test_op_mapping_valid(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16"))
+        g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16",
+                            producer_node_id="n0"))
+        g.add_node(Node(id="n0", op_type="npu_add", inputs=["t0"],
+                        outputs=["t1"], is_mapped=True, npu_op="npu_add"))
+        assert g.validate_phase("op_mapping") == []
+
+    def test_op_mapping_missing_npu_op(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16"))
+        g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16",
+                            producer_node_id="n0"))
+        g.add_node(Node(id="n0", op_type="npu_add", inputs=["t0"],
+                        outputs=["t1"], is_mapped=True))
+        errors = g.validate_phase("op_mapping")
+        assert any("npu_op" in e for e in errors)
+
+    def test_op_decomposition_valid(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16"))
+        g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16",
+                            producer_node_id="n0"))
+        g.add_node(Node(id="n0", op_type="npu_gelu", inputs=["t0"],
+                        outputs=["t1"], is_mapped=True, npu_op="npu_gelu",
+                        compute_unit="Vector"))
+        assert g.validate_phase("op_decomposition") == []
+
+    def test_op_decomposition_missing_compute_unit(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16"))
+        g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16",
+                            producer_node_id="n0"))
+        g.add_node(Node(id="n0", op_type="npu_gelu", inputs=["t0"],
+                        outputs=["t1"], is_mapped=True, npu_op="npu_gelu"))
+        errors = g.validate_phase("op_decomposition")
+        assert any("compute_unit" in e for e in errors)
+
+    def test_format_annotator_valid(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16",
+                            producer_node_id="n0"))
+        g.add_node(Node(id="n0", op_type="op", outputs=["t0"]))
+        assert g.validate_phase("format_annotator") == []
+
+    def test_format_annotator_missing_dtype(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1], dtype="",
+                            producer_node_id="n0"))
+        g.add_node(Node(id="n0", op_type="op", outputs=["t0"]))
+        errors = g.validate_phase("format_annotator")
+        assert any("dtype" in e for e in errors)
+
+    def test_memory_planner_valid(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16",
+                            is_model_output=True,
+                            hbm_offset=0, hbm_size=2, l1_offset=0))
+        assert g.validate_phase("memory_planner") == []
+
+    def test_memory_planner_missing_offsets(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16",
+                            is_model_output=True))
+        errors = g.validate_phase("memory_planner")
+        assert any("hbm_offset" in e for e in errors)
+        assert any("hbm_size" in e for e in errors)
+        assert any("l1_offset" in e for e in errors)
+
+    def test_unknown_phase_returns_base_validate(self):
+        g = _make_linear_graph()
+        errors = g.validate_phase("nonexistent_phase")
+        assert errors == g.validate()
+
+
 class TestSummary:
     def test_summary_content(self):
         g = _make_linear_graph()

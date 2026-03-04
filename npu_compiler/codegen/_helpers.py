@@ -30,7 +30,7 @@ PARAM_TYPE_C = {
 
 # ---- 配置加载 ----
 
-_DEFAULT_CONFIG_DIR = Path(__file__).parent / "config"
+_DEFAULT_CONFIG_DIR = Path(__file__).resolve().parents[1] / "integration" / "config"
 
 
 def resolve_config_dir(config_dir: str | None) -> str:

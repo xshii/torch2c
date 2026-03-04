@@ -42,17 +42,17 @@ void npu_gelu(void* input, void* out, int count, npu_dtype_t dtype);
 
 void npu_layernorm_part1(void* input, void* gamma, void* beta, void* out,
                          int hidden, int seq, float eps, npu_dtype_t dtype);
-void npu_layernorm_part2(void* inter, void* orig, void* out, int hidden, npu_dtype_t dtype);
+void npu_layernorm_part2(void* inter, void* orig, void* out, int size, npu_dtype_t dtype);
 
 void npu_softmax_part1(void* input, void* out, int dim, int count, npu_dtype_t dtype);
-void npu_softmax_part2(void* inter, void* out, int count, npu_dtype_t dtype);
+void npu_softmax_part2(void* inter, void* out, int size, npu_dtype_t dtype);
 void npu_softmax_mask(void* input, void* out, const uint8_t* mask,
                       int dim, int count, npu_dtype_t dtype);
 
 void npu_transpose(void* input, void* out, int ndim, const int* dims,
                    int dim0, int dim1, npu_dtype_t dtype);
 void npu_transpose_2d(void* input, void* out, int rows, int cols, npu_dtype_t dtype);
-void npu_reshape(void* input, void* out, int count, npu_dtype_t dtype);
+void npu_reshape(void* input, void* out, int size, npu_dtype_t dtype);
 
 /* ---- DMA ops (3) ---- */
 void npu_dma_load(void* l1_dst, void* hbm_src, int size,

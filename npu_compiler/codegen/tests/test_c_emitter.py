@@ -13,7 +13,7 @@ import pytest
 from npu_compiler.codegen import c_emitter, mock_emitter
 from npu_compiler.common import CodegenError, load_config
 
-_CONFIG_DIR = str(Path(__file__).resolve().parents[1] / "config")
+_CONFIG_DIR = str(Path(__file__).resolve().parents[2] / "integration" / "config")
 _DEMO_PLAN = str(Path(__file__).resolve().parents[1] / "demo" / "demo_input_plan.json")
 
 
@@ -124,14 +124,6 @@ class TestParamFilling:
         assert "(void*)(l1 + 0)" in block
         assert "(void*)(l1 + 4096)" in block
 
-    def test_optional_mask_null(self):
-        plan = _load_plan()
-        sigs = _load_sigs()
-        node = plan["nodes"]["node_0"]
-        dp = plan["dma_plans"][0]
-        block = c_emitter.gen_op_block(node, plan["tensors"], dp, sigs)
-        assert "NULL" in block
-
     def test_mul_scalar_float_param(self):
         """npu_mul_scalar 的 scalar 参数应为浮点数格式。"""
         sigs = _load_sigs()
@@ -176,36 +168,6 @@ class TestParamFilling:
         assert "(const int[]){1, 4, 32, 16}" in block  # dims
         assert "2" in block    # dim0
         assert "3" in block    # dim1
-
-    def test_softmax_with_absorbed_mask(self):
-        """softmax_part1 吸收 mask 后 mask 参数非 NULL。"""
-        sigs = _load_sigs()
-        tensors = {
-            "in": _make_tensor("in", [1, 4, 32, 32]),
-            "mask": _make_tensor("mask", [1, 1, 32, 32], l1_offset=8192),
-            "out": _make_tensor("out", [1, 4, 32, 32], l1_offset=16384),
-        }
-        node = _make_node("n", "npu_softmax_part1",
-                          ["in", "mask"], ["out"],
-                          params={"dim": -1},
-                          absorbed_inputs={"mask": "mask"})
-        block = c_emitter.gen_op_block(node, tensors, _empty_dma(), sigs)
-        assert "npu_softmax_part1(" in block
-        # mask 不是 NULL
-        assert "(void*)(l1 + 8192)" in block
-        assert "NULL" not in block
-
-    def test_softmax_without_mask_is_null(self):
-        """softmax_part1 无 mask 时参数为 NULL。"""
-        sigs = _load_sigs()
-        tensors = {
-            "in": _make_tensor("in", [1, 4, 32, 32]),
-            "out": _make_tensor("out", [1, 4, 32, 32], l1_offset=16384),
-        }
-        node = _make_node("n", "npu_softmax_part1",
-                          ["in"], ["out"], params={"dim": -1})
-        block = c_emitter.gen_op_block(node, tensors, _empty_dma(), sigs)
-        assert "NULL" in block
 
 
 class TestModelGraphGeneration:

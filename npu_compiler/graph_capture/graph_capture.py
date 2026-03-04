@@ -18,6 +18,13 @@ from ..common.logger import get_logger
 
 logger = get_logger(__name__)
 
+# graph_capture 产出的 positional param 名 → codegen 期望的 param 名
+_PARAM_RENAMES: dict[str, dict[str, str]] = {
+    "aten.transpose.int": {"p0": "dim0", "p1": "dim1"},
+    "aten._softmax.default": {"p0": "dim"},
+    "aten.native_layer_norm.default": {"p1": "epsilon", "eps": "epsilon"},
+}
+
 _DTYPE_MAP = {
     torch.float16: "fp16",
     torch.float32: "fp32",
@@ -110,6 +117,9 @@ def capture(model: nn.Module, dummy_input: torch.Tensor,
         elif fx_node.op == "output":
             _handle_output(graph, fx_node, fx_map)
 
+    # 负索引 dim 解析 & softmax dim → size 转换
+    _resolve_negative_dims(graph)
+
     # 校验图完整性
     errors = graph.validate()
     if errors:
@@ -120,6 +130,31 @@ def capture(model: nn.Module, dummy_input: torch.Tensor,
     logger.info("图捕获完成，节点数: %d, tensor数: %d, 权重tensor数: %d",
                 len(graph.nodes), len(graph.tensors), weight_count)
     return graph
+
+
+# ---- dim 解析 ----
+
+_DIM_TO_SIZE_OPS = {"aten._softmax.default"}
+
+
+def _resolve_negative_dims(graph: Graph) -> None:
+    """将 dim 参数的负索引转正，并将 softmax 的 dim 从索引转为维度大小。"""
+    for node in graph.nodes.values():
+        dim_val = node.params.get("dim")
+        if dim_val is None or not isinstance(dim_val, int):
+            continue
+        if not node.inputs:
+            continue
+        t = graph.get_tensor(node.inputs[0])
+        if t is None or not t.shape:
+            continue
+        ndim = len(t.shape)
+        if dim_val < 0:
+            dim_val = dim_val + ndim
+        if node.op_type in _DIM_TO_SIZE_OPS:
+            node.params["dim"] = t.shape[dim_val]
+        else:
+            node.params["dim"] = dim_val
 
 
 # ---- 内部处理函数 ----
@@ -186,6 +221,17 @@ def _handle_call(graph, fx_node, fx_map, tgen, ngen):
             params[k] = v
         elif isinstance(v, (list, tuple)):
             params[k] = list(v)
+
+    # addmm 输入重排: [bias, mat1, mat2] → [mat1, mat2, bias]
+    if op == "aten.addmm.default" and len(input_tids) >= 3:
+        input_tids = [input_tids[1], input_tids[2], input_tids[0]]
+
+    # 参数重命名: p0/p1 → codegen 期望的语义名
+    renames = _PARAM_RENAMES.get(op)
+    if renames:
+        for old_key, new_key in renames.items():
+            if old_key in params and new_key not in params:
+                params[new_key] = params.pop(old_key)
 
     # 创建输出 tensor
     val = fx_node.meta.get("val")

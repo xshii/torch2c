@@ -415,7 +415,7 @@ int main(void) {{
     FILE* f;
     f = fopen("x.bin", "rb"); fread(x, 2, {n}, f); fclose(f);
 
-    npu_reshape(x, out, {n}, NPU_DTYPE_FP16);
+    npu_reshape(x, out, {n * 2}, NPU_DTYPE_FP16);
 
     f = fopen("out.bin", "wb"); fwrite(out, 2, {n}, f); fclose(f);
     return 0;
@@ -454,7 +454,7 @@ int main(void) {{
     f = fopen("x.bin", "rb"); fread(x, 2, {count}, f); fclose(f);
 
     npu_softmax_part1(x, inter, {dim}, {count}, NPU_DTYPE_FP16);
-    npu_softmax_part2(inter, out, {count}, NPU_DTYPE_FP16);
+    npu_softmax_part2(inter, out, {count * 2}, NPU_DTYPE_FP16);
 
     f = fopen("out.bin", "wb"); fwrite(out, 2, {count}, f); fclose(f);
     return 0;
@@ -505,7 +505,7 @@ int main(void) {{
 
     npu_layernorm_part1(x, gamma, beta, inter, {hidden}, {seq},
                         {eps}f, NPU_DTYPE_FP16);
-    npu_layernorm_part2(inter, x, out, {count}, NPU_DTYPE_FP16);
+    npu_layernorm_part2(inter, x, out, {count * 2}, NPU_DTYPE_FP16);
 
     f = fopen("out.bin", "wb"); fwrite(out, 2, {count}, f); fclose(f);
     return 0;
@@ -602,7 +602,7 @@ int main(void) {{
     npu_matmul(q, kt, scores, {seq}, {seq}, {d}, NPU_DTYPE_FP16, NPU_FORMAT_ND);
     /* softmax */
     npu_softmax_part1(scores, sm_inter, {seq}, {seq*seq}, NPU_DTYPE_FP16);
-    npu_softmax_part2(sm_inter, attn, {seq*seq}, NPU_DTYPE_FP16);
+    npu_softmax_part2(sm_inter, attn, {seq*seq*2}, NPU_DTYPE_FP16);
     /* out = attn @ V */
     npu_matmul(attn, v, out, {seq}, {d}, {seq}, NPU_DTYPE_FP16, NPU_FORMAT_ND);
 

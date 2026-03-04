@@ -31,7 +31,8 @@ void npu_layernorm_part1(void* input, void* gamma, void* beta, void* out,
     }
 }
 
-void npu_layernorm_part2(void* inter, void* orig, void* out, int hidden, npu_dtype_t dtype) {
+void npu_layernorm_part2(void* inter, void* orig, void* out, int size, npu_dtype_t dtype) {
     (void)orig;
-    memcpy(out, inter, (size_t)hidden * npu_dtype_size(dtype));
+    (void)dtype;
+    memcpy(out, inter, (size_t)size);
 }
