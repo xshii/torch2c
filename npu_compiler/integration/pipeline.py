@@ -17,7 +17,7 @@ from npu_compiler.codegen.c_project import (
     mock_emitter,
     utils_emitter,
 )
-from npu_compiler.common import DiagnosticCollector, Graph, get_logger, load_config
+from npu_compiler.common import CompilerError, DiagnosticCollector, Graph, get_logger, load_config
 from npu_compiler.format_annotator import format_annotator
 from npu_compiler.graph_capture import graph_capture
 from npu_compiler.memory_planner import memory_planner
@@ -118,24 +118,41 @@ def _build_codegen_plan(graph: Graph, dma_plans: list) -> dict:
     }
 
 
+_NUMPY_DTYPE_MAP: dict[str, type] = {
+    "fp16": np.float16,
+    "fp32": np.float32,
+    "bf16": np.float32,  # numpy 不支持 bf16，用 fp32 近似
+}
+
+
+def _infer_golden_dtype(graph: Graph) -> type:
+    """从 graph 的 model_input tensor 推断 golden 数据精度。"""
+    for t in graph.tensors.values():
+        if t.is_model_input and t.dtype:
+            return _NUMPY_DTYPE_MAP.get(t.dtype, np.float16)
+    return np.float16
+
+
 def _run_golden(
     model: nn.Module,
     dummy_input: torch.Tensor,
     mask: torch.Tensor | None = None,
+    *,
+    numpy_dtype: type = np.float16,
 ) -> tuple[list[np.ndarray], list[np.ndarray]]:
     """前向推理获取 golden 输入/输出。"""
     model.eval()
     with torch.no_grad():
         out = model(dummy_input, mask) if mask is not None else model(dummy_input)
 
-    inputs = [dummy_input.cpu().float().numpy().astype(np.float16)]
+    inputs = [dummy_input.cpu().float().numpy().astype(numpy_dtype)]
     if mask is not None:
-        inputs.append(mask.cpu().float().numpy().astype(np.float16))
+        inputs.append(mask.cpu().float().numpy().astype(numpy_dtype))
 
     if isinstance(out, torch.Tensor):
-        outputs = [out.cpu().float().numpy().astype(np.float16)]
+        outputs = [out.cpu().float().numpy().astype(numpy_dtype)]
     else:
-        outputs = [o.cpu().float().numpy().astype(np.float16) for o in out]
+        outputs = [o.cpu().float().numpy().astype(numpy_dtype) for o in out]
     return inputs, outputs
 
 
@@ -150,7 +167,7 @@ def _run_post_validation(
     if validate_fn is not None:
         errors.extend(validate_fn(graph))
     for msg in errors:
-        collector.warn(phase, msg)
+        collector.error(phase, msg)
         logger.warning("Pass %s 校验: %s", phase, msg)
 
 
@@ -222,6 +239,8 @@ def compile(
     logger.info("Pass ⑧ 完成")
 
     logger.info(collector.summary())
+    if collector.has_errors():
+        raise CompilerError(f"编译中止：{collector.summary()}")
 
     # Pass ⑨ codegen
     _run_codegen(
@@ -263,6 +282,7 @@ def _run_codegen(
     weight_exporter.export_weights(model.state_dict(), weight_path, offsets=weight_offsets)
 
     golden_dir = os.path.join(output_dir, "golden")
-    inputs, outputs = _run_golden(model, dummy_input, mask)
+    golden_dtype = _infer_golden_dtype(graph)
+    inputs, outputs = _run_golden(model, dummy_input, mask, numpy_dtype=golden_dtype)
     golden_exporter.export_golden(inputs, outputs, golden_dir)
     logger.info("Pass ⑨ 完成")

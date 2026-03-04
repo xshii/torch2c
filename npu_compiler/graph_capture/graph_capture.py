@@ -16,8 +16,8 @@ from torch.export import export
 from ..common.graph_ir import Graph, Node, Tensor
 from ..common.logger import get_logger
 from ._constants import (
-    ADDMM_REORDER,
     DIM_TO_SIZE_OPS,
+    INPUT_REORDER,
     PARAM_RENAMES,
     dtype_str,
     is_tensor_overload,
@@ -197,9 +197,10 @@ def _normalize_op_inputs(
     input_tids: list[str],
     params: dict,
 ) -> tuple[list[str], dict]:
-    """addmm 输入重排 + 参数重命名。"""
-    if op == "aten.addmm.default" and len(input_tids) >= len(ADDMM_REORDER):
-        input_tids = [input_tids[i] for i in ADDMM_REORDER]
+    """输入重排 + 参数重命名（规则来自 capture_rules.yaml）。"""
+    reorder = INPUT_REORDER.get(op)
+    if reorder and len(input_tids) >= len(reorder):
+        input_tids = [input_tids[i] for i in reorder]
 
     renames = PARAM_RENAMES.get(op)
     if renames:

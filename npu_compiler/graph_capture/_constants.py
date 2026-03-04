@@ -1,17 +1,27 @@
-"""graph_capture 内部常量和映射表。"""
+"""graph_capture 内部常量和映射表。
+
+算子规则从 config/capture_rules.yaml 加载，dtype 映射为 torch 专用常量。
+"""
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import torch
 
-# graph_capture 产出的 positional param 名 → codegen 期望的 param 名
-PARAM_RENAMES: dict[str, dict[str, str]] = {
-    "aten.transpose.int": {"p0": "dim0", "p1": "dim1"},
-    "aten._softmax.default": {"p0": "dim"},
-    "aten.native_layer_norm.default": {"p1": "epsilon", "eps": "epsilon"},
-}
+from npu_compiler.common import load_config
+
+# ── YAML 规则加载 ──────────────────────────────────────
+
+_CONFIG_PATH = Path(__file__).parent / "config" / "capture_rules.yaml"
+_RULES = load_config(str(_CONFIG_PATH))
+
+PARAM_RENAMES: dict[str, dict[str, str]] = _RULES.get("param_renames", {})
+INPUT_REORDER: dict[str, list[int]] = _RULES.get("input_reorder", {})
+DIM_TO_SIZE_OPS: set[str] = set(_RULES.get("dim_to_size_ops", []))
+
+# ── dtype 映射 (torch 对象，不能放 YAML) ──────────────
 
 DTYPE_MAP: dict[torch.dtype, str] = {
     torch.float16: "fp16",
@@ -24,12 +34,6 @@ DTYPE_MAP: dict[torch.dtype, str] = {
     torch.bool: "bool",
     torch.bfloat16: "bf16",
 }
-
-# addmm(bias, mat1, mat2) → NPU 期望 (mat1, mat2, bias)
-ADDMM_REORDER: list[int] = [1, 2, 0]
-
-# 需要将 dim 索引转换为维度大小的算子
-DIM_TO_SIZE_OPS: set[str] = {"aten._softmax.default"}
 
 
 def dtype_str(dt: torch.dtype) -> str:
