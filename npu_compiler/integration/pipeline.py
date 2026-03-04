@@ -218,7 +218,28 @@ def compile(
 
     logger.info(collector.summary())
 
-    # Pass ⑨ codegen（特殊：多个子 emitter）
+    # Pass ⑨ codegen
+    _run_codegen(
+        model, dummy_input, mask, graph, dma_plans, configs, config_dir, output_dir, atol, cosine_tol
+    )
+
+    logger.info("=== 编译管线完成，输出目录: %s ===", output_dir)
+    return output_dir
+
+
+def _run_codegen(
+    model: nn.Module,
+    dummy_input: torch.Tensor,
+    mask: torch.Tensor | None,
+    graph: Graph,
+    dma_plans: list,
+    configs: dict,
+    config_dir: str,
+    output_dir: str,
+    atol: float,
+    cosine_tol: float,
+) -> None:
+    """Pass ⑨：C 代码生成 + 权重导出 + golden 数据。"""
     logger.info("Pass ⑨ codegen 开始")
     plan = _build_codegen_plan(graph, dma_plans)
 
@@ -234,16 +255,9 @@ def compile(
         for t in plan["tensors"].values()
         if t.get("is_weight") and t.get("name")
     }
-    weight_exporter.export_weights(
-        model.state_dict(),
-        weight_path,
-        offsets=weight_offsets,
-    )
+    weight_exporter.export_weights(model.state_dict(), weight_path, offsets=weight_offsets)
 
     golden_dir = os.path.join(output_dir, "golden")
     inputs, outputs = _run_golden(model, dummy_input, mask)
     golden_exporter.export_golden(inputs, outputs, golden_dir)
-
     logger.info("Pass ⑨ 完成")
-    logger.info("=== 编译管线完成，输出目录: %s ===", output_dir)
-    return output_dir

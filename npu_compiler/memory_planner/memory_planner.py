@@ -113,6 +113,48 @@ def _analyze_lifetimes(
     return lifetimes
 
 
+def _release_expired(
+    graph: Graph,
+    sorted_tids: list[str],
+    lifetimes: dict[str, tuple[int, int]],
+    current_first: int,
+    freed_set: set[str],
+    free_blocks: list[list[int]],
+    hbm_alignment: int,
+) -> None:
+    """释放 lifetime 结束时间早于 current_first 的 tensor 到 free_blocks。"""
+    for other_tid in sorted_tids:
+        if other_tid in freed_set:
+            continue
+        other_t = graph.tensors[other_tid]
+        if other_t.hbm_offset is None:
+            continue
+        if lifetimes[other_tid][1] < current_first:
+            free_blocks.append([other_t.hbm_offset, align_up(other_t.hbm_size, hbm_alignment)])
+            freed_set.add(other_tid)
+
+
+def _best_fit_alloc(free_blocks: list[list[int]], aligned_size: int) -> int | None:
+    """从 free_blocks 找最优空闲块，返回 offset 或 None。"""
+    best_idx = -1
+    best_fit_size = float("inf")
+    for i, (_, sz) in enumerate(free_blocks):
+        if sz >= aligned_size and sz < best_fit_size:
+            best_idx = i
+            best_fit_size = sz
+
+    if best_idx < 0:
+        return None
+
+    blk_off, blk_sz = free_blocks[best_idx]
+    remaining = blk_sz - aligned_size
+    if remaining > 0:
+        free_blocks[best_idx] = [blk_off + aligned_size, remaining]
+    else:
+        free_blocks.pop(best_idx)
+    return blk_off
+
+
 def _allocate_hbm(
     graph: Graph,
     lifetimes: dict[str, tuple[int, int]],
@@ -121,10 +163,9 @@ def _allocate_hbm(
 ) -> int:
     """Best-fit HBM 分配，支持空间复用。返回实际复用次数。"""
     sorted_tids = sorted(lifetimes.keys(), key=lambda t: lifetimes[t][0])
-
-    free_blocks: list[list[int]] = []  # [offset, size]
-    freed_set: set[str] = set()  # 已释放的 tensor id，防止重复释放
-    hbm_watermark = 0  # 已分配的最高水位
+    free_blocks: list[list[int]] = []
+    freed_set: set[str] = set()
+    hbm_watermark = 0
     reuse_count = 0
 
     for tid in sorted_tids:
@@ -133,36 +174,13 @@ def _allocate_hbm(
         t.hbm_size = size
         aligned_size = align_up(size, hbm_alignment)
 
-        # 释放已过期且尚未释放的 tensor
-        current_first = lifetimes[tid][0]
-        for other_tid in sorted_tids:
-            if other_tid == tid or other_tid in freed_set:
-                continue
-            other_t = graph.tensors[other_tid]
-            if other_t.hbm_offset is None:
-                continue
-            if lifetimes[other_tid][1] < current_first:
-                free_blocks.append([other_t.hbm_offset, align_up(other_t.hbm_size, hbm_alignment)])
-                freed_set.add(other_tid)
+        _release_expired(graph, sorted_tids, lifetimes, lifetimes[tid][0], freed_set, free_blocks, hbm_alignment)
 
-        # Best-fit: 找最小的满足 aligned_size 的空闲块
-        best_idx = -1
-        best_fit_size = float("inf")
-        for i, (_, sz) in enumerate(free_blocks):
-            if sz >= aligned_size and sz < best_fit_size:
-                best_idx = i
-                best_fit_size = sz
-
-        if best_idx >= 0:
-            blk_off, blk_sz = free_blocks[best_idx]
-            t.hbm_offset = blk_off
-            remaining = blk_sz - aligned_size
-            if remaining > 0:
-                free_blocks[best_idx] = [blk_off + aligned_size, remaining]
-            else:
-                free_blocks.pop(best_idx)
+        offset = _best_fit_alloc(free_blocks, aligned_size)
+        if offset is not None:
+            t.hbm_offset = offset
             reuse_count += 1
-            logger.debug("HBM 复用: %s -> offset=%d, size=%d", tid, blk_off, size)
+            logger.debug("HBM 复用: %s -> offset=%d, size=%d", tid, offset, size)
         else:
             t.hbm_offset = hbm_watermark
             hbm_watermark = t.hbm_offset + aligned_size
