@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
+from typing import Callable, Optional
 
 import numpy as np
 import torch
@@ -25,16 +26,25 @@ from npu_compiler.validator import validator
 
 logger = get_logger(__name__)
 
-def _propagate_input_dtypes(graph: Graph) -> None:
-    """将输入 tensor 的 dtype 设为其首个消费节点的标注 dtype。
 
-    format_annotator 只标注输出 tensor，输入 tensor（模型输入、权重）
-    保留了 graph_capture 的原始 dtype。此函数根据消费者的 format_annotation
-    来推断输入 tensor 应使用的 dtype。
-    """
+# ---- 声明式 Pass 描述 ----
+
+@dataclass(frozen=True)
+class _PassDesc:
+    """中间 Pass 的声明式描述。"""
+    name: str
+    number: str
+    run_fn: Callable
+    config_key: Optional[str]
+    validate_fn: Optional[Callable] = None
+    post_hook: Optional[Callable] = None
+
+
+def _propagate_input_dtypes(graph: Graph) -> None:
+    """将输入 tensor 的 dtype 设为其首个消费节点的标注 dtype。"""
     for t in graph.tensors.values():
         if t.producer_node_id is not None:
-            continue  # 由 format_annotator 通过输出标注处理
+            continue
         if not t.consumer_node_ids:
             continue
         consumer = graph.get_node(t.consumer_node_ids[0])
@@ -43,7 +53,6 @@ def _propagate_input_dtypes(graph: Graph) -> None:
         ann = getattr(consumer, "format_annotation", None)
         if ann is None:
             continue
-        # 找到该 tensor 在 consumer.inputs 中的位置
         idx = None
         for i, tid in enumerate(consumer.inputs):
             if tid == t.id:
@@ -52,6 +61,19 @@ def _propagate_input_dtypes(graph: Graph) -> None:
         if idx is not None and idx < len(ann.get("inputs", [])):
             t.dtype = ann["inputs"][idx]["dtype"]
 
+
+_MIDDLE_PASSES: list[_PassDesc] = [
+    _PassDesc("op_mapping", "②", op_mapping.run, "mapping",
+              op_mapping.post_validate),
+    _PassDesc("op_decomposition", "③", op_decomposition.run, "decomposition",
+              op_decomposition.post_validate),
+    _PassDesc("op_absorption", "④", op_absorption.run, "absorption"),
+    _PassDesc("format_annotator", "⑤", format_annotator.run, "format",
+              format_annotator.post_validate, _propagate_input_dtypes),
+]
+
+
+# ---- 工具函数 ----
 
 def _load_configs(config_dir: str) -> dict:
     """加载全部配置文件。"""
@@ -115,6 +137,8 @@ def _run_post_validation(
         logger.warning("Pass %s 校验: %s", phase, msg)
 
 
+# ---- 主入口 ----
+
 def compile(
     model: nn.Module,
     dummy_input: torch.Tensor,
@@ -141,56 +165,42 @@ def compile(
     configs = _load_configs(config_dir)
     collector = DiagnosticCollector()
 
-    # Pass ① graph_capture
+    # Pass ① graph_capture（特殊：不是 run(graph, config) 模式）
     logger.info("Pass ① graph_capture 开始")
     graph = graph_capture.capture(model, dummy_input, mask=mask)
     _run_post_validation(collector, "graph_capture", graph, graph_capture.post_validate)
     logger.info("Pass ① 完成: %s", graph.summary())
 
-    # Pass ② op_mapping
-    logger.info("Pass ② op_mapping 开始")
-    graph = op_mapping.run(graph, configs["mapping"])
-    _run_post_validation(collector, "op_mapping", graph, op_mapping.post_validate)
-    logger.info("Pass ② 完成")
+    # Pass ②-⑤ 声明式循环
+    for p in _MIDDLE_PASSES:
+        logger.info("Pass %s %s 开始", p.number, p.name)
+        graph = p.run_fn(graph, configs[p.config_key])
+        if p.post_hook:
+            p.post_hook(graph)
+        if p.validate_fn:
+            _run_post_validation(collector, p.name, graph, p.validate_fn)
+        logger.info("Pass %s 完成", p.number)
 
-    # Pass ③ op_decomposition
-    logger.info("Pass ③ op_decomposition 开始")
-    graph = op_decomposition.run(graph, configs["decomposition"])
-    _run_post_validation(collector, "op_decomposition", graph, op_decomposition.post_validate)
-    logger.info("Pass ③ 完成: %s", graph.summary())
-
-    # Pass ④ op_absorption
-    logger.info("Pass ④ op_absorption 开始")
-    graph = op_absorption.run(graph, configs["absorption"])
-    logger.info("Pass ④ 完成: %s", graph.summary())
-
-    # Pass ⑤ format_annotator
-    logger.info("Pass ⑤ format_annotator 开始")
-    graph = format_annotator.run(graph, configs["format"])
-    _propagate_input_dtypes(graph)
-    _run_post_validation(collector, "format_annotator", graph, format_annotator.post_validate)
-    logger.info("Pass ⑤ 完成")
-
-    # Pass ⑥ validator
+    # Pass ⑥ validator（特殊：config 从 signatures 派生）
     logger.info("Pass ⑥ validator 开始")
     validator_cfg = _build_validator_config(configs["signatures"])
     graph = validator.run(graph, validator_cfg)
     logger.info("Pass ⑥ 完成")
 
-    # Pass ⑦ memory_planner
+    # Pass ⑦ memory_planner（特殊：返回 tuple）
     logger.info("Pass ⑦ memory_planner 开始")
     graph, dma_plans = memory_planner.run(graph, configs["hardware"])
     _run_post_validation(collector, "memory_planner", graph, memory_planner.post_validate)
     logger.info("Pass ⑦ 完成")
 
-    # Pass ⑧ scheduler
+    # Pass ⑧ scheduler（特殊：无 config）
     logger.info("Pass ⑧ scheduler 开始")
     graph = scheduler.run(graph)
     logger.info("Pass ⑧ 完成")
 
     logger.info(collector.summary())
 
-    # Pass ⑨ codegen
+    # Pass ⑨ codegen（特殊：多个子 emitter）
     logger.info("Pass ⑨ codegen 开始")
     plan = _build_codegen_plan(graph, dma_plans)
 

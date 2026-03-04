@@ -1,3 +1,4 @@
+# TEST FIXTURE — 生产配置在 integration/config/
 # 支持的 NPU 算子列表
 
 supported_ops:

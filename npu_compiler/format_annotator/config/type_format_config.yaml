@@ -1,3 +1,4 @@
+# TEST FIXTURE — 生产配置在 integration/config/
 # NPU 算子 format/dtype 配置
 
 op_format_requirements:

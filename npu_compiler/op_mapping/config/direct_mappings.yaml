@@ -1,3 +1,4 @@
+# TEST FIXTURE — 生产配置在 integration/config/
 # ATen → NPU 算子直接映射表
 # 算子名为 torch.export 输出的全称
 

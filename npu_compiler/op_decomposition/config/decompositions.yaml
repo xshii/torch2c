@@ -1,3 +1,4 @@
+# TEST FIXTURE — 生产配置在 integration/config/
 # 算子裂解规则：将未映射的 ATen 算子替换为固定 NPU 算子组
 # 中间 tensor shape = 源算子输入 shape（§16.5）
 

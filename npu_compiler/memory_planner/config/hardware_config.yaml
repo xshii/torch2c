@@ -1,3 +1,4 @@
+# TEST FIXTURE — 生产配置在 integration/config/
 memory:
   hbm:
     total_size_bytes: 4294967296
