@@ -6,7 +6,7 @@ import pathlib
 
 from ...common.config_loader import load_config
 from ...common.graph_ir import Graph, Node, Tensor
-from ..op_decomposition import run
+from ..op_decomposition import post_validate, run
 
 _CONFIG_PATH = str(
     pathlib.Path(__file__).parent.parent / "config" / "decompositions.yaml"
@@ -221,3 +221,25 @@ def test_multi_output_decompose():
     t_rstd = g.get_tensor("t_rstd")
     assert t_mean.producer_node_id is None
     assert t_rstd.producer_node_id is None
+
+
+class TestPostValidate:
+    def test_valid(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16"))
+        g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16",
+                            producer_node_id="n0"))
+        g.add_node(Node(id="n0", op_type="npu_gelu", inputs=["t0"],
+                        outputs=["t1"], is_mapped=True, npu_op="npu_gelu",
+                        compute_unit="vector"))
+        assert post_validate(g) == []
+
+    def test_missing_compute_unit(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16"))
+        g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16",
+                            producer_node_id="n0"))
+        g.add_node(Node(id="n0", op_type="npu_gelu", inputs=["t0"],
+                        outputs=["t1"], is_mapped=True, npu_op="npu_gelu"))
+        errors = post_validate(g)
+        assert any("compute_unit" in e for e in errors)

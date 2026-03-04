@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from npu_compiler.common import Graph, Node, Tensor
-from npu_compiler.format_annotator import run
+from npu_compiler.format_annotator import post_validate, run
 
 _CONFIG = {
     "op_format_requirements": {
@@ -94,3 +94,20 @@ def test_annotation_structure():
     add_ann = add_node.format_annotation
     assert add_ann is not None
     assert add_ann["inputs"][0]["format"] == "nd"
+
+
+class TestPostValidate:
+    def test_valid(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16",
+                            producer_node_id="n0"))
+        g.add_node(Node(id="n0", op_type="op", outputs=["t0"]))
+        assert post_validate(g) == []
+
+    def test_missing_dtype(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1], dtype="",
+                            producer_node_id="n0"))
+        g.add_node(Node(id="n0", op_type="op", outputs=["t0"]))
+        errors = post_validate(g)
+        assert any("dtype" in e for e in errors)

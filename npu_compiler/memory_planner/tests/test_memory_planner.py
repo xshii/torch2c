@@ -10,6 +10,7 @@ from npu_compiler.memory_planner.memory_planner import (
     DmaPlan,
     align_up,
     calc_padded_size,
+    post_validate,
 )
 from npu_compiler.common.errors import MemoryPlanError
 
@@ -369,3 +370,21 @@ class TestL1OnlyOptimization:
         # 所有 tensor 有 l1_offset
         for t in g.tensors.values():
             assert t.l1_offset is not None
+
+
+class TestPostValidate:
+    def test_valid(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16",
+                            is_model_output=True,
+                            hbm_offset=0, hbm_size=2, l1_offset=0))
+        assert post_validate(g) == []
+
+    def test_missing_offsets(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16",
+                            is_model_output=True))
+        errors = post_validate(g)
+        assert any("hbm_offset" in e for e in errors)
+        assert any("hbm_size" in e for e in errors)
+        assert any("l1_offset" in e for e in errors)

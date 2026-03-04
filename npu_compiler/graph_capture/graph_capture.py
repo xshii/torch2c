@@ -288,6 +288,22 @@ def _handle_call(graph, fx_node, fx_map, tgen, ngen):
                  nid, op, input_tids, output_tids)
 
 
+def post_validate(graph: Graph) -> list[str]:
+    """graph_capture 后的校验：权重需要 name，输入需要 dtype/shape。"""
+    errors: list[str] = []
+    for t in graph.tensors.values():
+        if t.is_weight and not t.name:
+            errors.append(f"权重 tensor {t.id} 缺少 name 字段")
+        if t.is_model_input and not t.dtype:
+            errors.append(f"模型输入 tensor {t.id} 缺少 dtype")
+        if t.is_model_input and not t.shape:
+            errors.append(f"模型输入 tensor {t.id} 缺少 shape")
+    for n in graph.nodes.values():
+        if not n.op_type:
+            errors.append(f"节点 {n.id} 缺少 op_type")
+    return errors
+
+
 def _handle_output(graph, fx_node, fx_map):
     """处理 output 节点，标记模型输出张量。"""
     output_args = fx_node.args[0] if fx_node.args else ()

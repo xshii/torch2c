@@ -53,3 +53,12 @@ def run(graph: Graph, config: dict) -> Graph:
 
     logger.info("Format标注完成。标注了%d个节点，%d个tensor", annotated_nodes, updated_tensors)
     return graph
+
+
+def post_validate(graph: Graph) -> list[str]:
+    """format_annotator 后的校验：有 producer 的 tensor 必须有 dtype。"""
+    errors: list[str] = []
+    for t in graph.tensors.values():
+        if t.producer_node_id is not None and not t.dtype:
+            errors.append(f"有 producer 的 tensor {t.id} 缺少 dtype")
+    return errors

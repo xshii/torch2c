@@ -423,3 +423,19 @@ def run(graph: Graph, config: dict) -> tuple[Graph, list[DmaPlan]]:
         allocated, reuse_count, len(dma_plans),
     )
     return graph, dma_plans
+
+
+def post_validate(graph: Graph) -> list[str]:
+    """memory_planner 后的校验：有消费者或是输出的 tensor 必须有内存偏移。"""
+    errors: list[str] = []
+    for t in graph.tensors.values():
+        needs_mem = t.consumer_node_ids or t.is_model_output
+        if not needs_mem:
+            continue
+        if t.hbm_offset is None:
+            errors.append(f"tensor {t.id} 缺少 hbm_offset")
+        if t.hbm_size is None:
+            errors.append(f"tensor {t.id} 缺少 hbm_size")
+        if t.l1_offset is None:
+            errors.append(f"tensor {t.id} 缺少 l1_offset")
+    return errors

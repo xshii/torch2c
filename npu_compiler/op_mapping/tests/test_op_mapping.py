@@ -6,7 +6,7 @@ import pathlib
 
 from ...common.config_loader import load_config
 from ...common.graph_ir import Graph, Node, Tensor
-from ..op_mapping import run
+from ..op_mapping import post_validate, run
 
 _CONFIG_PATH = str(
     pathlib.Path(__file__).parent.parent / "config" / "direct_mappings.yaml"
@@ -127,3 +127,24 @@ def test_mixed_mapped_unmapped():
     assert g.get_node("n0").is_mapped  # mm → npu_matmul
     assert not g.get_node("n1").is_mapped  # layer_norm 不在直接映射表
     assert g.get_node("n2").is_mapped  # add → npu_add
+
+
+class TestPostValidate:
+    def test_valid(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16"))
+        g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16",
+                            producer_node_id="n0"))
+        g.add_node(Node(id="n0", op_type="npu_add", inputs=["t0"],
+                        outputs=["t1"], is_mapped=True, npu_op="npu_add"))
+        assert post_validate(g) == []
+
+    def test_missing_npu_op(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16"))
+        g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16",
+                            producer_node_id="n0"))
+        g.add_node(Node(id="n0", op_type="npu_add", inputs=["t0"],
+                        outputs=["t1"], is_mapped=True))
+        errors = post_validate(g)
+        assert any("npu_op" in e for e in errors)

@@ -6,8 +6,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ...common.graph_ir import Graph
-from ..graph_capture import capture
+from ...common.graph_ir import Graph, Node, Tensor
+from ..graph_capture import capture, post_validate
 
 
 # ---- WI-3 新增: addmm/param/dim 处理测试 ----
@@ -264,3 +264,39 @@ def test_producer_consumer_consistency():
             assert node.id in t.consumer_node_ids, (
                 f"Node {node.id} not in tensor {in_tid} consumers"
             )
+
+
+class TestPostValidate:
+    def test_valid(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1, 16], dtype="fp16",
+                            is_model_input=True))
+        g.add_tensor(Tensor(id="tw", shape=[16, 16], dtype="fp16",
+                            is_weight=True, name="linear.weight"))
+        g.add_tensor(Tensor(id="t1", shape=[1, 16], dtype="fp16",
+                            producer_node_id="n0"))
+        g.add_node(Node(id="n0", op_type="aten.mm", inputs=["t0", "tw"],
+                        outputs=["t1"]))
+        assert post_validate(g) == []
+
+    def test_missing_weight_name(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="tw", shape=[16], dtype="fp16",
+                            is_weight=True))
+        g.add_tensor(Tensor(id="t1", shape=[16], dtype="fp16",
+                            producer_node_id="n0"))
+        g.add_node(Node(id="n0", op_type="aten.mm", inputs=["tw"],
+                        outputs=["t1"]))
+        errors = post_validate(g)
+        assert any("name" in e for e in errors)
+
+    def test_missing_input_dtype(self):
+        g = Graph()
+        g.add_tensor(Tensor(id="t0", shape=[1, 16], dtype="",
+                            is_model_input=True))
+        g.add_tensor(Tensor(id="t1", shape=[1, 16], dtype="fp16",
+                            producer_node_id="n0"))
+        g.add_node(Node(id="n0", op_type="aten.mm", inputs=["t0"],
+                        outputs=["t1"]))
+        errors = post_validate(g)
+        assert any("dtype" in e for e in errors)

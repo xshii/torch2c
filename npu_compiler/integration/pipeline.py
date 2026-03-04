@@ -104,9 +104,13 @@ def _run_post_validation(
     collector: DiagnosticCollector,
     phase: str,
     graph: Graph,
+    validate_fn=None,
 ) -> None:
-    """收集指定阶段的校验诊断。"""
-    for msg in graph.validate_phase(phase):
+    """收集阶段校验诊断。优先使用 Pass 模块的 post_validate。"""
+    errors = graph.validate()
+    if validate_fn is not None:
+        errors.extend(validate_fn(graph))
+    for msg in errors:
         collector.warn(phase, msg)
         logger.warning("Pass %s 校验: %s", phase, msg)
 
@@ -140,19 +144,19 @@ def compile(
     # Pass ① graph_capture
     logger.info("Pass ① graph_capture 开始")
     graph = graph_capture.capture(model, dummy_input, mask=mask)
-    _run_post_validation(collector, "graph_capture", graph)
+    _run_post_validation(collector, "graph_capture", graph, graph_capture.post_validate)
     logger.info("Pass ① 完成: %s", graph.summary())
 
     # Pass ② op_mapping
     logger.info("Pass ② op_mapping 开始")
     graph = op_mapping.run(graph, configs["mapping"])
-    _run_post_validation(collector, "op_mapping", graph)
+    _run_post_validation(collector, "op_mapping", graph, op_mapping.post_validate)
     logger.info("Pass ② 完成")
 
     # Pass ③ op_decomposition
     logger.info("Pass ③ op_decomposition 开始")
     graph = op_decomposition.run(graph, configs["decomposition"])
-    _run_post_validation(collector, "op_decomposition", graph)
+    _run_post_validation(collector, "op_decomposition", graph, op_decomposition.post_validate)
     logger.info("Pass ③ 完成: %s", graph.summary())
 
     # Pass ④ op_absorption
@@ -164,7 +168,7 @@ def compile(
     logger.info("Pass ⑤ format_annotator 开始")
     graph = format_annotator.run(graph, configs["format"])
     _propagate_input_dtypes(graph)
-    _run_post_validation(collector, "format_annotator", graph)
+    _run_post_validation(collector, "format_annotator", graph, format_annotator.post_validate)
     logger.info("Pass ⑤ 完成")
 
     # Pass ⑥ validator
@@ -176,7 +180,7 @@ def compile(
     # Pass ⑦ memory_planner
     logger.info("Pass ⑦ memory_planner 开始")
     graph, dma_plans = memory_planner.run(graph, configs["hardware"])
-    _run_post_validation(collector, "memory_planner", graph)
+    _run_post_validation(collector, "memory_planner", graph, memory_planner.post_validate)
     logger.info("Pass ⑦ 完成")
 
     # Pass ⑧ scheduler

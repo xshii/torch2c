@@ -138,3 +138,16 @@ def _decompose_node(graph: Graph, node: Node, rule: dict) -> tuple[int, int]:
         graph.nodes[new_n.id] = new_n
 
     return len(new_nodes), len(intermediates)
+
+
+def post_validate(graph: Graph) -> list[str]:
+    """op_decomposition 后的校验：所有节点必须已映射并有 npu_op/compute_unit。"""
+    errors: list[str] = []
+    for n in graph.nodes.values():
+        if not n.is_mapped:
+            errors.append(f"节点 {n.id} 未映射 (is_mapped=False)")
+        if not n.npu_op:
+            errors.append(f"节点 {n.id} 缺少 npu_op")
+        if not n.compute_unit:
+            errors.append(f"节点 {n.id} 缺少 compute_unit")
+    return errors
