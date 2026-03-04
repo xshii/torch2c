@@ -21,6 +21,7 @@ PARAM_RENAMES: dict[str, dict[str, str]] = _RULES.get("param_renames", {})
 INPUT_REORDER: dict[str, list[int]] = _RULES.get("input_reorder", {})
 DIM_TO_SIZE_OPS: set[str] = set(_RULES.get("dim_to_size_ops", []))
 PARAM_DEFAULTS: dict[str, dict[str, Any]] = _RULES.get("param_defaults", {})
+WEIGHT_TRANSPOSE_INPUT: dict[str, int] = _RULES.get("weight_transpose_input", {})
 
 # ── dtype 映射 (torch 对象，不能放 YAML) ──────────────
 

@@ -87,6 +87,26 @@ op_format_requirements:
     supports_format_convert: false
     supports_dtype_cast: false
 
+  npu_softmax:
+    inputs:
+      - { format: nd, dtype: fp16 }
+    outputs:
+      - { format: nd, dtype: fp16 }
+    compute_dtype: fp16
+    supports_format_convert: true
+    supports_dtype_cast: true
+
+  npu_layernorm:
+    inputs:
+      - { format: nd, dtype: fp16 }
+      - { format: nd, dtype: fp16 }
+      - { format: nd, dtype: fp16 }
+    outputs:
+      - { format: nd, dtype: fp16 }
+    compute_dtype: fp32
+    supports_format_convert: true
+    supports_dtype_cast: true
+
   npu_layernorm_part1:
     inputs:
       - { format: nd, dtype: fp16 }

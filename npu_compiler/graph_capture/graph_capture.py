@@ -16,6 +16,7 @@ from ._constants import (
     INPUT_REORDER,
     PARAM_DEFAULTS,
     PARAM_RENAMES,
+    WEIGHT_TRANSPOSE_INPUT,
     dtype_str,
     is_tensor_overload,
     op_name,
@@ -238,6 +239,40 @@ def _create_call_outputs(
     return output_tids
 
 
+def _insert_weight_transpose(
+    graph: Graph, input_tids: list[str], weight_idx: int, tgen: _IdGen, ngen: _IdGen,
+) -> list[str]:
+    """为 linear 等算子的 weight 输入插入 transpose_2d 节点。
+
+    PyTorch nn.Linear weight shape = [out, in]，需转置为 [in, out]
+    才能用 npu_matmul_bias(a @ b + bias) 正确计算。
+    """
+    weight_tid = input_tids[weight_idx]
+    weight_t = graph.get_tensor(weight_tid)
+    if weight_t is None or len(weight_t.shape) != 2:
+        return input_tids
+
+    tr_nid = ngen.next()
+    tr_out_tid = tgen.next()
+    transposed_shape = [weight_t.shape[1], weight_t.shape[0]]
+    tr_out = Tensor(
+        id=tr_out_tid, shape=transposed_shape, dtype=weight_t.dtype,
+        producer_node_id=tr_nid,
+    )
+    graph.add_tensor(tr_out)
+
+    weight_t.consumer_node_ids.append(tr_nid)
+    tr_node = Node(
+        id=tr_nid, op_type="aten.t.default",
+        inputs=[weight_tid], outputs=[tr_out_tid], params={},
+    )
+    graph.add_node(tr_node)
+
+    new_tids = list(input_tids)
+    new_tids[weight_idx] = tr_out_tid
+    return new_tids
+
+
 def _handle_call(
     graph: Graph, fx_node: torch.fx.Node, fx_map: _FxMap, tgen: _IdGen, ngen: _IdGen,
 ) -> None:
@@ -256,6 +291,12 @@ def _handle_call(
         tensor_overload,
     )
     input_tids, params = _normalize_op_inputs(op, input_tids, params)
+
+    # linear 等算子需要对 weight 做转置
+    wt_idx = WEIGHT_TRANSPOSE_INPUT.get(op)
+    if wt_idx is not None and wt_idx < len(input_tids):
+        input_tids = _insert_weight_transpose(graph, input_tids, wt_idx, tgen, ngen)
+
     output_tids = _create_call_outputs(graph, fx_node, fx_map, tgen, nid)
 
     for itid in input_tids:
