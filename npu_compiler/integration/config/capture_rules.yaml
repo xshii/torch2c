@@ -1,6 +1,7 @@
 # graph_capture 规则配置
 # param_renames: 将 positional param 名重命名为 codegen 期望的 param 名
 # input_reorder: 输入 tensor 重排规则
+# param_defaults: 当参数缺失时补充默认值
 
 param_renames:
   aten.transpose.int:
@@ -8,7 +9,13 @@ param_renames:
     p1: dim1
   aten._softmax.default:
     p0: dim
+  aten.softmax.int:
+    p0: dim
   aten.native_layer_norm.default:
+    p1: epsilon
+    eps: epsilon
+  aten.layer_norm.default:
+    p0: normalized_shape
     p1: epsilon
     eps: epsilon
 
@@ -19,3 +26,11 @@ input_reorder:
 # 需要将 dim 索引转换为维度大小的算子
 dim_to_size_ops:
   - aten._softmax.default
+  - aten.softmax.int
+
+# 当参数缺失时补充默认值
+param_defaults:
+  aten.layer_norm.default:
+    epsilon: 1.0e-5
+  aten.native_layer_norm.default:
+    epsilon: 1.0e-5

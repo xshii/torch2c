@@ -84,7 +84,7 @@ def test_capture_linear():
 
     assert len(graph.nodes) > 0
     op_types = {n.op_type for n in graph.nodes.values()}
-    assert any("mm" in op for op in op_types), f"Expected mm-related op, got {op_types}"
+    assert any("mm" in op or "linear" in op for op in op_types), f"Expected mm/linear-related op, got {op_types}"
 
 
 # ---- test_capture_encoder ----
@@ -199,7 +199,12 @@ def test_scalar_constant_tensor():
 
 
 def test_multi_output_layernorm():
-    """LayerNorm 多输出：output, mean, rstd 全部创建为 Tensor。"""
+    """LayerNorm 导出后节点存在且输出 tensor 存在于 graph 中。
+
+    注意：PyTorch 2.4+ 的 torch.export 将 LayerNorm 导出为
+    aten.layer_norm.default（单输出），而非旧版 aten.native_layer_norm.default
+    （三输出：output, mean, rstd）。两种情况均应被正确处理。
+    """
 
     class LNModel(nn.Module):
         def __init__(self):
@@ -215,7 +220,6 @@ def test_multi_output_layernorm():
 
     graph = capture(model, dummy)
 
-    # native_layer_norm 返回 (output, mean, rstd)
     ln_nodes = [
         n
         for n in graph.nodes.values()
@@ -224,10 +228,16 @@ def test_multi_output_layernorm():
     assert len(ln_nodes) >= 1, "Expected at least 1 layer_norm node"
 
     ln_node = ln_nodes[0]
-    # 应有 3 个输出 tensor
-    assert len(ln_node.outputs) == 3, (
-        f"layer_norm should have 3 outputs, got {len(ln_node.outputs)}"
-    )
+    if "native_layer_norm" in ln_node.op_type:
+        # 旧版：3 输出 (output, mean, rstd)
+        assert len(ln_node.outputs) == 3, (
+            f"native_layer_norm should have 3 outputs, got {len(ln_node.outputs)}"
+        )
+    else:
+        # 新版 aten.layer_norm.default：单输出
+        assert len(ln_node.outputs) >= 1, (
+            f"layer_norm should have at least 1 output, got {len(ln_node.outputs)}"
+        )
     for out_tid in ln_node.outputs:
         assert out_tid in graph.tensors, f"Output tensor {out_tid} missing from graph"
 

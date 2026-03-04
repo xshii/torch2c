@@ -11,6 +11,9 @@ mappings:
   aten.bmm.default:
     npu_op: npu_matmul
     compute_unit: cube
+  aten.linear.default:
+    npu_op: npu_matmul_bias
+    compute_unit: cube
   aten.add.Tensor:
     npu_op: npu_add
     compute_unit: vector
@@ -19,6 +22,18 @@ mappings:
     compute_unit: vector
   aten.gelu.default:
     npu_op: npu_gelu
+    compute_unit: vector
+  aten._softmax.default:
+    npu_op: npu_softmax
+    compute_unit: vector
+  aten.softmax.int:
+    npu_op: npu_softmax
+    compute_unit: vector
+  aten.native_layer_norm.default:
+    npu_op: npu_layernorm
+    compute_unit: vector
+  aten.layer_norm.default:
+    npu_op: npu_layernorm
     compute_unit: vector
   aten.transpose.int:
     npu_op: npu_transpose

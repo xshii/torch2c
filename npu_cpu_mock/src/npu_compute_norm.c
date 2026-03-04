@@ -2,6 +2,11 @@
 #include <math.h>
 #include <string.h>
 
+void npu_layernorm(void* input, void* gamma, void* beta, void* out,
+                   int hidden, int seq, float eps, npu_dtype_t dtype) {
+    npu_layernorm_part1(input, gamma, beta, out, hidden, seq, eps, dtype);
+}
+
 void npu_layernorm_part1(void* input, void* gamma, void* beta, void* out,
                          int hidden, int seq, float eps, npu_dtype_t dtype) {
     for (int s = 0; s < seq; s++) {

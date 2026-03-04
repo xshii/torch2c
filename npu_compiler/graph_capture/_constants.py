@@ -20,6 +20,7 @@ _RULES = load_config(str(_CONFIG_PATH))
 PARAM_RENAMES: dict[str, dict[str, str]] = _RULES.get("param_renames", {})
 INPUT_REORDER: dict[str, list[int]] = _RULES.get("input_reorder", {})
 DIM_TO_SIZE_OPS: set[str] = set(_RULES.get("dim_to_size_ops", []))
+PARAM_DEFAULTS: dict[str, dict[str, Any]] = _RULES.get("param_defaults", {})
 
 # ── dtype 映射 (torch 对象，不能放 YAML) ──────────────
 

@@ -14,6 +14,7 @@ from ..common.logger import get_logger
 from ._constants import (
     DIM_TO_SIZE_OPS,
     INPUT_REORDER,
+    PARAM_DEFAULTS,
     PARAM_RENAMES,
     dtype_str,
     is_tensor_overload,
@@ -196,6 +197,13 @@ def _normalize_op_inputs(
         for old_key, new_key in renames.items():
             if old_key in params and new_key not in params:
                 params[new_key] = params.pop(old_key)
+
+    # 缺失参数补充默认值
+    defaults = PARAM_DEFAULTS.get(op)
+    if defaults:
+        for key, val in defaults.items():
+            if key not in params:
+                params[key] = val
 
     return input_tids, params
 

@@ -55,6 +55,25 @@ compute_ops:
       - { name: "count",  type: "int",   source: "tensor.input_0.elem_count" }
       - { name: "dtype",  type: "enum",  source: "tensor.input_0.dtype" }
 
+  npu_softmax:
+    params:
+      - { name: "input",  type: "addr",  source: "tensor.input_0.l1_offset" }
+      - { name: "out",    type: "addr",  source: "tensor.output_0.l1_offset" }
+      - { name: "dim",    type: "int",   source: "param.dim" }
+      - { name: "count",  type: "int",   source: "tensor.input_0.elem_count" }
+      - { name: "dtype",  type: "enum",  source: "tensor.input_0.dtype" }
+
+  npu_layernorm:
+    params:
+      - { name: "input",    type: "addr",  source: "tensor.input_0.l1_offset" }
+      - { name: "gamma",    type: "addr",  source: "tensor.input_1.l1_offset" }
+      - { name: "beta",     type: "addr",  source: "tensor.input_2.l1_offset" }
+      - { name: "out",      type: "addr",  source: "tensor.output_0.l1_offset" }
+      - { name: "hidden",   type: "int",   source: "tensor.input_0.shape.-1" }
+      - { name: "seq",      type: "int",   source: "tensor.input_0.shape.-2" }
+      - { name: "eps",      type: "float", source: "param.epsilon" }
+      - { name: "dtype",    type: "enum",  source: "tensor.input_0.dtype" }
+
   npu_layernorm_part1:
     params:
       - { name: "input",    type: "addr",  source: "tensor.input_0.l1_offset" }

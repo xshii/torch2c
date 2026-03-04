@@ -40,10 +40,13 @@ void npu_mul(void* a, void* b, void* out, int count, npu_dtype_t dtype);
 void npu_mul_scalar(void* input, void* out, float scalar, int count, npu_dtype_t dtype);
 void npu_gelu(void* input, void* out, int count, npu_dtype_t dtype);
 
+void npu_layernorm(void* input, void* gamma, void* beta, void* out,
+                   int hidden, int seq, float eps, npu_dtype_t dtype);
 void npu_layernorm_part1(void* input, void* gamma, void* beta, void* out,
                          int hidden, int seq, float eps, npu_dtype_t dtype);
 void npu_layernorm_part2(void* inter, void* orig, void* out, int size, npu_dtype_t dtype);
 
+void npu_softmax(void* input, void* out, int dim, int count, npu_dtype_t dtype);
 void npu_softmax_part1(void* input, void* out, int dim, int count, npu_dtype_t dtype);
 void npu_softmax_part2(void* inter, void* out, int size, npu_dtype_t dtype);
 void npu_softmax_mask(void* input, void* out, const uint8_t* mask,

@@ -2,6 +2,10 @@
 #include <math.h>
 #include <string.h>
 
+void npu_softmax(void* input, void* out, int dim, int count, npu_dtype_t dtype) {
+    npu_softmax_part1(input, out, dim, count, dtype);
+}
+
 void npu_softmax_part1(void* input, void* out, int dim, int count, npu_dtype_t dtype) {
     int rows = count / dim;
     for (int r = 0; r < rows; r++) {
