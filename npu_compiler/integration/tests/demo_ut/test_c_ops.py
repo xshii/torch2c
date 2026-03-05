@@ -639,3 +639,188 @@ int main(void) {{
         actual = _read_bin(os.path.join(workdir, "out.bin"), np.float16, seq * d).reshape(seq, d)
         r = _compare(actual, expected, atol=5e-3, cos_tol=0.995)
         assert r["passed"], f"attention: max_abs={r['max_abs']:.6f}, cosine={r['cosine']:.6f}"
+
+
+class TestMultiHeadAttention:
+    """组合测试: 多头注意力 — Wq/Wk/Wv 投影 -> reshape -> 逐头 Q@K^T -> softmax -> @V -> concat -> Wo 投影"""
+
+    def test_multi_head_attention(self, tmp_path):
+        num_heads, seq, d_model = 2, 4, 8
+        head_dim = d_model // num_heads  # 4
+        rng = np.random.RandomState(55)
+
+        x = rng.randn(seq, d_model).astype(np.float16)
+        wq = rng.randn(d_model, d_model).astype(np.float16)
+        wk = rng.randn(d_model, d_model).astype(np.float16)
+        wv = rng.randn(d_model, d_model).astype(np.float16)
+        wo = rng.randn(d_model, d_model).astype(np.float16)
+
+        # --- numpy golden ---
+        xf = x.astype(np.float32)
+        wqf, wkf, wvf, wof = (
+            wq.astype(np.float32),
+            wk.astype(np.float32),
+            wv.astype(np.float32),
+            wo.astype(np.float32),
+        )
+
+        # linear projections (truncate to fp16 like the C path)
+        q_proj = (xf @ wqf).astype(np.float16).astype(np.float32)  # (seq, d_model)
+        k_proj = (xf @ wkf).astype(np.float16).astype(np.float32)
+        v_proj = (xf @ wvf).astype(np.float16).astype(np.float32)
+
+        # reshape to (num_heads, seq, head_dim) — contiguous in memory
+        q_heads = q_proj.reshape(seq, num_heads, head_dim).transpose(1, 0, 2)
+        k_heads = k_proj.reshape(seq, num_heads, head_dim).transpose(1, 0, 2)
+        v_heads = v_proj.reshape(seq, num_heads, head_dim).transpose(1, 0, 2)
+
+        # per-head attention
+        head_outs = []
+        for h in range(num_heads):
+            qh = q_heads[h].astype(np.float16).astype(np.float32)
+            kh = k_heads[h].astype(np.float16).astype(np.float32)
+            vh = v_heads[h].astype(np.float16).astype(np.float32)
+            scores = (qh @ kh.T).astype(np.float16).astype(np.float32)
+            scores = scores * (1.0 / math.sqrt(head_dim))
+            scores = scores.astype(np.float16).astype(np.float32)
+            exp_s = np.exp(scores - scores.max(axis=-1, keepdims=True))
+            attn = (exp_s / exp_s.sum(axis=-1, keepdims=True)).astype(np.float16)
+            out_h = (attn.astype(np.float32) @ vh).astype(np.float16)
+            head_outs.append(out_h)
+
+        # concat heads -> (seq, d_model)
+        concat = np.concatenate(head_outs, axis=-1).astype(np.float16)
+        expected = (concat.astype(np.float32) @ wof).astype(np.float16)
+
+        # --- write inputs ---
+        workdir = str(tmp_path)
+        _write_bin(os.path.join(workdir, "x.bin"), x)
+        _write_bin(os.path.join(workdir, "wq.bin"), wq)
+        _write_bin(os.path.join(workdir, "wk.bin"), wk)
+        _write_bin(os.path.join(workdir, "wv.bin"), wv)
+        _write_bin(os.path.join(workdir, "wo.bin"), wo)
+
+        # L1 memory layout (byte offsets, each slot = 1024 bytes)
+        off_x = 0           # x:         seq*d_model*2 = 64
+        off_wq = 1024       # wq:        d_model*d_model*2 = 128
+        off_wk = 2048       # wk
+        off_wv = 3072       # wv
+        off_wo = 4096       # wo
+        off_q = 5120        # q_proj:    seq*d_model*2 = 64
+        off_k = 6144        # k_proj
+        off_v = 7168        # v_proj
+        # per-head working buffers (need head0 and head1 data interleaved)
+        off_qh = 8192       # q heads reshaped: num_heads*seq*head_dim*2 = 64
+        off_kh = 9216       # k heads reshaped
+        off_vh = 10240      # v heads reshaped
+        off_kht = 11264     # k^T per head (batched)
+        off_scores = 12288  # scores: num_heads*seq*seq*2 = 64
+        off_scaled = 13312  # scaled scores
+        off_sm = 14336      # softmax intermediate
+        off_attn = 15360    # softmax output
+        off_head_out = 16384  # per-head output: num_heads*seq*head_dim*2 = 64
+        off_concat = 17408  # concat: seq*d_model*2 = 64
+        off_out = 18432     # final output
+
+        scale = 1.0 / math.sqrt(head_dim)
+
+        c_code = _C_PREAMBLE + f"""
+int main(void) {{
+    l1_init();
+    load_file("x.bin",  l1 + {off_x},  {seq * d_model * 2});
+    load_file("wq.bin", l1 + {off_wq}, {d_model * d_model * 2});
+    load_file("wk.bin", l1 + {off_wk}, {d_model * d_model * 2});
+    load_file("wv.bin", l1 + {off_wv}, {d_model * d_model * 2});
+    load_file("wo.bin", l1 + {off_wo}, {d_model * d_model * 2});
+
+    /* Q = x @ Wq */
+    cube_matmul(T({off_x}, NPU_DTYPE_FP16), T({off_wq}, NPU_DTYPE_FP16),
+                T({off_q}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP16);
+    /* K = x @ Wk */
+    cube_matmul(T({off_x}, NPU_DTYPE_FP16), T({off_wk}, NPU_DTYPE_FP16),
+                T({off_k}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP16);
+    /* V = x @ Wv */
+    cube_matmul(T({off_x}, NPU_DTYPE_FP16), T({off_wv}, NPU_DTYPE_FP16),
+                T({off_v}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP16);
+
+    /* reshape Q/K/V from (seq, d_model) to (num_heads, seq, head_dim)
+       memory: row i of (seq, d_model) has [h0_dim0..h0_dim3, h1_dim0..h1_dim3]
+       we need (num_heads, seq, head_dim): head h, row i -> offset h*seq*head_dim + i*head_dim
+       i.e. deinterleave heads */
+    {{
+        const uint16_t* src_q = (const uint16_t*)(l1 + {off_q});
+        const uint16_t* src_k = (const uint16_t*)(l1 + {off_k});
+        const uint16_t* src_v = (const uint16_t*)(l1 + {off_v});
+        uint16_t* dst_q = (uint16_t*)(l1 + {off_qh});
+        uint16_t* dst_k = (uint16_t*)(l1 + {off_kh});
+        uint16_t* dst_v = (uint16_t*)(l1 + {off_vh});
+        for (int i = 0; i < {seq}; i++) {{
+            for (int h = 0; h < {num_heads}; h++) {{
+                for (int j = 0; j < {head_dim}; j++) {{
+                    int src_idx = i * {d_model} + h * {head_dim} + j;
+                    int dst_idx = h * {seq} * {head_dim} + i * {head_dim} + j;
+                    dst_q[dst_idx] = src_q[src_idx];
+                    dst_k[dst_idx] = src_k[src_idx];
+                    dst_v[dst_idx] = src_v[src_idx];
+                }}
+            }}
+        }}
+    }}
+
+    /* transpose K per head: (num_heads, seq, head_dim) -> (num_heads, head_dim, seq) */
+    for (int h = 0; h < {num_heads}; h++) {{
+        int kh_off = {off_kh} + h * {seq * head_dim * 2};
+        int kht_off = {off_kht} + h * {seq * head_dim * 2};
+        vector_transpose_2d(T(kh_off, NPU_DTYPE_FP16), T(kht_off, NPU_DTYPE_FP16),
+                            {seq}, {head_dim}, NPU_DTYPE_FP16);
+    }}
+
+    /* batched scores = Q_heads @ K_heads^T, using loop={num_heads} */
+    cube_matmul(T({off_qh}, NPU_DTYPE_FP16), T({off_kht}, NPU_DTYPE_FP16),
+                T({off_scores}, NPU_DTYPE_FP16), {num_heads}, {seq}, {seq}, {head_dim}, NPU_DTYPE_FP16);
+
+    /* scale scores by 1/sqrt(head_dim) */
+    vector_mul_scalar(T({off_scores}, NPU_DTYPE_FP16), T({off_scaled}, NPU_DTYPE_FP16),
+                      {scale}f, {num_heads * seq * seq}, NPU_DTYPE_FP16);
+
+    /* softmax over last dim (seq) for each row across all heads */
+    vector_softmax_part1(T({off_scaled}, NPU_DTYPE_FP16), T({off_sm}, NPU_DTYPE_FP16),
+                         {seq}, {num_heads * seq * seq}, NPU_DTYPE_FP16);
+    vector_softmax_part2(T({off_sm}, NPU_DTYPE_FP16), T({off_attn}, NPU_DTYPE_FP16),
+                         {num_heads * seq * seq * 2}, NPU_DTYPE_FP16);
+
+    /* batched out = attn @ V_heads, loop={num_heads} */
+    cube_matmul(T({off_attn}, NPU_DTYPE_FP16), T({off_vh}, NPU_DTYPE_FP16),
+                T({off_head_out}, NPU_DTYPE_FP16), {num_heads}, {seq}, {head_dim}, {seq}, NPU_DTYPE_FP16);
+
+    /* concat heads: (num_heads, seq, head_dim) -> (seq, d_model) */
+    {{
+        const uint16_t* src = (const uint16_t*)(l1 + {off_head_out});
+        uint16_t* dst = (uint16_t*)(l1 + {off_concat});
+        for (int i = 0; i < {seq}; i++) {{
+            for (int h = 0; h < {num_heads}; h++) {{
+                for (int j = 0; j < {head_dim}; j++) {{
+                    int src_idx = h * {seq} * {head_dim} + i * {head_dim} + j;
+                    int dst_idx = i * {d_model} + h * {head_dim} + j;
+                    dst[dst_idx] = src[src_idx];
+                }}
+            }}
+        }}
+    }}
+
+    /* output projection: out = concat @ Wo */
+    cube_matmul(T({off_concat}, NPU_DTYPE_FP16), T({off_wo}, NPU_DTYPE_FP16),
+                T({off_out}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP16);
+
+    save_file("out.bin", l1 + {off_out}, {seq * d_model * 2});
+    return 0;
+}}
+"""
+        _compile_and_run(c_code, workdir)
+        actual = _read_bin(
+            os.path.join(workdir, "out.bin"), np.float16, seq * d_model
+        ).reshape(seq, d_model)
+        r = _compare(actual, expected, atol=3e-2, cos_tol=0.999)
+        assert r["passed"], (
+            f"multi_head_attention: max_abs={r['max_abs']:.6f}, cosine={r['cosine']:.6f}"
+        )
