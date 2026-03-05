@@ -1,6 +1,6 @@
 """graph_capture 内部常量和映射表。
 
-算子规则从 config/capture_rules.yaml 加载，dtype 映射为 torch 专用常量。
+算子规则从 integration/config/capture_rules.yaml 加载，dtype 映射为 torch 专用常量。
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from npu_compiler.common import load_config
 
 # ── YAML 规则加载 ──────────────────────────────────────
 
-_CONFIG_PATH = Path(__file__).parent / "config" / "capture_rules.yaml"
+_CONFIG_PATH = Path(__file__).resolve().parents[1] / "integration" / "config" / "capture_rules.yaml"
 _RULES = load_config(str(_CONFIG_PATH))
 
 PARAM_RENAMES: dict[str, dict[str, str]] = _RULES.get("param_renames", {})

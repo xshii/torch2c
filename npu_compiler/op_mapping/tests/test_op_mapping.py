@@ -8,7 +8,9 @@ from ...common.config_loader import load_config
 from ...common.graph_ir import Graph, Node, Tensor
 from ..op_mapping import post_validate, run
 
-_CONFIG_PATH = str(pathlib.Path(__file__).parent.parent / "config" / "direct_mappings.yaml")
+_CONFIG_PATH = str(
+    pathlib.Path(__file__).resolve().parents[2] / "integration" / "config" / "direct_mappings.yaml"
+)
 
 
 def _make_5node_graph() -> Graph:
@@ -132,7 +134,7 @@ def test_mixed_mapped_unmapped():
 
     g.add_node(Node(id="n0", op_type="aten.mm.default", inputs=["t0"], outputs=["t1"]))
     g.add_node(
-        Node(id="n1", op_type="aten.native_layer_norm.default", inputs=["t1"], outputs=["t2"])
+        Node(id="n1", op_type="aten.unknown_custom_op.default", inputs=["t1"], outputs=["t2"])
     )
     g.add_node(Node(id="n2", op_type="aten.add.Tensor", inputs=["t2"], outputs=["t3"]))
 
@@ -144,7 +146,7 @@ def test_mixed_mapped_unmapped():
     assert n0.is_mapped  # mm → cube_matmul
     n1 = g.get_node("n1")
     assert n1 is not None
-    assert not n1.is_mapped  # layer_norm 不在直接映射表
+    assert not n1.is_mapped  # unknown op 不在直接映射表
     n2 = g.get_node("n2")
     assert n2 is not None
     assert n2.is_mapped  # add → vector_add

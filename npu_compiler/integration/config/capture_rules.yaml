@@ -28,6 +28,11 @@ dim_to_size_ops:
   - aten._softmax.default
   - aten.softmax.int
 
+# 需要对 weight 输入做转置的算子（如 aten.linear.default）
+# 值为 weight 输入的索引位置
+weight_transpose_input:
+  aten.linear.default: 1
+
 # 当参数缺失时补充默认值
 param_defaults:
   aten.layer_norm.default:

@@ -8,7 +8,9 @@ from ...common.config_loader import load_config
 from ...common.graph_ir import Graph, Node, Tensor
 from ..op_decomposition import post_validate, run
 
-_CONFIG_PATH = str(pathlib.Path(__file__).parent.parent / "config" / "decompositions.yaml")
+_CONFIG_PATH = str(
+    pathlib.Path(__file__).resolve().parents[2] / "integration" / "config" / "decompositions.yaml"
+)
 
 
 def _load_rules() -> dict:
