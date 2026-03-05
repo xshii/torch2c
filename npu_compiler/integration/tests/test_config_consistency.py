@@ -1,9 +1,7 @@
 """配置一致性测试 — 交叉校验各 YAML 配置文件的算子集合匹配。
 
 防范问题：
-1. c_api_signatures 中有算子但 type_format_config 缺少条目
-2. direct_mappings / decompositions 引用的 npu_op 不在 signatures 中
-3. type_format_config 有冗余条目（无对应 signature）
+1. direct_mappings / decompositions 引用的 npu_op 不在 signatures 中
 """
 
 from __future__ import annotations
@@ -21,7 +19,6 @@ _CONFIG_DIR = pathlib.Path(__file__).resolve().parent.parent / "config"
 def configs() -> dict:
     return {
         "signatures": load_config(str(_CONFIG_DIR / "c_api_signatures.yaml")),
-        "format": load_config(str(_CONFIG_DIR / "type_format_config.yaml")),
         "mapping": load_config(str(_CONFIG_DIR / "direct_mappings.yaml")),
         "decomposition": load_config(str(_CONFIG_DIR / "decompositions.yaml")),
     }
@@ -30,11 +27,6 @@ def configs() -> dict:
 def _signature_ops(configs: dict) -> set[str]:
     """从 c_api_signatures 提取所有 compute_ops 名称。"""
     return set(configs["signatures"].get("compute_ops", {}).keys())
-
-
-def _format_ops(configs: dict) -> set[str]:
-    """从 type_format_config 提取所有算子名称。"""
-    return set(configs["format"].get("op_format_requirements", {}).keys())
 
 
 def _mapping_npu_ops(configs: dict) -> set[str]:
@@ -52,30 +44,6 @@ def _decomposition_npu_ops(configs: dict) -> set[str]:
 
 
 # ---- 测试用例 ----
-
-
-class TestSignaturesVsFormat:
-    """c_api_signatures 与 type_format_config 的算子集合必须匹配。"""
-
-    def test_all_signature_ops_have_format(self, configs):
-        """每个 signature 中的 compute_op 都必须有 format 配置。"""
-        sig_ops = _signature_ops(configs)
-        fmt_ops = _format_ops(configs)
-        missing = sig_ops - fmt_ops
-        assert not missing, (
-            f"算子在 c_api_signatures 中有定义但 type_format_config 缺失: {sorted(missing)}\n"
-            f"请在 type_format_config.yaml 中为这些算子添加 format/dtype 条目。"
-        )
-
-    def test_all_format_ops_have_signature(self, configs):
-        """每个 format 配置中的算子都必须有 signature。"""
-        sig_ops = _signature_ops(configs)
-        fmt_ops = _format_ops(configs)
-        extra = fmt_ops - sig_ops
-        assert not extra, (
-            f"算子在 type_format_config 中有定义但 c_api_signatures 缺失: {sorted(extra)}\n"
-            f"请在 c_api_signatures.yaml 中为这些算子添加参数签名。"
-        )
 
 
 class TestMappingsVsSignatures:
@@ -100,51 +68,6 @@ class TestMappingsVsSignatures:
             f"decompositions 引用的 npu_op 在 c_api_signatures 中无定义: {sorted(missing)}\n"
             f"请在 c_api_signatures.yaml 中添加这些算子的参数签名。"
         )
-
-    def test_direct_mapping_ops_have_format(self, configs):
-        """direct_mappings 的目标 npu_op 必须有 format 配置。"""
-        fmt_ops = _format_ops(configs)
-        map_ops = _mapping_npu_ops(configs)
-        missing = map_ops - fmt_ops
-        assert not missing, (
-            f"direct_mappings 引用的 npu_op 在 type_format_config 中缺失: {sorted(missing)}\n"
-            f"请在 type_format_config.yaml 中为这些算子添加 format/dtype 条目。"
-        )
-
-    def test_decomposition_ops_have_format(self, configs):
-        """decompositions 产生的 npu_op 必须有 format 配置。"""
-        fmt_ops = _format_ops(configs)
-        decomp_ops = _decomposition_npu_ops(configs)
-        missing = decomp_ops - fmt_ops
-        assert not missing, (
-            f"decompositions 引用的 npu_op 在 type_format_config 中缺失: {sorted(missing)}\n"
-            f"请在 type_format_config.yaml 中为这些算子添加 format/dtype 条目。"
-        )
-
-
-class TestFormatConfigCompleteness:
-    """type_format_config 条目结构完整性。"""
-
-    def test_all_entries_have_required_fields(self, configs):
-        """每个 format 条目必须包含 inputs、outputs、compute_dtype。"""
-        required_fields = {"inputs", "outputs", "compute_dtype"}
-        reqs = configs["format"].get("op_format_requirements", {})
-        for op_name, entry in reqs.items():
-            missing = required_fields - set(entry.keys())
-            assert not missing, (
-                f"type_format_config 中 {op_name} 缺少必需字段: {sorted(missing)}"
-            )
-
-    def test_io_entries_have_format_and_dtype(self, configs):
-        """每个 input/output 条目必须有 format 和 dtype。"""
-        reqs = configs["format"].get("op_format_requirements", {})
-        for op_name, entry in reqs.items():
-            for i, inp in enumerate(entry.get("inputs", [])):
-                assert "format" in inp, f"{op_name} input[{i}] 缺少 format"
-                assert "dtype" in inp, f"{op_name} input[{i}] 缺少 dtype"
-            for i, out in enumerate(entry.get("outputs", [])):
-                assert "format" in out, f"{op_name} output[{i}] 缺少 format"
-                assert "dtype" in out, f"{op_name} output[{i}] 缺少 dtype"
 
 
 class TestSignatureConfigCompleteness:

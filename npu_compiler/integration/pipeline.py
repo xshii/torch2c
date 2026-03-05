@@ -45,28 +45,6 @@ class _PassDesc:
     post_hook: Callable | None = None
 
 
-def _propagate_input_dtypes(graph: Graph) -> None:
-    """将输入 tensor 的 dtype 设为其首个消费节点的标注 dtype。"""
-    for t in graph.tensors.values():
-        if t.producer_node_id is not None:
-            continue
-        if not t.consumer_node_ids:
-            continue
-        consumer = graph.get_node(t.consumer_node_ids[0])
-        if consumer is None:
-            continue
-        ann = getattr(consumer, "format_annotation", None)
-        if ann is None:
-            continue
-        idx = None
-        for i, tid in enumerate(consumer.inputs):
-            if tid == t.id:
-                idx = i
-                break
-        if idx is not None and idx < len(ann.get("inputs", [])):
-            t.dtype = ann["inputs"][idx]["dtype"]
-
-
 _MIDDLE_PASSES: list[_PassDesc] = [
     _PassDesc("op_mapping", "②", op_mapping.run, "mapping", op_mapping.post_validate),
     _PassDesc(
@@ -83,7 +61,6 @@ _MIDDLE_PASSES: list[_PassDesc] = [
         format_annotator.run,
         "format",
         format_annotator.post_validate,
-        _propagate_input_dtypes,
     ),
 ]
 
@@ -91,13 +68,17 @@ _MIDDLE_PASSES: list[_PassDesc] = [
 # ---- 工具函数 ----
 
 
-def _load_configs(config_dir: str) -> dict:
+def _load_configs(
+    config_dir: str,
+    target_dtype: str | None = None,
+    target_format: str | None = None,
+) -> dict:
     """加载全部配置文件。"""
     return {
         "mapping": load_config(os.path.join(config_dir, "direct_mappings.yaml")),
         "decomposition": load_config(os.path.join(config_dir, "decompositions.yaml")),
         "absorption": load_config(os.path.join(config_dir, "absorptions.yaml")),
-        "format": load_config(os.path.join(config_dir, "type_format_config.yaml")),
+        "format": {"target_dtype": target_dtype, "target_format": target_format},
         "hardware": load_config(os.path.join(config_dir, "hardware_config.yaml")),
         "signatures": load_config(os.path.join(config_dir, "c_api_signatures.yaml")),
     }
@@ -181,6 +162,8 @@ def compile(
     output_dir: str = "output",
     mask: torch.Tensor | None = None,
     *,
+    target_dtype: str | None = None,
+    target_format: str | None = None,
     atol: float = 1e-2,
     cosine_tol: float = 0.999,
 ) -> str:
@@ -192,12 +175,14 @@ def compile(
         config_dir: 配置文件目录路径。
         output_dir: C 工程输出目录路径。
         mask: 可选 attention mask 张量。
+        target_dtype: 全局目标 dtype（如 "fp16"），None 则继承模型原始 dtype。
+        target_format: 全局目标 format（如 "nz"），None 则继承模型原始 format。
 
     Returns:
         生成的 C 工程输出目录路径。
     """
     logger.info("=== 编译管线开始 ===")
-    configs = _load_configs(config_dir)
+    configs = _load_configs(config_dir, target_dtype=target_dtype, target_format=target_format)
     collector = DiagnosticCollector()
 
     # Pass ① graph_capture（特殊：不是 run(graph, config) 模式）
@@ -279,10 +264,12 @@ def _run_codegen(
         for t in plan["tensors"].values()
         if t.get("is_weight") and t.get("name")
     }
-    weight_exporter.export_weights(model.state_dict(), weight_path, offsets=weight_offsets)
-
     golden_dir = os.path.join(output_dir, "golden")
     golden_dtype = _infer_golden_dtype(graph)
+    dtype_str = {np.float16: "fp16", np.float32: "fp32"}.get(golden_dtype, "fp16")
+    weight_exporter.export_weights(
+        model.state_dict(), weight_path, dtype=dtype_str, offsets=weight_offsets
+    )
     inputs, outputs = _run_golden(model, dummy_input, mask, numpy_dtype=golden_dtype)
-    golden_exporter.export_golden(inputs, outputs, golden_dir)
+    golden_exporter.export_golden(inputs, outputs, golden_dir, dtype=dtype_str)
     logger.info("Pass ⑨ 完成")
