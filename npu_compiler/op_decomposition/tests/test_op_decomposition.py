@@ -88,8 +88,8 @@ def test_layernorm_decompose():
     run(g, config)
 
     npu_ops = [n.npu_op for n in g.nodes.values()]
-    assert "npu_layernorm_part1" in npu_ops
-    assert "npu_layernorm_part2" in npu_ops
+    assert "vector_layernorm_part1" in npu_ops
+    assert "vector_layernorm_part2" in npu_ops
     assert "n0" not in g.nodes  # 原节点已删除
 
 
@@ -100,8 +100,8 @@ def test_softmax_decompose():
     run(g, config)
 
     npu_ops = [n.npu_op for n in g.nodes.values()]
-    assert "npu_softmax_part1" in npu_ops
-    assert "npu_softmax_part2" in npu_ops
+    assert "vector_softmax_part1" in npu_ops
+    assert "vector_softmax_part2" in npu_ops
 
 
 def test_intermediate_tensor_created():
@@ -132,7 +132,7 @@ def test_already_mapped_skipped():
             op_type="aten.native_layer_norm.default",
             inputs=["t0"],
             outputs=["t1"],
-            npu_op="npu_matmul",
+            npu_op="cube_matmul",
             compute_unit="cube",
             is_mapped=True,
         )
@@ -191,7 +191,7 @@ def test_execution_order_after_decompose():
             op_type="aten.mm.default",
             inputs=["t1"],
             outputs=["t2"],
-            npu_op="npu_matmul",
+            npu_op="cube_matmul",
             compute_unit="cube",
             is_mapped=True,
         )
@@ -234,7 +234,7 @@ def test_layernorm_part2_has_orig_input():
     config = _load_rules()
     run(g, config)
 
-    part2_nodes = [n for n in g.nodes.values() if n.npu_op == "npu_layernorm_part2"]
+    part2_nodes = [n for n in g.nodes.values() if n.npu_op == "vector_layernorm_part2"]
     assert len(part2_nodes) == 1
     part2 = part2_nodes[0]
     # part2 应有 2 个输入: [intermediate, orig_input]
@@ -276,11 +276,11 @@ class TestPostValidate:
         g.add_node(
             Node(
                 id="n0",
-                op_type="npu_gelu",
+                op_type="vector_gelu",
                 inputs=["t0"],
                 outputs=["t1"],
                 is_mapped=True,
-                npu_op="npu_gelu",
+                npu_op="vector_gelu",
                 compute_unit="vector",
             )
         )
@@ -293,11 +293,11 @@ class TestPostValidate:
         g.add_node(
             Node(
                 id="n0",
-                op_type="npu_gelu",
+                op_type="vector_gelu",
                 inputs=["t0"],
                 outputs=["t1"],
                 is_mapped=True,
-                npu_op="npu_gelu",
+                npu_op="vector_gelu",
             )
         )
         errors = post_validate(g)

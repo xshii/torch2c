@@ -26,6 +26,9 @@ PARAM_TYPE_C = {
     "float": "float",
     "enum": "int",
     "int_array": "const int*",
+    "tensor_desc": "npu_tensor_t",
+    "dtype_enum": "npu_dtype_t",
+    "format_enum": "npu_format_t",
 }
 
 # ---- 配置加载 ----

@@ -40,8 +40,8 @@ class TestLoadConfigs:
         configs = _load_configs(_CONFIG_DIR)
         v_cfg = _build_validator_config(configs["signatures"])
         assert "supported_ops" in v_cfg
-        assert "npu_matmul" in v_cfg["supported_ops"]
-        assert "npu_add" in v_cfg["supported_ops"]
+        assert "cube_matmul" in v_cfg["supported_ops"]
+        assert "vector_add" in v_cfg["supported_ops"]
 
 
 # ---- 端到端 ----

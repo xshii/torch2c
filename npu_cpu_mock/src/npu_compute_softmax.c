@@ -2,100 +2,45 @@
 #include <math.h>
 #include <string.h>
 
-void npu_softmax(void* input, void* out, int dim, int count, npu_dtype_t dtype) {
-    npu_softmax_part1(input, out, dim, count, dtype);
+void vector_softmax(npu_tensor_t input, npu_tensor_t out,
+                    int dim, int count, npu_dtype_t compute_dtype) {
+    vector_softmax_part1(input, out, dim, count, compute_dtype);
 }
 
-void npu_softmax_part1(void* input, void* out, int dim, int count, npu_dtype_t dtype) {
+void vector_softmax_part1(npu_tensor_t input, npu_tensor_t out,
+                          int dim, int count, npu_dtype_t compute_dtype) {
+    void* pi = npu_t_ptr(input);
+    void* po = npu_t_ptr(out);
+    npu_dtype_t dt = input.dtype;
+    (void)compute_dtype;
     int rows = count / dim;
     for (int r = 0; r < rows; r++) {
         int base = r * dim;
 
-        /* row max */
-        float mx = npu_read_as_float(input, base, dtype);
+        float mx = npu_read_as_float(pi, base, dt);
         for (int c = 1; c < dim; c++) {
-            float v = npu_read_as_float(input, base + c, dtype);
+            float v = npu_read_as_float(pi, base + c, dt);
             if (v > mx) mx = v;
         }
 
-        /* exp(x - max) and sum */
         float sum = 0.0f;
         for (int c = 0; c < dim; c++) {
-            float v = npu_read_as_float(input, base + c, dtype);
+            float v = npu_read_as_float(pi, base + c, dt);
             float e = expf(v - mx);
-            npu_write_from_float(out, base + c, e, dtype);
+            npu_write_from_float(po, base + c, e, out.dtype);
             sum += e;
         }
 
-        /* normalize */
         float inv_sum = 1.0f / sum;
         for (int c = 0; c < dim; c++) {
-            float e = npu_read_as_float(out, base + c, dtype);
-            npu_write_from_float(out, base + c, e * inv_sum, dtype);
+            float e = npu_read_as_float(po, base + c, out.dtype);
+            npu_write_from_float(po, base + c, e * inv_sum, out.dtype);
         }
     }
 }
 
-void npu_softmax_part2(void* inter, void* out, int size, npu_dtype_t dtype) {
-    (void)dtype;
-    memcpy(out, inter, (size_t)size);
-}
-
-/*
- * Softmax with bitmap mask (attention mask).
- *   mask: bit-packed, LSB-first.  bit i = mask[i/8] & (1 << (i%8))
- *         bit=1 => keep,  bit=0 => masked out (-inf before softmax => 0 after)
- *
- * Row-wise: for each row of length `dim`, apply mask then softmax.
- * If an entire row is masked, output is all zeros.
- */
-void npu_softmax_mask(void* input, void* out, const uint8_t* mask,
-                      int dim, int count, npu_dtype_t dtype) {
-    int rows = count / dim;
-    for (int r = 0; r < rows; r++) {
-        int base = r * dim;
-
-        /* row max among unmasked positions */
-        float mx = -1e30f;
-        int has_unmasked = 0;
-        for (int c = 0; c < dim; c++) {
-            int idx = base + c;
-            if (mask[idx / 8] & (1 << (idx % 8))) {
-                float v = npu_read_as_float(input, idx, dtype);
-                if (!has_unmasked || v > mx) mx = v;
-                has_unmasked = 1;
-            }
-        }
-
-        if (!has_unmasked) {
-            /* entire row masked => all zeros */
-            for (int c = 0; c < dim; c++)
-                npu_write_from_float(out, base + c, 0.0f, dtype);
-            continue;
-        }
-
-        /* exp(x - max) for unmasked, 0 for masked */
-        float sum = 0.0f;
-        for (int c = 0; c < dim; c++) {
-            int idx = base + c;
-            if (mask[idx / 8] & (1 << (idx % 8))) {
-                float v = npu_read_as_float(input, idx, dtype);
-                float e = expf(v - mx);
-                npu_write_from_float(out, idx, e, dtype);
-                sum += e;
-            } else {
-                npu_write_from_float(out, idx, 0.0f, dtype);
-            }
-        }
-
-        /* normalize unmasked */
-        float inv_sum = 1.0f / sum;
-        for (int c = 0; c < dim; c++) {
-            int idx = base + c;
-            if (mask[idx / 8] & (1 << (idx % 8))) {
-                float e = npu_read_as_float(out, idx, dtype);
-                npu_write_from_float(out, idx, e * inv_sum, dtype);
-            }
-        }
-    }
+void vector_softmax_part2(npu_tensor_t inter, npu_tensor_t out,
+                          int size, npu_dtype_t compute_dtype) {
+    (void)compute_dtype;
+    memcpy(npu_t_ptr(out), npu_t_ptr(inter), (size_t)size);
 }

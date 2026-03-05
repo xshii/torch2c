@@ -1,151 +1,161 @@
+# NPU C API 函数签名
+#
+# 约定：
+#   - 函数名以计算单元为前缀: cube_ / vector_ / scalar_
+#   - type: tensor_desc  → 生成 (npu_tensor_t){addr >> addr_shift, dtype_enum, format_enum}
+#     source 引用的 tensor 自动展开三个字段
+#   - addr_shift 由 l1 alignment 决定（32B → 5位）
+#   - compute_dtype 指定算子计算精度
+
+addr_shift: 5  # log2(32), 来自 l1 alignment
+
 compute_ops:
 
-  npu_matmul:
+  cube_matmul:
     params:
-      - { name: "a",      type: "addr",  source: "tensor.input_0.l1_offset" }
-      - { name: "b",      type: "addr",  source: "tensor.input_1.l1_offset" }
-      - { name: "out",    type: "addr",  source: "tensor.output_0.l1_offset" }
-      - { name: "M",      type: "int",   source: "tensor.input_0.shape.-2" }
-      - { name: "N",      type: "int",   source: "tensor.input_1.shape.-1" }
-      - { name: "K",      type: "int",   source: "tensor.input_0.shape.-1" }
-      - { name: "dtype",  type: "enum",  source: "tensor.input_0.dtype" }
-      - { name: "fmt",    type: "enum",  source: "tensor.input_0.format" }
+      - { name: "a",   type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "b",   type: "tensor_desc", source: "tensor.input_1" }
+      - { name: "out", type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "loop", type: "int",        source: "param.loop", default: 1 }
+      - { name: "m",    type: "int",        source: "tensor.input_0.shape.-2" }
+      - { name: "n",    type: "int",        source: "tensor.input_1.shape.-1" }
+      - { name: "k",    type: "int",        source: "tensor.input_0.shape.-1" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
 
-  npu_matmul_bias:
+  cube_matmul_bias:
     params:
-      - { name: "a",             type: "addr",  source: "tensor.input_0.l1_offset" }
-      - { name: "b",             type: "addr",  source: "tensor.input_1.l1_offset" }
-      - { name: "bias",          type: "addr",  source: "tensor.input_2.l1_offset" }
-      - { name: "out",           type: "addr",  source: "tensor.output_0.l1_offset" }
-      - { name: "M",             type: "int",   source: "tensor.input_0.shape.-2" }
-      - { name: "N",             type: "int",   source: "tensor.input_1.shape.-1" }
-      - { name: "K",             type: "int",   source: "tensor.input_0.shape.-1" }
-      - { name: "io_dtype",      type: "enum",  source: "tensor.input_0.dtype" }
-      - { name: "compute_dtype", type: "enum",  source: "tensor.input_0.dtype" }
-      - { name: "fmt",           type: "enum",  source: "tensor.input_0.format" }
+      - { name: "a",    type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "b",    type: "tensor_desc", source: "tensor.input_1" }
+      - { name: "bias", type: "tensor_desc", source: "tensor.input_2" }
+      - { name: "out",  type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "loop", type: "int",         source: "param.loop", default: 1 }
+      - { name: "m",    type: "int",         source: "tensor.input_0.shape.-2" }
+      - { name: "n",    type: "int",         source: "tensor.input_1.shape.-1" }
+      - { name: "k",    type: "int",         source: "tensor.input_0.shape.-1" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
 
-  npu_add:
+  vector_add:
     params:
-      - { name: "a",      type: "addr",  source: "tensor.input_0.l1_offset" }
-      - { name: "b",      type: "addr",  source: "tensor.input_1.l1_offset" }
-      - { name: "out",    type: "addr",  source: "tensor.output_0.l1_offset" }
-      - { name: "count",  type: "int",   source: "tensor.input_0.elem_count" }
-      - { name: "dtype",  type: "enum",  source: "tensor.input_0.dtype" }
+      - { name: "a",   type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "b",   type: "tensor_desc", source: "tensor.input_1" }
+      - { name: "out", type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "count", type: "int",       source: "tensor.input_0.elem_count" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
 
-  npu_mul:
+  vector_mul:
     params:
-      - { name: "a",      type: "addr",  source: "tensor.input_0.l1_offset" }
-      - { name: "b",      type: "addr",  source: "tensor.input_1.l1_offset" }
-      - { name: "out",    type: "addr",  source: "tensor.output_0.l1_offset" }
-      - { name: "count",  type: "int",   source: "tensor.input_0.elem_count" }
-      - { name: "dtype",  type: "enum",  source: "tensor.input_0.dtype" }
+      - { name: "a",   type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "b",   type: "tensor_desc", source: "tensor.input_1" }
+      - { name: "out", type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "count", type: "int",       source: "tensor.input_0.elem_count" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
 
-  npu_mul_scalar:
+  vector_mul_scalar:
     params:
-      - { name: "input",  type: "addr",  source: "tensor.input_0.l1_offset" }
-      - { name: "out",    type: "addr",  source: "tensor.output_0.l1_offset" }
-      - { name: "scalar", type: "float", source: "param.scalar_value" }
-      - { name: "count",  type: "int",   source: "tensor.input_0.elem_count" }
-      - { name: "dtype",  type: "enum",  source: "tensor.input_0.dtype" }
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "scalar", type: "float",      source: "param.scalar_value" }
+      - { name: "count",  type: "int",        source: "tensor.input_0.elem_count" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
 
-  npu_gelu:
+  vector_gelu:
     params:
-      - { name: "input",  type: "addr",  source: "tensor.input_0.l1_offset" }
-      - { name: "out",    type: "addr",  source: "tensor.output_0.l1_offset" }
-      - { name: "count",  type: "int",   source: "tensor.input_0.elem_count" }
-      - { name: "dtype",  type: "enum",  source: "tensor.input_0.dtype" }
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "count", type: "int",         source: "tensor.input_0.elem_count" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
 
-  npu_softmax:
+  vector_softmax:
     params:
-      - { name: "input",  type: "addr",  source: "tensor.input_0.l1_offset" }
-      - { name: "out",    type: "addr",  source: "tensor.output_0.l1_offset" }
-      - { name: "dim",    type: "int",   source: "param.dim" }
-      - { name: "count",  type: "int",   source: "tensor.input_0.elem_count" }
-      - { name: "dtype",  type: "enum",  source: "tensor.input_0.dtype" }
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "dim",   type: "int",         source: "param.dim" }
+      - { name: "count", type: "int",         source: "tensor.input_0.elem_count" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
 
-  npu_layernorm:
+  vector_layernorm:
     params:
-      - { name: "input",    type: "addr",  source: "tensor.input_0.l1_offset" }
-      - { name: "gamma",    type: "addr",  source: "tensor.input_1.l1_offset" }
-      - { name: "beta",     type: "addr",  source: "tensor.input_2.l1_offset" }
-      - { name: "out",      type: "addr",  source: "tensor.output_0.l1_offset" }
-      - { name: "hidden",   type: "int",   source: "tensor.input_0.shape.-1" }
-      - { name: "seq",      type: "int",   source: "tensor.input_0.shape.-2" }
-      - { name: "eps",      type: "float", source: "param.epsilon" }
-      - { name: "dtype",    type: "enum",  source: "tensor.input_0.dtype" }
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "gamma", type: "tensor_desc", source: "tensor.input_1" }
+      - { name: "beta",  type: "tensor_desc", source: "tensor.input_2" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "hidden", type: "int",        source: "tensor.input_0.shape.-1" }
+      - { name: "seq",    type: "int",        source: "tensor.input_0.shape.-2" }
+      - { name: "eps",    type: "float",      source: "param.epsilon" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
 
-  npu_layernorm_part1:
+  vector_layernorm_part1:
     params:
-      - { name: "input",    type: "addr",  source: "tensor.input_0.l1_offset" }
-      - { name: "gamma",    type: "addr",  source: "tensor.input_1.l1_offset" }
-      - { name: "beta",     type: "addr",  source: "tensor.input_2.l1_offset" }
-      - { name: "out",      type: "addr",  source: "tensor.output_0.l1_offset" }
-      - { name: "hidden",   type: "int",   source: "tensor.input_0.shape.-1" }
-      - { name: "seq",      type: "int",   source: "tensor.input_0.shape.-2" }
-      - { name: "eps",      type: "float", source: "param.epsilon" }
-      - { name: "dtype",    type: "enum",  source: "tensor.input_0.dtype" }
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "gamma", type: "tensor_desc", source: "tensor.input_1" }
+      - { name: "beta",  type: "tensor_desc", source: "tensor.input_2" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "hidden", type: "int",        source: "tensor.input_0.shape.-1" }
+      - { name: "seq",    type: "int",        source: "tensor.input_0.shape.-2" }
+      - { name: "eps",    type: "float",      source: "param.epsilon" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
 
-  npu_layernorm_part2:
+  vector_layernorm_part2:
     params:
-      - { name: "inter",    type: "addr",  source: "tensor.input_0.l1_offset" }
-      - { name: "orig",     type: "addr",  source: "tensor.input_1.l1_offset" }
-      - { name: "out",      type: "addr",  source: "tensor.output_0.l1_offset" }
-      - { name: "size",     type: "int",   source: "tensor.input_0.hbm_size" }
-      - { name: "dtype",    type: "enum",  source: "tensor.input_0.dtype" }
+      - { name: "inter", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "orig",  type: "tensor_desc", source: "tensor.input_1" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "size",  type: "int",         source: "tensor.input_0.hbm_size" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
 
-  npu_softmax_part1:
+  vector_softmax_part1:
     params:
-      - { name: "input",  type: "addr",  source: "tensor.input_0.l1_offset" }
-      - { name: "out",    type: "addr",  source: "tensor.output_0.l1_offset" }
-      - { name: "dim",    type: "int",   source: "param.dim" }
-      - { name: "count",  type: "int",   source: "tensor.input_0.elem_count" }
-      - { name: "dtype",  type: "enum",  source: "tensor.input_0.dtype" }
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "dim",   type: "int",         source: "param.dim" }
+      - { name: "count", type: "int",         source: "tensor.input_0.elem_count" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
 
-  npu_softmax_part2:
+  vector_softmax_part2:
     params:
-      - { name: "inter",  type: "addr",  source: "tensor.input_0.l1_offset" }
-      - { name: "out",    type: "addr",  source: "tensor.output_0.l1_offset" }
-      - { name: "size",   type: "int",   source: "tensor.input_0.hbm_size" }
-      - { name: "dtype",  type: "enum",  source: "tensor.input_0.dtype" }
+      - { name: "inter", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "size",  type: "int",         source: "tensor.input_0.hbm_size" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
 
-  npu_transpose:
+  vector_transpose:
     params:
-      - { name: "input",  type: "addr",      source: "tensor.input_0.l1_offset" }
-      - { name: "out",    type: "addr",      source: "tensor.output_0.l1_offset" }
-      - { name: "ndim",   type: "int",       source: "tensor.input_0.ndim" }
-      - { name: "dims",   type: "int_array", source: "tensor.input_0.shape" }
-      - { name: "dim0",   type: "int",       source: "param.dim0" }
-      - { name: "dim1",   type: "int",       source: "param.dim1" }
-      - { name: "dtype",  type: "enum",      source: "tensor.input_0.dtype" }
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "ndim",  type: "int",         source: "tensor.input_0.ndim" }
+      - { name: "dims",  type: "int_array",   source: "tensor.input_0.shape" }
+      - { name: "dim0",  type: "int",         source: "param.dim0" }
+      - { name: "dim1",  type: "int",         source: "param.dim1" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.input_0.dtype" }
 
-  npu_transpose_2d:
+  vector_transpose_2d:
     params:
-      - { name: "input",  type: "addr",  source: "tensor.input_0.l1_offset" }
-      - { name: "out",    type: "addr",  source: "tensor.output_0.l1_offset" }
-      - { name: "rows",   type: "int",   source: "tensor.input_0.shape.0" }
-      - { name: "cols",   type: "int",   source: "tensor.input_0.shape.1" }
-      - { name: "dtype",  type: "enum",  source: "tensor.input_0.dtype" }
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "rows",  type: "int",         source: "tensor.input_0.shape.0" }
+      - { name: "cols",  type: "int",         source: "tensor.input_0.shape.1" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.input_0.dtype" }
 
-  npu_reshape:
+  scalar_reshape:
     params:
-      - { name: "input",  type: "addr",  source: "tensor.input_0.l1_offset" }
-      - { name: "out",    type: "addr",  source: "tensor.output_0.l1_offset" }
-      - { name: "size",   type: "int",   source: "tensor.input_0.hbm_size" }
-      - { name: "dtype",  type: "enum",  source: "tensor.input_0.dtype" }
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "size",  type: "int",         source: "tensor.input_0.hbm_size" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.input_0.dtype" }
 
-  npu_broadcast:
+  scalar_broadcast:
     params:
-      - { name: "input",  type: "addr",  source: "tensor.input_0.l1_offset" }
-      - { name: "out",    type: "addr",  source: "tensor.output_0.l1_offset" }
-      - { name: "size",   type: "int",   source: "tensor.input_0.hbm_size" }
-      - { name: "dtype",  type: "enum",  source: "tensor.input_0.dtype" }
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "size",  type: "int",         source: "tensor.input_0.hbm_size" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.input_0.dtype" }
 
-  npu_copy:
+  scalar_copy:
     params:
-      - { name: "input",  type: "addr",  source: "tensor.input_0.l1_offset" }
-      - { name: "out",    type: "addr",  source: "tensor.output_0.l1_offset" }
-      - { name: "size",   type: "int",   source: "tensor.input_0.hbm_size" }
-      - { name: "dtype",  type: "enum",  source: "tensor.input_0.dtype" }
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "size",  type: "int",         source: "tensor.input_0.hbm_size" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.input_0.dtype" }
 
 dma_ops:
   npu_dma_load:
@@ -153,15 +163,15 @@ dma_ops:
       - { name: "l1_dst",    type: "addr" }
       - { name: "hbm_src",   type: "addr" }
       - { name: "size",      type: "int" }
-      - { name: "src_fmt",   type: "enum", default: "NPU_FORMAT_ND" }
-      - { name: "dst_fmt",   type: "enum", default: "NPU_FORMAT_ND" }
+      - { name: "src_fmt",   type: "format_enum", default: "NPU_FORMAT_ND" }
+      - { name: "dst_fmt",   type: "format_enum", default: "NPU_FORMAT_ND" }
   npu_dma_store:
     params:
       - { name: "hbm_dst",   type: "addr" }
       - { name: "l1_src",    type: "addr" }
       - { name: "size",      type: "int" }
-      - { name: "src_fmt",   type: "enum", default: "NPU_FORMAT_ND" }
-      - { name: "dst_fmt",   type: "enum", default: "NPU_FORMAT_ND" }
+      - { name: "src_fmt",   type: "format_enum", default: "NPU_FORMAT_ND" }
+      - { name: "dst_fmt",   type: "format_enum", default: "NPU_FORMAT_ND" }
   npu_dma_barrier:
     params: []
 

@@ -150,7 +150,7 @@ class LinearChain(nn.Module):
 
 
 class TestLinearSemantics:
-    """验证 aten.linear.default → npu_matmul_bias 的语义等价性。
+    """验证 aten.linear.default → cube_matmul_bias 的语义等价性。
 
     关键语义：linear(x, w, b) = x @ w.T + b
     历史 bug：曾忘记对 weight 做转置。
@@ -185,7 +185,7 @@ class TestLinearSemantics:
 
 
 class TestMatmulSemantics:
-    """验证 aten.mm.default → npu_matmul 的语义等价性。"""
+    """验证 aten.mm.default → cube_matmul 的语义等价性。"""
 
     @pytest.fixture
     def output_dir(self, tmp_path):

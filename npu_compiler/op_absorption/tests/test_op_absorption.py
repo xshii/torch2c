@@ -56,7 +56,7 @@ def _make_absorption_graph() -> Graph:
         Node(
             id="n_add",
             op_type="aten.add",
-            npu_op="npu_add",
+            npu_op="vector_add",
             inputs=["t_scores", "t_mask"],
             outputs=["t_add_out"],
             is_mapped=True,
@@ -66,7 +66,7 @@ def _make_absorption_graph() -> Graph:
         Node(
             id="n_sp1",
             op_type="aten.softmax",
-            npu_op="npu_softmax_part1",
+            npu_op="vector_softmax_part1",
             inputs=["t_add_out"],
             outputs=["t_sp1_out"],
             is_mapped=True,
@@ -76,7 +76,7 @@ def _make_absorption_graph() -> Graph:
         Node(
             id="n_sp2",
             op_type="aten.softmax",
-            npu_op="npu_softmax_part2",
+            npu_op="vector_softmax_part2",
             inputs=["t_sp1_out"],
             outputs=["t_sp2_out"],
             is_mapped=True,
@@ -88,8 +88,8 @@ def _make_absorption_graph() -> Graph:
 _RULES = {
     "absorptions": [
         {
-            "absorbed_op": "npu_add",
-            "target_op": "npu_softmax_part1",
+            "absorbed_op": "vector_add",
+            "target_op": "vector_softmax_part1",
             "param_name": "mask",
             "absorbed_input_index": 1,
             "passthrough_input_index": 0,
@@ -139,7 +139,7 @@ def test_no_match_preserved():
         Node(
             id="n_residual_add",
             op_type="aten.add",
-            npu_op="npu_add",
+            npu_op="vector_add",
             inputs=["t_a", "t_b"],
             outputs=["t_c"],
             is_mapped=True,
@@ -195,7 +195,7 @@ def test_post_validate_missing_tensor():
     g.add_node(
         Node(
             id="n",
-            op_type="npu_matmul",
+            op_type="cube_matmul",
             inputs=["t_in"],
             outputs=["t_out"],
             absorbed_inputs={"bias": "t_nonexistent"},

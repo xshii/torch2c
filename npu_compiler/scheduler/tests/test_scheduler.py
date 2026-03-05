@@ -8,10 +8,10 @@ def _make_linear_chain() -> Graph:
     """创建 matmul→add→matmul→gelu 线性链。"""
     g = Graph()
     ops = [
-        ("node_0", "npu_matmul", "cube"),
-        ("node_1", "npu_add", "vector"),
-        ("node_2", "npu_matmul", "cube"),
-        ("node_3", "npu_gelu", "vector"),
+        ("node_0", "cube_matmul", "cube"),
+        ("node_1", "vector_add", "vector"),
+        ("node_2", "cube_matmul", "cube"),
+        ("node_3", "vector_gelu", "vector"),
     ]
     t_in = Tensor(
         id="tensor_input",
@@ -98,22 +98,22 @@ def _make_parallel_graph() -> Graph:
     g.add_node(
         Node(
             id="node_a",
-            op_type="npu_matmul",
+            op_type="cube_matmul",
             inputs=["input_a"],
             outputs=["out_a"],
             compute_unit="cube",
-            npu_op="npu_matmul",
+            npu_op="cube_matmul",
             is_mapped=True,
         )
     )
     g.add_node(
         Node(
             id="node_b",
-            op_type="npu_add",
+            op_type="vector_add",
             inputs=["input_b"],
             outputs=["out_b"],
             compute_unit="vector",
-            npu_op="npu_add",
+            npu_op="vector_add",
             is_mapped=True,
         )
     )
@@ -163,22 +163,22 @@ def _make_same_unit_graph() -> Graph:
     g.add_node(
         Node(
             id="node_a",
-            op_type="npu_add",
+            op_type="vector_add",
             inputs=["input_a"],
             outputs=["out_a"],
             compute_unit="vector",
-            npu_op="npu_add",
+            npu_op="vector_add",
             is_mapped=True,
         )
     )
     g.add_node(
         Node(
             id="node_b",
-            op_type="npu_gelu",
+            op_type="vector_gelu",
             inputs=["input_b"],
             outputs=["out_b"],
             compute_unit="vector",
-            npu_op="npu_gelu",
+            npu_op="vector_gelu",
             is_mapped=True,
         )
     )

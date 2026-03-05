@@ -141,13 +141,13 @@ def test_mixed_mapped_unmapped():
 
     n0 = g.get_node("n0")
     assert n0 is not None
-    assert n0.is_mapped  # mm → npu_matmul
+    assert n0.is_mapped  # mm → cube_matmul
     n1 = g.get_node("n1")
     assert n1 is not None
     assert not n1.is_mapped  # layer_norm 不在直接映射表
     n2 = g.get_node("n2")
     assert n2 is not None
-    assert n2.is_mapped  # add → npu_add
+    assert n2.is_mapped  # add → vector_add
 
 
 class TestPostValidate:
@@ -158,11 +158,11 @@ class TestPostValidate:
         g.add_node(
             Node(
                 id="n0",
-                op_type="npu_add",
+                op_type="vector_add",
                 inputs=["t0"],
                 outputs=["t1"],
                 is_mapped=True,
-                npu_op="npu_add",
+                npu_op="vector_add",
             )
         )
         assert post_validate(g) == []
@@ -171,6 +171,6 @@ class TestPostValidate:
         g = Graph()
         g.add_tensor(Tensor(id="t0", shape=[1], dtype="fp16"))
         g.add_tensor(Tensor(id="t1", shape=[1], dtype="fp16", producer_node_id="n0"))
-        g.add_node(Node(id="n0", op_type="npu_add", inputs=["t0"], outputs=["t1"], is_mapped=True))
+        g.add_node(Node(id="n0", op_type="vector_add", inputs=["t0"], outputs=["t1"], is_mapped=True))
         errors = post_validate(g)
         assert any("npu_op" in e for e in errors)

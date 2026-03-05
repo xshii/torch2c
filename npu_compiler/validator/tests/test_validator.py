@@ -9,18 +9,18 @@ from npu_compiler.validator import run
 
 _CONFIG = {
     "supported_ops": [
-        "npu_matmul",
-        "npu_add",
-        "npu_mul",
-        "npu_mul_scalar",
-        "npu_gelu",
-        "npu_transpose",
-        "npu_transpose_2d",
-        "npu_reshape",
-        "npu_layernorm_part1",
-        "npu_layernorm_part2",
-        "npu_softmax_part1",
-        "npu_softmax_part2",
+        "cube_matmul",
+        "vector_add",
+        "vector_mul",
+        "vector_mul_scalar",
+        "vector_gelu",
+        "vector_transpose",
+        "vector_transpose_2d",
+        "scalar_reshape",
+        "vector_layernorm_part1",
+        "vector_layernorm_part2",
+        "vector_softmax_part1",
+        "vector_softmax_part2",
     ]
 }
 
@@ -37,7 +37,7 @@ def _make_valid_graph() -> Graph:
         Node(
             id="n_mm",
             op_type="aten.mm",
-            npu_op="npu_matmul",
+            npu_op="cube_matmul",
             inputs=["t_a", "t_b"],
             outputs=["t_out"],
             is_mapped=True,

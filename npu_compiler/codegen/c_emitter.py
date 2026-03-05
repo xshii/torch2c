@@ -28,16 +28,37 @@ class SourceResolver:
         self._node = node
         self._tensors = tensors
 
-    def resolve(self, param: dict) -> str:
+    def resolve(self, param: dict, addr_shift: int = 0) -> str:
         """解析单个参数的 source → C 字符串。"""
         source = param.get("source", "")
+        ptype = param.get("type", "")
         parts = source.split(".")
+
+        # tensor_desc: 整个 tensor 展开为结构体
+        if ptype == "tensor_desc":
+            return self._resolve_tensor_desc(parts[1], addr_shift)
+        # dtype_enum / format_enum: 从 tensor 取枚举
+        if ptype == "dtype_enum":
+            return self._resolve_tensor_ref(parts[1], parts[2], parts[3:], param)
+        if ptype == "format_enum":
+            return self._resolve_tensor_ref(parts[1], parts[2], parts[3:], param)
 
         if parts[0] == "tensor":
             return self._resolve_tensor_ref(parts[1], parts[2], parts[3:], param)
         if parts[0] == "param":
             return self._resolve_param_ref(parts[1], param)
         raise CodegenError(f"未知 source 格式: {source}")
+
+    def _resolve_tensor_desc(self, tensor_key: str, addr_shift: int) -> str:
+        """生成 (npu_tensor_t){addr >> shift, dtype, format} 复合字面量。"""
+        t = self.find_tensor(tensor_key)
+        if t is None:
+            raise CodegenError(f"张量 {tensor_key} 未找到: node={self._node['id']}")
+        offset = t.get("l1_offset", 0) or 0
+        shifted = offset >> addr_shift if addr_shift > 0 else offset
+        dtype_enum = DTYPE_MAP.get(t.get("dtype", "fp16"), "NPU_DTYPE_FP16")
+        fmt_enum = FORMAT_MAP.get(t.get("format", "nd"), "NPU_FORMAT_ND")
+        return f"(npu_tensor_t){{{shifted}, {dtype_enum}, {fmt_enum}}}"
 
     def find_tensor(self, key: str):
         """根据 key (input_0, output_0, mask 等) 查找 tensor。"""
@@ -81,9 +102,9 @@ class SourceResolver:
             offset = t.get(field, 0) or 0
             buf = "l1" if field == "l1_offset" else "hbm"
             return f"(void*)({buf} + {offset})"
-        if field == "dtype":
+        if field in ("dtype", "dtype_enum"):
             return DTYPE_MAP.get(t.get("dtype", "fp16"), "NPU_DTYPE_FP16")
-        if field == "format":
+        if field in ("format", "format_enum"):
             return FORMAT_MAP.get(t.get("format", "nd"), "NPU_FORMAT_ND")
         if field == "shape":
             shape = t.get("shape", [])
@@ -104,7 +125,9 @@ def _format_value(val, ptype: str) -> str:
 # ---- 代码生成 ----
 
 
-def _gen_op_call(npu_op: str, sig: dict, node: dict, tensors: dict) -> str:
+def _gen_op_call(
+    npu_op: str, sig: dict, node: dict, tensors: dict, addr_shift: int = 0
+) -> str:
     """生成单个算子的 C 调用语句。"""
     resolver = SourceResolver(node, tensors)
     args = []
@@ -115,10 +138,10 @@ def _gen_op_call(npu_op: str, sig: dict, node: dict, tensors: dict) -> str:
             shape = t.get("shape", []) if t else []
             args.append(f"(const int[]){{{', '.join(str(s) for s in shape)}}}")
         else:
-            args.append(resolver.resolve(p))
+            args.append(resolver.resolve(p, addr_shift=addr_shift))
 
     for p in sig.get("optional_params", []):
-        args.append(resolver.resolve(p))
+        args.append(resolver.resolve(p, addr_shift=addr_shift))
 
     return f"{npu_op}({', '.join(args)})"
 
@@ -152,8 +175,9 @@ def gen_op_block(node: dict, tensors: dict, dma_plan: dict, signatures: dict) ->
     if sig is None:
         raise CodegenError(f"签名未找到: {npu_op}")
 
+    addr_shift = signatures.get("addr_shift", 0)
     indent = "    "
-    op_call = _gen_op_call(npu_op, sig, node, tensors)
+    op_call = _gen_op_call(npu_op, sig, node, tensors, addr_shift=addr_shift)
     loads = _gen_dma_block(dma_plan.get("loads", []), indent)
     stores = _gen_dma_block(dma_plan.get("stores", []), indent)
 
@@ -215,6 +239,7 @@ def emit_model_graph_c(plan: dict, signatures: dict) -> str:
         '#include "model_weights.h"\n'
         '#include "npu_mock.h"\n\n'
         "void model_run(unsigned char* hbm, unsigned char* l1) {\n"
+        "    npu_l1_base = l1;\n\n"
         f"{body}\n"
         "}\n"
     )

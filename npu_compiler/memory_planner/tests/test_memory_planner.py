@@ -50,11 +50,11 @@ def _make_linear_chain(
         out_tid = f"tensor_{i}" if i < n_ops - 1 else "tensor_output"
         node = Node(
             id=f"node_{i}",
-            op_type="npu_add",
+            op_type="vector_add",
             inputs=[prev_tid],
             outputs=[out_tid],
             compute_unit="vector",
-            npu_op="npu_add",
+            npu_op="vector_add",
             is_mapped=True,
         )
         g.add_node(node)
@@ -233,11 +233,11 @@ class TestL1CapacityCheck:
         )
         node = Node(
             id="node_0",
-            op_type="npu_add",
+            op_type="vector_add",
             inputs=["huge_input"],
             outputs=["huge_output"],
             compute_unit="vector",
-            npu_op="npu_add",
+            npu_op="vector_add",
             is_mapped=True,
         )
         g.add_tensor(huge_tensor)
@@ -342,11 +342,11 @@ class TestDmaStoreFormat:
         g.add_node(
             Node(
                 id="node_0",
-                op_type="npu_matmul",
+                op_type="cube_matmul",
                 inputs=["t_in"],
                 outputs=["t_mid1"],
                 compute_unit="cube",
-                npu_op="npu_matmul",
+                npu_op="cube_matmul",
                 is_mapped=True,
                 format_annotation={
                     "inputs": [{"format": "nz", "dtype": "fp16"}],
@@ -357,33 +357,33 @@ class TestDmaStoreFormat:
         g.add_node(
             Node(
                 id="node_1",
-                op_type="npu_add",
+                op_type="vector_add",
                 inputs=["t_mid1"],
                 outputs=["t_mid2"],
                 compute_unit="vector",
-                npu_op="npu_add",
+                npu_op="vector_add",
                 is_mapped=True,
             )
         )
         g.add_node(
             Node(
                 id="node_2",
-                op_type="npu_gelu",
+                op_type="vector_gelu",
                 inputs=["t_mid2"],
                 outputs=["t_mid3"],
                 compute_unit="vector",
-                npu_op="npu_gelu",
+                npu_op="vector_gelu",
                 is_mapped=True,
             )
         )
         g.add_node(
             Node(
                 id="node_3",
-                op_type="npu_add",
+                op_type="vector_add",
                 inputs=["t_mid3"],
                 outputs=["t_out"],
                 compute_unit="vector",
-                npu_op="npu_add",
+                npu_op="vector_add",
                 is_mapped=True,
             )
         )
@@ -436,22 +436,22 @@ class TestL1OnlyOptimization:
         g.add_node(
             Node(
                 id="node_0",
-                op_type="npu_add",
+                op_type="vector_add",
                 inputs=["t_in"],
                 outputs=["t_mid"],
                 compute_unit="vector",
-                npu_op="npu_add",
+                npu_op="vector_add",
                 is_mapped=True,
             )
         )
         g.add_node(
             Node(
                 id="node_1",
-                op_type="npu_gelu",
+                op_type="vector_gelu",
                 inputs=["t_mid"],
                 outputs=["t_out"],
                 compute_unit="vector",
-                npu_op="npu_gelu",
+                npu_op="vector_gelu",
                 is_mapped=True,
             )
         )

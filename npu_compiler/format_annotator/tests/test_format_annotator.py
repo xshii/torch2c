@@ -31,7 +31,7 @@ def _make_graph(dtype: str = "fp16") -> Graph:
         Node(
             id="n_mm",
             op_type="aten.mm",
-            npu_op="npu_matmul",
+            npu_op="cube_matmul",
             inputs=["t_a", "t_b"],
             outputs=["t_mm_out"],
             is_mapped=True,
@@ -41,7 +41,7 @@ def _make_graph(dtype: str = "fp16") -> Graph:
         Node(
             id="n_add",
             op_type="aten.add",
-            npu_op="npu_add",
+            npu_op="vector_add",
             inputs=["t_mm_out", "t_bias"],
             outputs=["t_add_out"],
             is_mapped=True,

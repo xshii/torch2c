@@ -34,6 +34,39 @@ _MOCK_SOURCES = [
 _HAS_CC = shutil.which("cc") is not None or shutil.which("gcc") is not None
 pytestmark = pytest.mark.skipif(not _HAS_CC, reason="C 编译器不可用")
 
+# Common C preamble: L1 buffer + tensor helper
+_C_PREAMBLE = """
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "npu_api.h"
+
+#define L1_SIZE 65536
+static unsigned char l1[L1_SIZE];
+
+static void l1_init(void) {
+    npu_l1_base = l1;
+    memset(l1, 0, L1_SIZE);
+}
+
+static npu_tensor_t T(uint32_t byte_offset, npu_dtype_t dt) {
+    npu_tensor_t t = {byte_offset >> NPU_ADDR_SHIFT, dt, NPU_FORMAT_ND};
+    return t;
+}
+
+static void load_file(const char* path, void* dst, size_t bytes) {
+    FILE* f = fopen(path, "rb");
+    fread(dst, 1, bytes, f);
+    fclose(f);
+}
+
+static void save_file(const char* path, const void* src, size_t bytes) {
+    FILE* f = fopen(path, "wb");
+    fwrite(src, 1, bytes, f);
+    fclose(f);
+}
+"""
+
 
 # ---- 工具函数 ----
 
@@ -108,33 +141,31 @@ def _compare(
 
 
 class TestMatmul:
-    """npu_matmul: C = A @ B (fp16)"""
+    """cube_matmul: C = A @ B (fp16)"""
 
     def test_basic_matmul(self, tmp_path):
         M, K, N = 4, 8, 6
         rng = np.random.RandomState(42)
         a = rng.randn(M, K).astype(np.float16)
         b = rng.randn(K, N).astype(np.float16)
-        # C mock 内部用 fp32 累加，golden 也用 fp32 算再截断
         expected = (a.astype(np.float32) @ b.astype(np.float32)).astype(np.float16)
 
         workdir = str(tmp_path)
         _write_bin(os.path.join(workdir, "a.bin"), a)
         _write_bin(os.path.join(workdir, "b.bin"), b)
 
-        c_code = f"""
-#include <stdio.h>
-#include <stdlib.h>
-#include "npu_api.h"
-
+        # offsets into L1
+        off_a, off_b, off_out = 0, 1024, 2048
+        c_code = _C_PREAMBLE + f"""
 int main(void) {{
-    unsigned short a[{M * K}], b[{K * N}], out[{M * N}];
-    FILE* fa = fopen("a.bin", "rb"); fread(a, 2, {M * K}, fa); fclose(fa);
-    FILE* fb = fopen("b.bin", "rb"); fread(b, 2, {K * N}, fb); fclose(fb);
+    l1_init();
+    load_file("a.bin", l1 + {off_a}, {M * K * 2});
+    load_file("b.bin", l1 + {off_b}, {K * N * 2});
 
-    npu_matmul(a, b, out, {M}, {N}, {K}, NPU_DTYPE_FP16, NPU_FORMAT_ND);
+    cube_matmul(T({off_a}, NPU_DTYPE_FP16), T({off_b}, NPU_DTYPE_FP16),
+                T({off_out}, NPU_DTYPE_FP16), 1, {M}, {N}, {K}, NPU_DTYPE_FP16);
 
-    FILE* fo = fopen("out.bin", "wb"); fwrite(out, 2, {M * N}, fo); fclose(fo);
+    save_file("out.bin", l1 + {off_out}, {M * N * 2});
     return 0;
 }}
 """
@@ -145,7 +176,7 @@ int main(void) {{
 
 
 class TestMatmulBias:
-    """npu_matmul_bias: C = A @ B + bias (fp16)"""
+    """cube_matmul_bias: C = A @ B + bias (fp16)"""
 
     def test_basic_matmul_bias(self, tmp_path):
         M, K, N = 4, 8, 6
@@ -162,22 +193,19 @@ class TestMatmulBias:
         _write_bin(os.path.join(workdir, "b.bin"), b)
         _write_bin(os.path.join(workdir, "bias.bin"), bias)
 
-        c_code = f"""
-#include <stdio.h>
-#include <stdlib.h>
-#include "npu_api.h"
-
+        off_a, off_b, off_bias, off_out = 0, 1024, 2048, 3072
+        c_code = _C_PREAMBLE + f"""
 int main(void) {{
-    unsigned short a[{M * K}], b[{K * N}], bias[{N}], out[{M * N}];
-    FILE* f;
-    f = fopen("a.bin", "rb"); fread(a, 2, {M * K}, f); fclose(f);
-    f = fopen("b.bin", "rb"); fread(b, 2, {K * N}, f); fclose(f);
-    f = fopen("bias.bin", "rb"); fread(bias, 2, {N}, f); fclose(f);
+    l1_init();
+    load_file("a.bin", l1 + {off_a}, {M * K * 2});
+    load_file("b.bin", l1 + {off_b}, {K * N * 2});
+    load_file("bias.bin", l1 + {off_bias}, {N * 2});
 
-    npu_matmul_bias(a, b, bias, out, {M}, {N}, {K},
-                    NPU_DTYPE_FP16, NPU_DTYPE_FP16, NPU_FORMAT_ND);
+    cube_matmul_bias(T({off_a}, NPU_DTYPE_FP16), T({off_b}, NPU_DTYPE_FP16),
+                     T({off_bias}, NPU_DTYPE_FP16), T({off_out}, NPU_DTYPE_FP16),
+                     1, {M}, {N}, {K}, NPU_DTYPE_FP16);
 
-    f = fopen("out.bin", "wb"); fwrite(out, 2, {M * N}, f); fclose(f);
+    save_file("out.bin", l1 + {off_out}, {M * N * 2});
     return 0;
 }}
 """
@@ -191,7 +219,7 @@ int main(void) {{
 
 
 class TestAdd:
-    """npu_add: C = A + B (fp16)"""
+    """vector_add: C = A + B (fp16)"""
 
     def test_basic_add(self, tmp_path):
         n = 64
@@ -204,19 +232,17 @@ class TestAdd:
         _write_bin(os.path.join(workdir, "a.bin"), a)
         _write_bin(os.path.join(workdir, "b.bin"), b)
 
-        c_code = f"""
-#include <stdio.h>
-#include "npu_api.h"
-
+        off_a, off_b, off_out = 0, 1024, 2048
+        c_code = _C_PREAMBLE + f"""
 int main(void) {{
-    unsigned short a[{n}], b[{n}], out[{n}];
-    FILE* f;
-    f = fopen("a.bin", "rb"); fread(a, 2, {n}, f); fclose(f);
-    f = fopen("b.bin", "rb"); fread(b, 2, {n}, f); fclose(f);
+    l1_init();
+    load_file("a.bin", l1 + {off_a}, {n * 2});
+    load_file("b.bin", l1 + {off_b}, {n * 2});
 
-    npu_add(a, b, out, {n}, NPU_DTYPE_FP16);
+    vector_add(T({off_a}, NPU_DTYPE_FP16), T({off_b}, NPU_DTYPE_FP16),
+               T({off_out}, NPU_DTYPE_FP16), {n}, NPU_DTYPE_FP16);
 
-    f = fopen("out.bin", "wb"); fwrite(out, 2, {n}, f); fclose(f);
+    save_file("out.bin", l1 + {off_out}, {n * 2});
     return 0;
 }}
 """
@@ -227,32 +253,29 @@ int main(void) {{
 
 
 class TestGelu:
-    """npu_gelu: Y = gelu(X) (fp16)"""
+    """vector_gelu: Y = gelu(X) (fp16)"""
 
     def test_basic_gelu(self, tmp_path):
         n = 64
         rng = np.random.RandomState(45)
         x = rng.randn(n).astype(np.float16)
         xf = x.astype(np.float32)
-        # gelu(x) = x * 0.5 * (1 + erf(x / sqrt(2)))
         erf_vals = np.array([math.erf(float(v) / math.sqrt(2.0)) for v in xf])
         expected = (xf * 0.5 * (1.0 + erf_vals)).astype(np.float16)
 
         workdir = str(tmp_path)
         _write_bin(os.path.join(workdir, "x.bin"), x)
 
-        c_code = f"""
-#include <stdio.h>
-#include "npu_api.h"
-
+        off_in, off_out = 0, 1024
+        c_code = _C_PREAMBLE + f"""
 int main(void) {{
-    unsigned short x[{n}], out[{n}];
-    FILE* f;
-    f = fopen("x.bin", "rb"); fread(x, 2, {n}, f); fclose(f);
+    l1_init();
+    load_file("x.bin", l1 + {off_in}, {n * 2});
 
-    npu_gelu(x, out, {n}, NPU_DTYPE_FP16);
+    vector_gelu(T({off_in}, NPU_DTYPE_FP16), T({off_out}, NPU_DTYPE_FP16),
+                {n}, NPU_DTYPE_FP16);
 
-    f = fopen("out.bin", "wb"); fwrite(out, 2, {n}, f); fclose(f);
+    save_file("out.bin", l1 + {off_out}, {n * 2});
     return 0;
 }}
 """
@@ -263,7 +286,7 @@ int main(void) {{
 
 
 class TestMul:
-    """npu_mul: C = A * B (fp16)"""
+    """vector_mul: C = A * B (fp16)"""
 
     def test_basic_mul(self, tmp_path):
         n = 64
@@ -276,19 +299,17 @@ class TestMul:
         _write_bin(os.path.join(workdir, "a.bin"), a)
         _write_bin(os.path.join(workdir, "b.bin"), b)
 
-        c_code = f"""
-#include <stdio.h>
-#include "npu_api.h"
-
+        off_a, off_b, off_out = 0, 1024, 2048
+        c_code = _C_PREAMBLE + f"""
 int main(void) {{
-    unsigned short a[{n}], b[{n}], out[{n}];
-    FILE* f;
-    f = fopen("a.bin", "rb"); fread(a, 2, {n}, f); fclose(f);
-    f = fopen("b.bin", "rb"); fread(b, 2, {n}, f); fclose(f);
+    l1_init();
+    load_file("a.bin", l1 + {off_a}, {n * 2});
+    load_file("b.bin", l1 + {off_b}, {n * 2});
 
-    npu_mul(a, b, out, {n}, NPU_DTYPE_FP16);
+    vector_mul(T({off_a}, NPU_DTYPE_FP16), T({off_b}, NPU_DTYPE_FP16),
+               T({off_out}, NPU_DTYPE_FP16), {n}, NPU_DTYPE_FP16);
 
-    f = fopen("out.bin", "wb"); fwrite(out, 2, {n}, f); fclose(f);
+    save_file("out.bin", l1 + {off_out}, {n * 2});
     return 0;
 }}
 """
@@ -299,7 +320,7 @@ int main(void) {{
 
 
 class TestMulScalar:
-    """npu_mul_scalar: Y = X * scalar (fp16)"""
+    """vector_mul_scalar: Y = X * scalar (fp16)"""
 
     def test_basic_mul_scalar(self, tmp_path):
         n = 64
@@ -311,18 +332,16 @@ class TestMulScalar:
         workdir = str(tmp_path)
         _write_bin(os.path.join(workdir, "x.bin"), x)
 
-        c_code = f"""
-#include <stdio.h>
-#include "npu_api.h"
-
+        off_in, off_out = 0, 1024
+        c_code = _C_PREAMBLE + f"""
 int main(void) {{
-    unsigned short x[{n}], out[{n}];
-    FILE* f;
-    f = fopen("x.bin", "rb"); fread(x, 2, {n}, f); fclose(f);
+    l1_init();
+    load_file("x.bin", l1 + {off_in}, {n * 2});
 
-    npu_mul_scalar(x, out, {scalar}f, {n}, NPU_DTYPE_FP16);
+    vector_mul_scalar(T({off_in}, NPU_DTYPE_FP16), T({off_out}, NPU_DTYPE_FP16),
+                      {scalar}f, {n}, NPU_DTYPE_FP16);
 
-    f = fopen("out.bin", "wb"); fwrite(out, 2, {n}, f); fclose(f);
+    save_file("out.bin", l1 + {off_out}, {n * 2});
     return 0;
 }}
 """
@@ -336,7 +355,7 @@ int main(void) {{
 
 
 class TestTranspose:
-    """npu_transpose_2d: B = A^T (fp16)"""
+    """vector_transpose_2d: B = A^T (fp16)"""
 
     def test_transpose_2d(self, tmp_path):
         rows, cols = 8, 16
@@ -347,18 +366,16 @@ class TestTranspose:
         workdir = str(tmp_path)
         _write_bin(os.path.join(workdir, "a.bin"), a)
 
-        c_code = f"""
-#include <stdio.h>
-#include "npu_api.h"
-
+        off_in, off_out = 0, 4096
+        c_code = _C_PREAMBLE + f"""
 int main(void) {{
-    unsigned short a[{rows * cols}], out[{rows * cols}];
-    FILE* f;
-    f = fopen("a.bin", "rb"); fread(a, 2, {rows * cols}, f); fclose(f);
+    l1_init();
+    load_file("a.bin", l1 + {off_in}, {rows * cols * 2});
 
-    npu_transpose_2d(a, out, {rows}, {cols}, NPU_DTYPE_FP16);
+    vector_transpose_2d(T({off_in}, NPU_DTYPE_FP16), T({off_out}, NPU_DTYPE_FP16),
+                        {rows}, {cols}, NPU_DTYPE_FP16);
 
-    f = fopen("out.bin", "wb"); fwrite(out, 2, {rows * cols}, f); fclose(f);
+    save_file("out.bin", l1 + {off_out}, {rows * cols * 2});
     return 0;
 }}
 """
@@ -409,7 +426,7 @@ int main(void) {{
 
 
 class TestReshape:
-    """npu_reshape: 内存拷贝（reshape 不改变数据布局）"""
+    """scalar_reshape: 内存拷贝（reshape 不改变数据布局）"""
 
     def test_reshape(self, tmp_path):
         n = 64
@@ -419,18 +436,16 @@ class TestReshape:
         workdir = str(tmp_path)
         _write_bin(os.path.join(workdir, "x.bin"), x)
 
-        c_code = f"""
-#include <stdio.h>
-#include "npu_api.h"
-
+        off_in, off_out = 0, 1024
+        c_code = _C_PREAMBLE + f"""
 int main(void) {{
-    unsigned short x[{n}], out[{n}];
-    FILE* f;
-    f = fopen("x.bin", "rb"); fread(x, 2, {n}, f); fclose(f);
+    l1_init();
+    load_file("x.bin", l1 + {off_in}, {n * 2});
 
-    npu_reshape(x, out, {n * 2}, NPU_DTYPE_FP16);
+    scalar_reshape(T({off_in}, NPU_DTYPE_FP16), T({off_out}, NPU_DTYPE_FP16),
+                   {n * 2}, NPU_DTYPE_FP16);
 
-    f = fopen("out.bin", "wb"); fwrite(out, 2, {n}, f); fclose(f);
+    save_file("out.bin", l1 + {off_out}, {n * 2});
     return 0;
 }}
 """
@@ -443,7 +458,7 @@ int main(void) {{
 
 
 class TestSoftmax:
-    """npu_softmax_part1 + npu_softmax_part2: 分步 softmax"""
+    """vector_softmax_part1 + vector_softmax_part2: 分步 softmax"""
 
     def test_softmax_decomposed(self, tmp_path):
         seq, dim = 4, 8
@@ -457,19 +472,18 @@ class TestSoftmax:
         workdir = str(tmp_path)
         _write_bin(os.path.join(workdir, "x.bin"), x)
 
-        c_code = f"""
-#include <stdio.h>
-#include "npu_api.h"
-
+        off_in, off_inter, off_out = 0, 1024, 2048
+        c_code = _C_PREAMBLE + f"""
 int main(void) {{
-    unsigned short x[{count}], inter[{count}], out[{count}];
-    FILE* f;
-    f = fopen("x.bin", "rb"); fread(x, 2, {count}, f); fclose(f);
+    l1_init();
+    load_file("x.bin", l1 + {off_in}, {count * 2});
 
-    npu_softmax_part1(x, inter, {dim}, {count}, NPU_DTYPE_FP16);
-    npu_softmax_part2(inter, out, {count * 2}, NPU_DTYPE_FP16);
+    vector_softmax_part1(T({off_in}, NPU_DTYPE_FP16), T({off_inter}, NPU_DTYPE_FP16),
+                         {dim}, {count}, NPU_DTYPE_FP16);
+    vector_softmax_part2(T({off_inter}, NPU_DTYPE_FP16), T({off_out}, NPU_DTYPE_FP16),
+                         {count * 2}, NPU_DTYPE_FP16);
 
-    f = fopen("out.bin", "wb"); fwrite(out, 2, {count}, f); fclose(f);
+    save_file("out.bin", l1 + {off_out}, {count * 2});
     return 0;
 }}
 """
@@ -480,7 +494,7 @@ int main(void) {{
 
 
 class TestLayerNorm:
-    """npu_layernorm_part1 + npu_layernorm_part2: 分步 layernorm"""
+    """vector_layernorm_part1 + vector_layernorm_part2: 分步 layernorm"""
 
     def test_layernorm_decomposed(self, tmp_path):
         seq, hidden = 4, 8
@@ -502,24 +516,22 @@ class TestLayerNorm:
         _write_bin(os.path.join(workdir, "gamma.bin"), gamma)
         _write_bin(os.path.join(workdir, "beta.bin"), beta)
 
-        # layernorm_part2 的 hidden 参数传 total elem count（mock 内部 * dtype_size）
-        c_code = f"""
-#include <stdio.h>
-#include "npu_api.h"
-
+        off_x, off_gamma, off_beta = 0, 1024, 2048
+        off_inter, off_out = 3072, 4096
+        c_code = _C_PREAMBLE + f"""
 int main(void) {{
-    unsigned short x[{count}], gamma[{hidden}], beta[{hidden}];
-    unsigned short inter[{count}], out[{count}];
-    FILE* f;
-    f = fopen("x.bin", "rb"); fread(x, 2, {count}, f); fclose(f);
-    f = fopen("gamma.bin", "rb"); fread(gamma, 2, {hidden}, f); fclose(f);
-    f = fopen("beta.bin", "rb"); fread(beta, 2, {hidden}, f); fclose(f);
+    l1_init();
+    load_file("x.bin", l1 + {off_x}, {count * 2});
+    load_file("gamma.bin", l1 + {off_gamma}, {hidden * 2});
+    load_file("beta.bin", l1 + {off_beta}, {hidden * 2});
 
-    npu_layernorm_part1(x, gamma, beta, inter, {hidden}, {seq},
-                        {eps}f, NPU_DTYPE_FP16);
-    npu_layernorm_part2(inter, x, out, {count * 2}, NPU_DTYPE_FP16);
+    vector_layernorm_part1(T({off_x}, NPU_DTYPE_FP16), T({off_gamma}, NPU_DTYPE_FP16),
+                           T({off_beta}, NPU_DTYPE_FP16), T({off_inter}, NPU_DTYPE_FP16),
+                           {hidden}, {seq}, {eps}f, NPU_DTYPE_FP16);
+    vector_layernorm_part2(T({off_inter}, NPU_DTYPE_FP16), T({off_x}, NPU_DTYPE_FP16),
+                           T({off_out}, NPU_DTYPE_FP16), {count * 2}, NPU_DTYPE_FP16);
 
-    f = fopen("out.bin", "wb"); fwrite(out, 2, {count}, f); fclose(f);
+    save_file("out.bin", l1 + {off_out}, {count * 2});
     return 0;
 }}
 """
@@ -533,7 +545,7 @@ int main(void) {{
 
 
 class TestMatmulAddFusion:
-    """组合测试: npu_matmul_bias（模拟 addmm 融合为 matmul + bias）"""
+    """组合测试: cube_matmul_bias（模拟 addmm 融合为 matmul + bias）"""
 
     def test_matmul_then_add(self, tmp_path):
         M, K, N = 4, 8, 6
@@ -551,21 +563,19 @@ class TestMatmulAddFusion:
         _write_bin(os.path.join(workdir, "b.bin"), b)
         _write_bin(os.path.join(workdir, "bias.bin"), bias)
 
-        c_code = f"""
-#include <stdio.h>
-#include "npu_api.h"
-
+        off_a, off_b, off_bias, off_out = 0, 1024, 2048, 3072
+        c_code = _C_PREAMBLE + f"""
 int main(void) {{
-    unsigned short a[{M * K}], b[{K * N}], bias[{N}], out[{M * N}];
-    FILE* f;
-    f = fopen("a.bin", "rb"); fread(a, 2, {M * K}, f); fclose(f);
-    f = fopen("b.bin", "rb"); fread(b, 2, {K * N}, f); fclose(f);
-    f = fopen("bias.bin", "rb"); fread(bias, 2, {N}, f); fclose(f);
+    l1_init();
+    load_file("a.bin", l1 + {off_a}, {M * K * 2});
+    load_file("b.bin", l1 + {off_b}, {K * N * 2});
+    load_file("bias.bin", l1 + {off_bias}, {N * 2});
 
-    npu_matmul_bias(a, b, bias, out, {M}, {N}, {K},
-                    NPU_DTYPE_FP16, NPU_DTYPE_FP16, NPU_FORMAT_ND);
+    cube_matmul_bias(T({off_a}, NPU_DTYPE_FP16), T({off_b}, NPU_DTYPE_FP16),
+                     T({off_bias}, NPU_DTYPE_FP16), T({off_out}, NPU_DTYPE_FP16),
+                     1, {M}, {N}, {K}, NPU_DTYPE_FP16);
 
-    f = fopen("out.bin", "wb"); fwrite(out, 2, {M * N}, f); fclose(f);
+    save_file("out.bin", l1 + {off_out}, {M * N * 2});
     return 0;
 }}
 """
@@ -596,30 +606,32 @@ class TestAttentionBlock:
         _write_bin(os.path.join(workdir, "k.bin"), k)
         _write_bin(os.path.join(workdir, "v.bin"), v)
 
-        c_code = f"""
-#include <stdio.h>
-#include "npu_api.h"
-
+        # L1 layout: q(0), k(1024), v(2048), kt(3072), scores(4096), sm(5120), attn(6144), out(7168)
+        off_q, off_k, off_v = 0, 1024, 2048
+        off_kt, off_scores, off_sm, off_attn, off_out = 3072, 4096, 5120, 6144, 7168
+        c_code = _C_PREAMBLE + f"""
 int main(void) {{
-    unsigned short q[{seq * d}], k[{seq * d}], v[{seq * d}];
-    unsigned short kt[{seq * d}], scores[{seq * seq}], sm_inter[{seq * seq}];
-    unsigned short attn[{seq * seq}], out[{seq * d}];
-    FILE* f;
-    f = fopen("q.bin", "rb"); fread(q, 2, {seq * d}, f); fclose(f);
-    f = fopen("k.bin", "rb"); fread(k, 2, {seq * d}, f); fclose(f);
-    f = fopen("v.bin", "rb"); fread(v, 2, {seq * d}, f); fclose(f);
+    l1_init();
+    load_file("q.bin", l1 + {off_q}, {seq * d * 2});
+    load_file("k.bin", l1 + {off_k}, {seq * d * 2});
+    load_file("v.bin", l1 + {off_v}, {seq * d * 2});
 
     /* K^T */
-    npu_transpose_2d(k, kt, {seq}, {d}, NPU_DTYPE_FP16);
+    vector_transpose_2d(T({off_k}, NPU_DTYPE_FP16), T({off_kt}, NPU_DTYPE_FP16),
+                        {seq}, {d}, NPU_DTYPE_FP16);
     /* scores = Q @ K^T */
-    npu_matmul(q, kt, scores, {seq}, {seq}, {d}, NPU_DTYPE_FP16, NPU_FORMAT_ND);
+    cube_matmul(T({off_q}, NPU_DTYPE_FP16), T({off_kt}, NPU_DTYPE_FP16),
+                T({off_scores}, NPU_DTYPE_FP16), 1, {seq}, {seq}, {d}, NPU_DTYPE_FP16);
     /* softmax */
-    npu_softmax_part1(scores, sm_inter, {seq}, {seq * seq}, NPU_DTYPE_FP16);
-    npu_softmax_part2(sm_inter, attn, {seq * seq * 2}, NPU_DTYPE_FP16);
+    vector_softmax_part1(T({off_scores}, NPU_DTYPE_FP16), T({off_sm}, NPU_DTYPE_FP16),
+                         {seq}, {seq * seq}, NPU_DTYPE_FP16);
+    vector_softmax_part2(T({off_sm}, NPU_DTYPE_FP16), T({off_attn}, NPU_DTYPE_FP16),
+                         {seq * seq * 2}, NPU_DTYPE_FP16);
     /* out = attn @ V */
-    npu_matmul(attn, v, out, {seq}, {d}, {seq}, NPU_DTYPE_FP16, NPU_FORMAT_ND);
+    cube_matmul(T({off_attn}, NPU_DTYPE_FP16), T({off_v}, NPU_DTYPE_FP16),
+                T({off_out}, NPU_DTYPE_FP16), 1, {seq}, {d}, {seq}, NPU_DTYPE_FP16);
 
-    f = fopen("out.bin", "wb"); fwrite(out, 2, {seq * d}, f); fclose(f);
+    save_file("out.bin", l1 + {off_out}, {seq * d * 2});
     return 0;
 }}
 """

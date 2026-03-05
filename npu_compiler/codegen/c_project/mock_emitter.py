@@ -29,8 +29,15 @@ def emit_mock_h(signatures: dict) -> str:
         "#include <stdint.h>",
         "",
         "typedef enum { NPU_DTYPE_FP16=0, NPU_DTYPE_FP32, NPU_DTYPE_BF16, "
-        "NPU_DTYPE_INT8, NPU_DTYPE_INT32 } npu_dtype_t;",
+        "NPU_DTYPE_INT8, NPU_DTYPE_INT32, NPU_DTYPE_INT16 } npu_dtype_t;",
         "typedef enum { NPU_FORMAT_ND=0, NPU_FORMAT_NZ, NPU_FORMAT_NC1HWC0 } npu_format_t;",
+        "",
+        "typedef struct { uint32_t addr; npu_dtype_t dtype; npu_format_t format; } npu_tensor_t;",
+        "",
+        "extern unsigned char* npu_l1_base;",
+        "static inline void* npu_t_ptr(npu_tensor_t t) {",
+        "    return (void*)(npu_l1_base + ((size_t)t.addr));",
+        "}",
         "",
     ]
     for section in ["compute_ops", "dma_ops", "sync_ops"]:
