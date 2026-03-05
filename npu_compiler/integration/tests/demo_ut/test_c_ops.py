@@ -642,7 +642,7 @@ int main(void) {{
 
 
 class TestMultiHeadAttention:
-    """组合测试: 多头注意力 — Wq/Wk/Wv 投影 -> reshape -> 逐头 Q@K^T -> softmax -> @V -> concat -> Wo 投影"""
+    """组合测试: 多头注意力（混合精度 fp16 存储 + fp32 计算, vector_transpose 做 head reshape）"""
 
     def test_multi_head_attention(self, tmp_path):
         num_heads, seq, d_model = 2, 4, 8
@@ -733,38 +733,26 @@ int main(void) {{
     load_file("wv.bin", l1 + {off_wv}, {d_model * d_model * 2});
     load_file("wo.bin", l1 + {off_wo}, {d_model * d_model * 2});
 
-    /* Q = x @ Wq */
+    /* Q = x @ Wq  (mixed precision: storage fp16, compute fp32) */
     cube_matmul(T({off_x}, NPU_DTYPE_FP16), T({off_wq}, NPU_DTYPE_FP16),
-                T({off_q}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP16);
+                T({off_q}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP32);
     /* K = x @ Wk */
     cube_matmul(T({off_x}, NPU_DTYPE_FP16), T({off_wk}, NPU_DTYPE_FP16),
-                T({off_k}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP16);
+                T({off_k}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP32);
     /* V = x @ Wv */
     cube_matmul(T({off_x}, NPU_DTYPE_FP16), T({off_wv}, NPU_DTYPE_FP16),
-                T({off_v}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP16);
+                T({off_v}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP32);
 
-    /* reshape Q/K/V from (seq, d_model) to (num_heads, seq, head_dim)
-       memory: row i of (seq, d_model) has [h0_dim0..h0_dim3, h1_dim0..h1_dim3]
-       we need (num_heads, seq, head_dim): head h, row i -> offset h*seq*head_dim + i*head_dim
-       i.e. deinterleave heads */
+    /* deinterleave Q/K/V: (seq, num_heads, head_dim) -> transpose(0,1) -> (num_heads, seq, head_dim)
+       uses vector_transpose instead of manual C loops — mirrors DMA随路格式转换 */
     {{
-        const uint16_t* src_q = (const uint16_t*)(l1 + {off_q});
-        const uint16_t* src_k = (const uint16_t*)(l1 + {off_k});
-        const uint16_t* src_v = (const uint16_t*)(l1 + {off_v});
-        uint16_t* dst_q = (uint16_t*)(l1 + {off_qh});
-        uint16_t* dst_k = (uint16_t*)(l1 + {off_kh});
-        uint16_t* dst_v = (uint16_t*)(l1 + {off_vh});
-        for (int i = 0; i < {seq}; i++) {{
-            for (int h = 0; h < {num_heads}; h++) {{
-                for (int j = 0; j < {head_dim}; j++) {{
-                    int src_idx = i * {d_model} + h * {head_dim} + j;
-                    int dst_idx = h * {seq} * {head_dim} + i * {head_dim} + j;
-                    dst_q[dst_idx] = src_q[src_idx];
-                    dst_k[dst_idx] = src_k[src_idx];
-                    dst_v[dst_idx] = src_v[src_idx];
-                }}
-            }}
-        }}
+        const int deinterleave_dims[] = {{{seq}, {num_heads}, {head_dim}}};
+        vector_transpose(T({off_q}, NPU_DTYPE_FP16), T({off_qh}, NPU_DTYPE_FP16),
+                         3, deinterleave_dims, 0, 1, NPU_DTYPE_FP32);
+        vector_transpose(T({off_k}, NPU_DTYPE_FP16), T({off_kh}, NPU_DTYPE_FP16),
+                         3, deinterleave_dims, 0, 1, NPU_DTYPE_FP32);
+        vector_transpose(T({off_v}, NPU_DTYPE_FP16), T({off_vh}, NPU_DTYPE_FP16),
+                         3, deinterleave_dims, 0, 1, NPU_DTYPE_FP32);
     }}
 
     /* transpose K per head: (num_heads, seq, head_dim) -> (num_heads, head_dim, seq) */
@@ -772,45 +760,37 @@ int main(void) {{
         int kh_off = {off_kh} + h * {seq * head_dim * 2};
         int kht_off = {off_kht} + h * {seq * head_dim * 2};
         vector_transpose_2d(T(kh_off, NPU_DTYPE_FP16), T(kht_off, NPU_DTYPE_FP16),
-                            {seq}, {head_dim}, NPU_DTYPE_FP16);
+                            {seq}, {head_dim}, NPU_DTYPE_FP32);
     }}
 
     /* batched scores = Q_heads @ K_heads^T, using loop={num_heads} */
     cube_matmul(T({off_qh}, NPU_DTYPE_FP16), T({off_kht}, NPU_DTYPE_FP16),
-                T({off_scores}, NPU_DTYPE_FP16), {num_heads}, {seq}, {seq}, {head_dim}, NPU_DTYPE_FP16);
+                T({off_scores}, NPU_DTYPE_FP16), {num_heads}, {seq}, {seq}, {head_dim}, NPU_DTYPE_FP32);
 
     /* scale scores by 1/sqrt(head_dim) */
     vector_mul_scalar(T({off_scores}, NPU_DTYPE_FP16), T({off_scaled}, NPU_DTYPE_FP16),
-                      {scale}f, {num_heads * seq * seq}, NPU_DTYPE_FP16);
+                      {scale}f, {num_heads * seq * seq}, NPU_DTYPE_FP32);
 
     /* softmax over last dim (seq) for each row across all heads */
     vector_softmax_part1(T({off_scaled}, NPU_DTYPE_FP16), T({off_sm}, NPU_DTYPE_FP16),
-                         {seq}, {num_heads * seq * seq}, NPU_DTYPE_FP16);
+                         {seq}, {num_heads * seq * seq}, NPU_DTYPE_FP32);
     vector_softmax_part2(T({off_sm}, NPU_DTYPE_FP16), T({off_attn}, NPU_DTYPE_FP16),
-                         {num_heads * seq * seq * 2}, NPU_DTYPE_FP16);
+                         {num_heads * seq * seq * 2}, NPU_DTYPE_FP32);
 
     /* batched out = attn @ V_heads, loop={num_heads} */
     cube_matmul(T({off_attn}, NPU_DTYPE_FP16), T({off_vh}, NPU_DTYPE_FP16),
-                T({off_head_out}, NPU_DTYPE_FP16), {num_heads}, {seq}, {head_dim}, {seq}, NPU_DTYPE_FP16);
+                T({off_head_out}, NPU_DTYPE_FP16), {num_heads}, {seq}, {head_dim}, {seq}, NPU_DTYPE_FP32);
 
-    /* concat heads: (num_heads, seq, head_dim) -> (seq, d_model) */
+    /* reinterleave heads: (num_heads, seq, head_dim) -> transpose(0,1) -> (seq, num_heads, head_dim) = (seq, d_model) */
     {{
-        const uint16_t* src = (const uint16_t*)(l1 + {off_head_out});
-        uint16_t* dst = (uint16_t*)(l1 + {off_concat});
-        for (int i = 0; i < {seq}; i++) {{
-            for (int h = 0; h < {num_heads}; h++) {{
-                for (int j = 0; j < {head_dim}; j++) {{
-                    int src_idx = h * {seq} * {head_dim} + i * {head_dim} + j;
-                    int dst_idx = i * {d_model} + h * {head_dim} + j;
-                    dst[dst_idx] = src[src_idx];
-                }}
-            }}
-        }}
+        const int reinterleave_dims[] = {{{num_heads}, {seq}, {head_dim}}};
+        vector_transpose(T({off_head_out}, NPU_DTYPE_FP16), T({off_concat}, NPU_DTYPE_FP16),
+                         3, reinterleave_dims, 0, 1, NPU_DTYPE_FP32);
     }}
 
     /* output projection: out = concat @ Wo */
     cube_matmul(T({off_concat}, NPU_DTYPE_FP16), T({off_wo}, NPU_DTYPE_FP16),
-                T({off_out}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP16);
+                T({off_out}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP32);
 
     save_file("out.bin", l1 + {off_out}, {seq * d_model * 2});
     return 0;
