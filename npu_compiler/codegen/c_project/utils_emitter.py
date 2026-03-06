@@ -3,27 +3,19 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from npu_compiler.common import get_logger
 
-from .._helpers import c_header_guard, write_files
+from .._helpers import c_header_guard, load_template, write_files
 
 logger = get_logger("codegen.utils_emitter")
-
-_TMPL_DIR = Path(__file__).parent.parent / "templates"
-
-
-def _load_template(name: str) -> str:
-    with open(_TMPL_DIR / name, "r", encoding="utf-8") as f:
-        return f.read()
 
 
 # ---- data_loader ----
 
 
 def emit_data_loader_c() -> str:
-    return _load_template("data_loader.c.tmpl").format()
+    return load_template("data_loader.c.tmpl").format()
 
 
 _MAX_TENSOR_NDIM = 8
@@ -51,7 +43,7 @@ def emit_data_loader_h() -> str:
 
 
 def emit_comparator_c() -> str:
-    return _load_template("comparator.c.tmpl").format()
+    return load_template("comparator.c.tmpl").format()
 
 
 def emit_comparator_h() -> str:

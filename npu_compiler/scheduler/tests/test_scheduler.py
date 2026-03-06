@@ -1,54 +1,20 @@
 """scheduler 单元测试。"""
 
 from npu_compiler.common import Graph, Node, Tensor
+from npu_compiler.common.testing import make_linear_chain
 from npu_compiler.scheduler.scheduler import post_validate, run
+
+_SCHEDULER_OPS = [
+    ("node_0", "cube_matmul", "cube"),
+    ("node_1", "vector_add", "vector"),
+    ("node_2", "cube_matmul", "cube"),
+    ("node_3", "vector_gelu", "vector"),
+]
 
 
 def _make_linear_chain() -> Graph:
     """创建 matmul→add→matmul→gelu 线性链。"""
-    g = Graph()
-    ops = [
-        ("node_0", "cube_matmul", "cube"),
-        ("node_1", "vector_add", "vector"),
-        ("node_2", "cube_matmul", "cube"),
-        ("node_3", "vector_gelu", "vector"),
-    ]
-    t_in = Tensor(
-        id="tensor_input",
-        shape=[1, 32, 64],
-        dtype="fp16",
-        is_model_input=True,
-        consumer_node_ids=["node_0"],
-    )
-    g.add_tensor(t_in)
-
-    prev_tid = "tensor_input"
-    for i, (nid, op, unit) in enumerate(ops):
-        out_tid = f"tensor_{i}" if i < len(ops) - 1 else "tensor_output"
-        node = Node(
-            id=nid,
-            op_type=op,
-            inputs=[prev_tid],
-            outputs=[out_tid],
-            compute_unit=unit,
-            npu_op=op,
-            is_mapped=True,
-        )
-        g.add_node(node)
-        is_last = i == len(ops) - 1
-        t = Tensor(
-            id=out_tid,
-            shape=[1, 32, 64],
-            dtype="fp16",
-            producer_node_id=nid,
-            consumer_node_ids=[] if is_last else [ops[i + 1][0]],
-            is_model_output=is_last,
-        )
-        g.add_tensor(t)
-        prev_tid = out_tid
-
-    g.execution_order = [nid for nid, _, _ in ops]
-    return g
+    return make_linear_chain(ops=_SCHEDULER_OPS)
 
 
 def _make_parallel_graph() -> Graph:

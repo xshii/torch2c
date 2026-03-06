@@ -9,9 +9,20 @@ from npu_compiler.common import DTYPE_INFO, get_logger, load_config
 
 logger = get_logger("codegen._helpers")
 
+# ---- 模板加载 ----
+
+_TMPL_DIR = Path(__file__).parent / "templates"
+
+
+def load_template(name: str) -> str:
+    """从 codegen/templates/ 加载模板文件内容。"""
+    with open(_TMPL_DIR / name, "r", encoding="utf-8") as f:
+        return f.read()
+
+
 # ---- NPU C 枚举映射 ----
 
-DTYPE_MAP = {k: v.c_enum for k, v in DTYPE_INFO.items()}
+DTYPE_C_ENUM_MAP = {k: v.c_enum for k, v in DTYPE_INFO.items()}
 
 FORMAT_MAP = {
     "nd": "NPU_FORMAT_ND",

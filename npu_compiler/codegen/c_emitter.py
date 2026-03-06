@@ -8,7 +8,7 @@ import os
 from npu_compiler.common import CodegenError, get_logger
 
 from ._helpers import (
-    DTYPE_MAP,
+    DTYPE_C_ENUM_MAP,
     FORMAT_MAP,
     c_header_guard,
     load_signatures,
@@ -57,7 +57,7 @@ class SourceResolver:
             raise CodegenError(f"张量 {tensor_key} 未找到: node={self._node['id']}")
         offset = t.get("l1_offset", 0) or 0
         shifted = offset >> addr_shift if addr_shift > 0 else offset
-        dtype_enum = DTYPE_MAP.get(t.get("dtype", "fp16"), "NPU_DTYPE_FP16")
+        dtype_enum = DTYPE_C_ENUM_MAP.get(t.get("dtype", "fp16"), "NPU_DTYPE_FP16")
         fmt_enum = FORMAT_MAP.get(t.get("format", "nd"), "NPU_FORMAT_ND")
         return f"(npu_tensor_t){{{shifted}, {dtype_enum}, {fmt_enum}}}"
 
@@ -110,7 +110,7 @@ class SourceResolver:
             buf = "l1" if field == "l1_offset" else "hbm"
             return f"(void*)({buf} + {offset})"
         if field in ("dtype", "dtype_enum"):
-            return DTYPE_MAP.get(t.get("dtype", "fp16"), "NPU_DTYPE_FP16")
+            return DTYPE_C_ENUM_MAP.get(t.get("dtype", "fp16"), "NPU_DTYPE_FP16")
         if field in ("format", "format_enum"):
             return FORMAT_MAP.get(t.get("format", "nd"), "NPU_FORMAT_ND")
         if field == "shape":

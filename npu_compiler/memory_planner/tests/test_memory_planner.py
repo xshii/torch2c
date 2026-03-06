@@ -1,21 +1,13 @@
 """memory_planner 单元测试。"""
 
-import os
-
 import pytest
 
-from npu_compiler.common import Graph, Node, Tensor, load_config
+from npu_compiler.common import Graph, Node, Tensor
 from npu_compiler.common.errors import MemoryPlanError
+from npu_compiler.common.testing import load_hw_config, make_linear_chain
 from npu_compiler.memory_planner import run
 from npu_compiler.memory_planner._utils import align_up, calc_padded_size
 from npu_compiler.memory_planner.memory_planner import post_validate
-
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "hardware_config.yaml")
-
-
-def _load_config() -> dict:
-    return load_config(CONFIG_PATH)
-
 
 # 小 shape（适配 L1 全局布局）
 _SMALL_SHAPE = [1, 32, 64]
@@ -32,44 +24,11 @@ def _make_linear_chain(
     """创建一个 n_ops 算子的线性链图。"""
     if shape is None:
         shape = _SMALL_SHAPE
-    g = Graph()
-    t_in = Tensor(
-        id="tensor_input",
-        shape=shape,
-        dtype="fp16",
-        is_model_input=True,
-        consumer_node_ids=["node_0"],
-    )
-    g.add_tensor(t_in)
+    return make_linear_chain(n_ops=n_ops, shape=shape)
 
-    prev_tid = "tensor_input"
-    for i in range(n_ops):
-        out_tid = f"tensor_{i}" if i < n_ops - 1 else "tensor_output"
-        node = Node(
-            id=f"node_{i}",
-            op_type="vector_add",
-            inputs=[prev_tid],
-            outputs=[out_tid],
-            compute_unit="vector",
-            npu_op="vector_add",
-            is_mapped=True,
-        )
-        g.add_node(node)
 
-        is_last = i == n_ops - 1
-        t = Tensor(
-            id=out_tid,
-            shape=shape,
-            dtype="fp16",
-            producer_node_id=f"node_{i}",
-            consumer_node_ids=[] if is_last else [f"node_{i + 1}"],
-            is_model_output=is_last,
-        )
-        g.add_tensor(t)
-        prev_tid = out_tid
-
-    g.execution_order = [f"node_{i}" for i in range(n_ops)]
-    return g
+def _load_config() -> dict:
+    return load_hw_config()
 
 
 class TestCalcPaddedSize:

@@ -3,20 +3,12 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from npu_compiler.common import get_logger
 
-from .._helpers import write_file
+from .._helpers import load_template, write_file
 
 logger = get_logger("codegen.main_emitter")
-
-_TMPL_DIR = Path(__file__).parent.parent / "templates"
-
-
-def _load_template(name: str) -> str:
-    with open(_TMPL_DIR / name, "r", encoding="utf-8") as f:
-        return f.read()
 
 
 _DEFAULT_L1_BYTES = 16 * 1024 * 1024  # 16 MB
@@ -84,7 +76,7 @@ def emit_main_c(
 
     l1_size = hw_config.get("l1_capacity", _DEFAULT_L1_BYTES)
 
-    template = _load_template("main.c.tmpl")
+    template = load_template("main.c.tmpl")
     return template.format(
         hbm_size=hbm_size,
         l1_size=l1_size,

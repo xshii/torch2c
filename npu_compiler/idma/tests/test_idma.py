@@ -1,19 +1,14 @@
 """idma 单元测试。"""
 
-import os
-
 import pytest
 
-from npu_compiler.common import Graph, Node, Tensor, load_config
+from npu_compiler.common import Graph, Node, Tensor
+from npu_compiler.common.testing import load_hw_config
 from npu_compiler.memory_planner import run as run_memory_planner
 from npu_compiler.memory_planner.memory_planner import post_validate as mp_post_validate
 from npu_compiler.idma import run as run_idma
 from npu_compiler.idma.idma import post_validate
 from npu_compiler.reformat_inserter import run as run_reformat_inserter
-
-HARDWARE_CONFIG_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "memory_planner", "config", "hardware_config.yaml"
-)
 
 _SMALL_SHAPE = [1, 32, 64]
 # 足够大使 4 tensor 超出 L1 (16MB)，强制走 per-op 路径
@@ -335,7 +330,7 @@ class TestMemoryPlannerWithLocalStorage:
     """验证 memory_planner 正确处理 storage=local 的 tensor（含 idma 节点）。"""
 
     def _load_hw_config(self) -> dict:
-        return load_config(HARDWARE_CONFIG_PATH)
+        return load_hw_config()
 
     def test_local_tensor_no_hbm(self):
         """storage=local 的 tensor 不应分配 HBM。"""
@@ -513,7 +508,7 @@ class TestMatmulBiasSoftmax:
     """用例：matmul(cube) → reformat(idma) → bias_add(vector) → softmax(vector)"""
 
     def _load_hw_config(self) -> dict:
-        return load_config(HARDWARE_CONFIG_PATH)
+        return load_hw_config()
 
     # ── idma 标记 ──
 
@@ -816,7 +811,7 @@ class TestMatmulBiasSoftmaxLnFfn:
         return g
 
     def _load_hw_config(self) -> dict:
-        return load_config(HARDWARE_CONFIG_PATH)
+        return load_hw_config()
 
     # ── reformat_inserter ──
 
@@ -1130,7 +1125,7 @@ class TestPipeMemoryPlanner:
     """pipe tensor 在 memory_planner 中不分配 HBM 和 L1。"""
 
     def _load_hw_config(self) -> dict:
-        return load_config(HARDWARE_CONFIG_PATH)
+        return load_hw_config()
 
     def test_pipe_no_hbm(self):
         """pipe tensor 不应分配 HBM。"""
@@ -1287,7 +1282,7 @@ class TestPipeWithAbsorbedInputs:
         return g
 
     def _load_hw_config(self) -> dict:
-        return load_config(HARDWARE_CONFIG_PATH)
+        return load_hw_config()
 
     def test_pipe_on_absorbed_matmul_output(self):
         """吸收后 matmul+bias(cube) 输出走 pipe 到 vector。"""
