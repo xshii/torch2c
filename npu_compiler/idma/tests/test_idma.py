@@ -6,6 +6,7 @@ import pytest
 
 from npu_compiler.common import Graph, Node, Tensor, load_config
 from npu_compiler.memory_planner import run as run_memory_planner
+from npu_compiler.memory_planner.memory_planner import post_validate as mp_post_validate
 from npu_compiler.idma import run as run_idma
 from npu_compiler.idma.idma import post_validate
 
@@ -248,6 +249,213 @@ class TestMemoryPlannerWithLocalStorage:
         config = self._load_hw_config()
         g, _ = run_memory_planner(g, config)
 
-        from npu_compiler.memory_planner.memory_planner import post_validate as mp_post_validate
         errors = mp_post_validate(g)
         assert errors == [], f"不应有错误: {errors}"
+
+
+# ── 用例：matmul+bias → safe_softmax ────────────────────
+
+
+def _make_matmul_bias_softmax() -> Graph:
+    """HBM(fp16,nd) → matmul(nz,fp16) → bias_add(nz,fp16) → safe_softmax(fp32) → HBM
+
+    数据流：
+        t_input(fp16,nd,hbm)  ─┐
+        t_weight(fp16,nz,hbm) ─┤→ [cube_matmul] → t_mm_out(fp16,nd,local)
+                                │                        │
+        t_bias(fp16,nz,hbm)  ──┤──────────────→ [vector_add] → t_add_out(fp16,nd,local)
+                                                                       │
+                                                          [safe_softmax(fp32)] → t_out(fp16,nd,hbm)
+
+    format_annotation:
+      - matmul: inputs 期望 nz，DMA 搬运时 nd→nz reformat；输出 nd
+      - bias_add: t_bias 存储为 nz，DMA 搬运时 nz→nd reformat；输出 nd
+      - safe_softmax: compute fp32（params.compute_dtype="fp32"）；输出 fp16,nd
+
+    6 tensors × 4MB > 16MB L1 → 走 per-op 路径。
+    """
+    shape = [1, 1024, 2048]
+    g = Graph()
+
+    # ── 张量 ──
+    g.add_tensor(Tensor(
+        id="t_input", shape=shape, dtype="fp16", format="nd",
+        is_model_input=True, consumer_node_ids=["node_matmul"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_weight", shape=shape, dtype="fp16", format="nz",
+        is_weight=True, consumer_node_ids=["node_matmul"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_mm_out", shape=shape, dtype="fp16", format="nd",
+        producer_node_id="node_matmul", consumer_node_ids=["node_bias_add"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_bias", shape=shape, dtype="fp16", format="nz",
+        is_weight=True, consumer_node_ids=["node_bias_add"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_add_out", shape=shape, dtype="fp16", format="nd",
+        producer_node_id="node_bias_add", consumer_node_ids=["node_softmax"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_out", shape=shape, dtype="fp16", format="nd",
+        producer_node_id="node_softmax", is_model_output=True,
+    ))
+
+    # ── 节点 ──
+    g.add_node(Node(
+        id="node_matmul", op_type="cube_matmul",
+        inputs=["t_input", "t_weight"], outputs=["t_mm_out"],
+        compute_unit="cube", npu_op="cube_matmul", is_mapped=True,
+        format_annotation={
+            "inputs":  [{"format": "nz", "dtype": "fp16"},
+                        {"format": "nz", "dtype": "fp16"}],
+            "outputs": [{"format": "nd", "dtype": "fp16"}],
+        },
+    ))
+    g.add_node(Node(
+        id="node_bias_add", op_type="vector_add",
+        inputs=["t_mm_out", "t_bias"], outputs=["t_add_out"],
+        compute_unit="vector", npu_op="vector_add", is_mapped=True,
+        format_annotation={
+            "inputs":  [{"format": "nd", "dtype": "fp16"},
+                        {"format": "nd", "dtype": "fp16"}],
+            "outputs": [{"format": "nd", "dtype": "fp16"}],
+        },
+    ))
+    g.add_node(Node(
+        id="node_softmax", op_type="safe_softmax",
+        inputs=["t_add_out"], outputs=["t_out"],
+        params={"compute_dtype": "fp32"},
+        compute_unit="vector", npu_op="safe_softmax", is_mapped=True,
+        format_annotation={
+            "inputs":  [{"format": "nd", "dtype": "fp16"}],
+            "outputs": [{"format": "nd", "dtype": "fp16"}],
+        },
+    ))
+
+    g.execution_order = ["node_matmul", "node_bias_add", "node_softmax"]
+    return g
+
+
+class TestMatmulBiasSoftmax:
+    """用例：HBM(fp16,nd) → matmul(nz,fp16) → bias(nz) → softmax(fp32) → HBM"""
+
+    def _load_hw_config(self) -> dict:
+        return load_config(HARDWARE_CONFIG_PATH)
+
+    # ── idma 标记 ──
+
+    def test_storage_assignment(self):
+        """t_mm_out 和 t_add_out 应标记 local；输入/权重/输出留 hbm。"""
+        g = _make_matmul_bias_softmax()
+        g = run_idma(g, {})
+
+        assert g.tensors["t_mm_out"].storage == "local"
+        assert g.tensors["t_add_out"].storage == "local"
+        # 外部输入 / 权重 / 模型输出 不能 local
+        assert g.tensors["t_input"].storage == "hbm"
+        assert g.tensors["t_weight"].storage == "hbm"
+        assert g.tensors["t_bias"].storage == "hbm"
+        assert g.tensors["t_out"].storage == "hbm"
+
+    # ── HBM 分配 ──
+
+    def test_local_tensors_no_hbm(self):
+        """local tensor 不分配 HBM。"""
+        g = _make_matmul_bias_softmax()
+        g = run_idma(g, {})
+        g, _ = run_memory_planner(g, self._load_hw_config())
+
+        for tid in ("t_mm_out", "t_add_out"):
+            t = g.tensors[tid]
+            assert t.hbm_offset is None, f"{tid} 不应有 hbm_offset"
+            assert t.hbm_size is None, f"{tid} 不应有 hbm_size"
+            assert t.l1_offset is not None, f"{tid} 应有 l1_offset"
+
+    def test_hbm_tensors_allocated(self):
+        """hbm tensor 必须分配 HBM。"""
+        g = _make_matmul_bias_softmax()
+        g = run_idma(g, {})
+        g, _ = run_memory_planner(g, self._load_hw_config())
+
+        for tid in ("t_input", "t_weight", "t_bias", "t_out"):
+            t = g.tensors[tid]
+            assert t.hbm_offset is not None, f"{tid} 应有 hbm_offset"
+
+    # ── DMA 计划 ──
+
+    def test_matmul_dma(self):
+        """matmul: 从 HBM load input(nd→nz) 和 weight(nz)；不 store t_mm_out（local）。"""
+        g = _make_matmul_bias_softmax()
+        g = run_idma(g, {})
+        g, plans = run_memory_planner(g, self._load_hw_config())
+
+        matmul_plan = [p for p in plans if p.node_id == "node_matmul"][0]
+
+        # loads: t_input(nd→nz reformat) + t_weight(nz→nz)
+        load_tids = {ld.tensor_id for ld in matmul_plan.loads}
+        assert "t_input" in load_tids
+        assert "t_weight" in load_tids
+
+        # t_input 的 DMA load 做 nd→nz reformat
+        input_load = [ld for ld in matmul_plan.loads if ld.tensor_id == "t_input"][0]
+        assert input_load.src_format == "nd"
+        assert input_load.dst_format == "nz"
+
+        # stores: t_mm_out 是 local，不应出现
+        store_tids = {s.tensor_id for s in matmul_plan.stores}
+        assert "t_mm_out" not in store_tids
+
+    def test_bias_add_dma(self):
+        """bias_add: 不 load t_mm_out（local）；从 HBM load t_bias；不 store t_add_out（local）。"""
+        g = _make_matmul_bias_softmax()
+        g = run_idma(g, {})
+        g, plans = run_memory_planner(g, self._load_hw_config())
+
+        add_plan = [p for p in plans if p.node_id == "node_bias_add"][0]
+
+        # t_mm_out 是 local → 不从 HBM load
+        load_tids = {ld.tensor_id for ld in add_plan.loads}
+        assert "t_mm_out" not in load_tids
+        # t_bias 必须从 HBM load
+        assert "t_bias" in load_tids
+
+        # t_add_out 是 local → 不 store
+        store_tids = {s.tensor_id for s in add_plan.stores}
+        assert "t_add_out" not in store_tids
+
+    def test_softmax_dma(self):
+        """softmax: 不 load t_add_out（local）；store t_out 到 HBM。"""
+        g = _make_matmul_bias_softmax()
+        g = run_idma(g, {})
+        g, plans = run_memory_planner(g, self._load_hw_config())
+
+        sm_plan = [p for p in plans if p.node_id == "node_softmax"][0]
+
+        # t_add_out 是 local → 不从 HBM load
+        load_tids = {ld.tensor_id for ld in sm_plan.loads}
+        assert "t_add_out" not in load_tids
+
+        # t_out 是 model_output → 必须 store 到 HBM
+        store_tids = {s.tensor_id for s in sm_plan.stores}
+        assert "t_out" in store_tids
+
+    # ── 校验 ──
+
+    def test_post_validate_passes(self):
+        """整个流程后 memory_planner 校验应通过。"""
+        g = _make_matmul_bias_softmax()
+        g = run_idma(g, {})
+        g, _ = run_memory_planner(g, self._load_hw_config())
+
+        errors = mp_post_validate(g)
+        assert errors == [], f"不应有错误: {errors}"
+
+    def test_softmax_compute_dtype_preserved(self):
+        """safe_softmax 的 compute_dtype=fp32 参数应保留在 node.params 中。"""
+        g = _make_matmul_bias_softmax()
+        g = run_idma(g, {})
+        node = g.nodes["node_softmax"]
+        assert node.params["compute_dtype"] == "fp32"
