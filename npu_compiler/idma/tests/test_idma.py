@@ -158,6 +158,66 @@ class TestStorageAssignment:
         g = run_idma(g, {"enable_local_storage": False})
         assert g.tensors["t_mid"].storage == "hbm"
 
+    def test_allowed_pairs_default(self):
+        """默认 allowed_pairs 包含 cube→vector 和 vector→vector。"""
+        g = _make_reformat_chain()
+        # conv(cube)→t_mid→add(vector): cube→vector 默认允许
+        g = run_idma(g, {})
+        assert g.tensors["t_mid"].storage == "local"
+        # add(vector)→t_mid2→gelu(vector): vector→vector 默认允许
+        assert g.tensors["t_mid2"].storage == "local"
+
+    def test_allowed_pairs_restrict(self):
+        """只允许 vector→vector 时，cube→vector 的中间 tensor 不标 local。"""
+        g = _make_reformat_chain()
+        g = run_idma(g, {"allowed_pairs": [["vector", "vector"]]})
+        # conv(cube)→t_mid→add(vector): cube→vector 不允许
+        assert g.tensors["t_mid"].storage == "hbm"
+        # add(vector)→t_mid2→gelu(vector): vector→vector 允许
+        assert g.tensors["t_mid2"].storage == "local"
+
+    def test_allowed_pairs_empty(self):
+        """allowed_pairs 为空列表时，所有中间 tensor 都不标 local。"""
+        g = _make_reformat_chain()
+        g = run_idma(g, {"allowed_pairs": []})
+        assert g.tensors["t_mid"].storage == "hbm"
+        assert g.tensors["t_mid2"].storage == "hbm"
+
+    def test_allowed_pairs_cube_cube(self):
+        """显式添加 cube→cube 对时，两个 cube 节点间的 tensor 可标 local。"""
+        g = Graph()
+        shape = _LARGE_SHAPE
+        g.add_tensor(Tensor(
+            id="t_in", shape=shape, dtype="fp16",
+            is_model_input=True, consumer_node_ids=["n0"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_inter", shape=shape, dtype="fp16",
+            producer_node_id="n0", consumer_node_ids=["n1"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_out", shape=shape, dtype="fp16",
+            producer_node_id="n1", is_model_output=True,
+        ))
+        g.add_node(Node(
+            id="n0", op_type="cube_matmul", inputs=["t_in"], outputs=["t_inter"],
+            compute_unit="cube", npu_op="cube_matmul", is_mapped=True,
+        ))
+        g.add_node(Node(
+            id="n1", op_type="cube_matmul", inputs=["t_inter"], outputs=["t_out"],
+            compute_unit="cube", npu_op="cube_matmul", is_mapped=True,
+        ))
+        g.execution_order = ["n0", "n1"]
+
+        # 默认不包含 cube→cube
+        g_default = run_idma(g, {})
+        assert g_default.tensors["t_inter"].storage == "hbm"
+
+        # 重置后显式允许 cube→cube
+        g.tensors["t_inter"].storage = "hbm"
+        g = run_idma(g, {"allowed_pairs": [["cube", "cube"]]})
+        assert g.tensors["t_inter"].storage == "local"
+
 
 class TestPostValidate:
     def test_valid_local_tensor(self):

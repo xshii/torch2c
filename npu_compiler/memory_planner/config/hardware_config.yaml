@@ -20,3 +20,8 @@ dma:
   supports_format_convert: true
   supports_dtype_cast: false
   max_transfer_size_bytes: 1048576
+
+local_bypass:
+  allowed_pairs:
+    - ["cube", "vector"]
+    - ["vector", "vector"]

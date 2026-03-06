@@ -87,7 +87,10 @@ def _load_configs(
         "decomposition": load_config(os.path.join(config_dir, "decompositions.yaml")),
         "absorption": load_config(os.path.join(config_dir, "absorptions.yaml")),
         "format": {"target_dtype": target_dtype, "target_format": target_format},
-        "storage": {"enable_local_storage": True},
+        "storage": {
+            "enable_local_storage": True,
+            **load_config(os.path.join(config_dir, "hardware_config.yaml")).get("local_bypass", {}),
+        },
         "hardware": load_config(os.path.join(config_dir, "hardware_config.yaml")),
         "signatures": load_config(os.path.join(config_dir, "c_api_signatures.yaml")),
     }
