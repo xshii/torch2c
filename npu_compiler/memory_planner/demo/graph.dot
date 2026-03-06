@@ -1,0 +1,59 @@
+digraph NPUGraph {
+  rankdir=TB;
+  fontname="Helvetica";
+  node [fontname="Helvetica", fontsize=11];
+  edge [fontname="Helvetica", fontsize=9];
+  bgcolor="#FAFAFA";
+
+  "t_hidden" [label="t_hidden\n1x128x512 fp16", shape=ellipse, style=filled, fillcolor="#C8E6C9"];
+  "t_wq" [label="t_wq\n1x128x512 fp16 nz", shape=ellipse, style=filled, fillcolor="#FFF9C4"];
+  "t_wk" [label="t_wk\n1x128x512 fp16 nz", shape=ellipse, style=filled, fillcolor="#FFF9C4"];
+  "t_wv" [label="t_wv\n1x128x512 fp16 nz", shape=ellipse, style=filled, fillcolor="#FFF9C4"];
+  "t_mask" [label="t_mask\n1x1x128x128 fp16 nd", shape=ellipse, style=filled, fillcolor="#FFF9C4"];
+
+  "n_qproj" [label="cube_matmul\n[cube]\n+bias: 1x1x512", shape=box, style="filled,rounded", fillcolor="#E8D0A9", color="#333333", penwidth=2];
+  "n_kproj" [label="cube_matmul\n[cube]\n+bias: 1x1x512", shape=box, style="filled,rounded", fillcolor="#E8D0A9", color="#333333", penwidth=2];
+  "n_vproj" [label="cube_matmul\n[cube]\n+bias: 1x1x512", shape=box, style="filled,rounded", fillcolor="#E8D0A9", color="#333333", penwidth=2];
+  "n_score_mm" [label="cube_matmul\n[cube]", shape=box, style="filled,rounded", fillcolor="#E8D0A9", color="#2E8B57", penwidth=2];
+  "n_mask_add" [label="vector_add\n[vector]", shape=box, style="filled,rounded", fillcolor="#B8D4E3", color="#333333", penwidth=2];
+  "n_softmax_p1" [label="vector_softmax_part1\n[vector]", shape=box, style="filled,rounded", fillcolor="#B8D4E3", color="#333333", penwidth=2];
+  "n_softmax_p2" [label="vector_softmax_part2\n[vector]", shape=box, style="filled,rounded", fillcolor="#B8D4E3", color="#333333", penwidth=2];
+  "n_ctx_mm" [label="cube_matmul\n[cube]", shape=box, style="filled,rounded", fillcolor="#E8D0A9", color="#2E8B57", penwidth=2];
+  "n_out_add" [label="vector_add\n[vector]", shape=box, style="filled,rounded", fillcolor="#B8D4E3", color="#333333", penwidth=2];
+
+  "t_output" [label="t_output\n1x128x512 fp16", shape=ellipse, style=filled, fillcolor="#FFCDD2"];
+
+  "t_hidden" -> "n_qproj" [color="#666666", penwidth="1.0", style="solid", label="1x128x512 128.0K"];
+  "t_hidden" -> "n_kproj" [color="#666666", penwidth="1.0", style="solid", label="1x128x512 128.0K"];
+  "t_hidden" -> "n_vproj" [color="#666666", penwidth="1.0", style="solid", label="1x128x512 128.0K"];
+  "t_wq" -> "n_qproj" [color="#666666", penwidth="1.0", style="solid", label="1x128x512 128.0K"];
+  "t_bq" -> "n_qproj" [color="#666666", penwidth="1.0", style="solid", label="1x1x512 1.0K"];
+  "t_wk" -> "n_kproj" [color="#666666", penwidth="1.0", style="solid", label="1x128x512 128.0K"];
+  "t_bk" -> "n_kproj" [color="#666666", penwidth="1.0", style="solid", label="1x1x512 1.0K"];
+  "t_wv" -> "n_vproj" [color="#666666", penwidth="1.0", style="solid", label="1x128x512 128.0K"];
+  "t_bv" -> "n_vproj" [color="#666666", penwidth="1.0", style="solid", label="1x1x512 1.0K"];
+  "t_mask" -> "n_mask_add" [color="#666666", penwidth="1.0", style="solid", label="1x1x128x128 32.0K"];
+  "n_qproj" -> "n_score_mm" [color="#666666", penwidth="1.0", style="solid", label="1x8x128x64 128.0K"];
+  "n_kproj" -> "n_score_mm" [color="#666666", penwidth="1.0", style="solid", label="1x8x128x64 128.0K"];
+  "n_vproj" -> "n_ctx_mm" [color="#666666", penwidth="1.0", style="solid", label="1x8x128x64 128.0K"];
+  "n_score_mm" -> "n_mask_add" [color="#2E8B57", penwidth="3.0", style="bold", label="1x8x128x128 PIPE 256.0K", fontcolor="#2E8B57", fontsize=10];
+  "n_mask_add" -> "n_softmax_p1" [color="#4169E1", penwidth="2.0", style="dashed", label="1x8x128x128 LOCAL 256.0K"];
+  "n_softmax_p1" -> "n_softmax_p2" [color="#4169E1", penwidth="2.0", style="dashed", label="1x8x128x128 LOCAL 256.0K"];
+  "n_softmax_p2" -> "n_ctx_mm" [color="#666666", penwidth="1.0", style="solid", label="1x8x128x128 256.0K"];
+  "n_ctx_mm" -> "n_out_add" [color="#2E8B57", penwidth="3.0", style="bold", label="1x8x128x64 PIPE 128.0K", fontcolor="#2E8B57", fontsize=10];
+  "n_out_add" -> "t_output" [color="#666666", penwidth="1.0", style="solid", label="1x128x512 128.0K"];
+
+  subgraph cluster_legend {
+    label="Legend"; fontsize=12; style=rounded; color="#999999";
+    bgcolor="#F5F5F5";
+    node [shape=plaintext, fontsize=10];
+    legend [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+        <TR><TD BGCOLOR="#E8D0A9">Cube</TD><TD BGCOLOR="#B8D4E3">Vector</TD><TD BGCOLOR="#D4B8E3">Scalar</TD></TR>
+        <TR><TD COLSPAN="3">
+          <FONT COLOR="#2E8B57"><B>━━ Pipe</B></FONT>  <FONT COLOR="#4169E1">╌╌ Local</FONT>  <FONT COLOR="#666666">── HBM</FONT>
+        </TD></TR>
+        <TR><TD BGCOLOR="#C8E6C9">Input</TD><TD BGCOLOR="#FFF9C4">Weight</TD><TD BGCOLOR="#FFCDD2">Output</TD></TR>
+      </TABLE>>];
+  }
+}
