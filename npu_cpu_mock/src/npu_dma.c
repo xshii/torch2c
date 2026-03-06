@@ -16,3 +16,13 @@ void npu_dma_store(void* hbm_dst, void* l1_src, int size,
 void npu_dma_barrier(void) {
     /* no-op on CPU */
 }
+
+void dma_reformat(npu_tensor_t input, npu_tensor_t out, int count) {
+    void* pi = npu_t_ptr(input);
+    void* po = npu_t_ptr(out);
+    /* CPU mock: element-wise copy (format conversion is transparent) */
+    for (int i = 0; i < count; i++) {
+        float v = npu_read_as_float(pi, i, input.dtype);
+        npu_write_from_float(po, i, v, out.dtype);
+    }
+}

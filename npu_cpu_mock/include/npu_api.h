@@ -71,6 +71,9 @@ void scalar_reshape(npu_tensor_t input, npu_tensor_t out, int size, npu_dtype_t 
 void scalar_broadcast(npu_tensor_t input, npu_tensor_t out, int size, npu_dtype_t compute_dtype);
 void scalar_copy(npu_tensor_t input, npu_tensor_t out, int size, npu_dtype_t compute_dtype);
 
+/* ---- idma compute ops ---- */
+void dma_reformat(npu_tensor_t input, npu_tensor_t out, int count);
+
 /* END AUTO-GENERATED COMPUTE OPS */
 
 /* ---- DMA ops ---- */

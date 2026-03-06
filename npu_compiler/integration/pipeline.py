@@ -20,6 +20,7 @@ from npu_compiler.codegen.c_project import (
 from npu_compiler.common import CompilerError, DiagnosticCollector, Graph, get_logger, load_config
 from npu_compiler.format_annotator import format_annotator
 from npu_compiler.graph_capture import graph_capture
+from npu_compiler.reformat_inserter import reformat_inserter
 from npu_compiler.memory_planner import memory_planner
 from npu_compiler.op_absorption import op_absorption
 from npu_compiler.op_decomposition import op_decomposition
@@ -64,6 +65,13 @@ _MIDDLE_PASSES: list[_PassDesc] = [
         format_annotator.post_validate,
     ),
     _PassDesc(
+        "reformat_inserter",
+        "⑤a",
+        reformat_inserter.run,
+        "reformat",
+        reformat_inserter.post_validate,
+    ),
+    _PassDesc(
         "idma",
         "⑤b",
         idma.run,
@@ -87,6 +95,7 @@ def _load_configs(
         "decomposition": load_config(os.path.join(config_dir, "decompositions.yaml")),
         "absorption": load_config(os.path.join(config_dir, "absorptions.yaml")),
         "format": {"target_dtype": target_dtype, "target_format": target_format},
+        "reformat": {},
         "storage": {
             "enable_local_storage": True,
             **load_config(os.path.join(config_dir, "hardware_config.yaml")).get("local_bypass", {}),

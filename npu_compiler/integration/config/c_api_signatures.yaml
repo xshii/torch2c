@@ -157,6 +157,12 @@ compute_ops:
       - { name: "size",  type: "int",         source: "tensor.input_0.hbm_size" }
       - { name: "compute_dtype", type: "dtype_enum", source: "tensor.input_0.dtype" }
 
+  dma_reformat:
+    params:
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "count", type: "int",         source: "tensor.input_0.elem_count" }
+
 dma_ops:
   npu_dma_load:
     params:
