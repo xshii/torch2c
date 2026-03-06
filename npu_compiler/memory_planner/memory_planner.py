@@ -35,8 +35,8 @@ def _analyze_lifetimes(
 
     lifetimes: dict[str, tuple[int, int]] = {}
     for tid, t in graph.tensors.items():
-        # storage=local 的 tensor 不需要 HBM 分配
-        if t.storage == "local":
+        # storage=local/pipe 的 tensor 不需要 HBM 分配
+        if t.storage in ("local", "pipe"):
             continue
 
         # 确定 first_use
@@ -164,6 +164,9 @@ def _analyze_l1_lifetimes(
 
     lifetimes: dict[str, tuple[int, int]] = {}
     for tid, t in graph.tensors.items():
+        # pipe tensor 走硬件直连，不占 L1
+        if t.storage == "pipe":
+            continue
         if t.storage == "local":
             # local tensor 跨算子驻留：producer → last consumer
             first = order_map.get(t.producer_node_id, 0) if t.producer_node_id else 0
@@ -378,6 +381,9 @@ def post_validate(graph: Graph) -> list[str]:
     for t in graph.tensors.values():
         needs_mem = t.consumer_node_ids or t.is_model_output
         if not needs_mem:
+            continue
+        if t.storage == "pipe":
+            # pipe tensor 走硬件直连，不需要 HBM 和 L1
             continue
         if t.storage == "local":
             # local tensor 只需要 l1_offset

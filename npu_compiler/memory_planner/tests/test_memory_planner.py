@@ -770,3 +770,126 @@ class TestPostValidate:
         assert any("hbm_offset" in e for e in errors)
         assert any("hbm_size" in e for e in errors)
         assert any("l1_offset" in e for e in errors)
+
+    def test_pipe_tensor_no_offsets_needed(self):
+        """pipe tensor 不需要 HBM 和 L1 偏移，post_validate 应通过。"""
+        g = Graph()
+        g.add_tensor(Tensor(
+            id="t0", shape=[1], dtype="fp16", storage="pipe",
+            producer_node_id="n0", consumer_node_ids=["n1"],
+        ))
+        assert post_validate(g) == []
+
+
+class TestPipeL1Allocation:
+    """pipe tensor 不参与 L1 分配，节省 L1 空间。"""
+
+    def test_pipe_tensor_not_in_l1(self):
+        """pipe tensor 不占用 L1，不影响其他 tensor 的 L1 分配。
+
+        L1=2MB, tensor=512KB。
+        node_0→(t_pipe)→node_1→t_mid→node_2→t_out。
+        t_pipe 不占 L1，node_1 只需为 t_mid 和 t_out 分配。
+        """
+        g = Graph()
+        shape = _L1_TEST_SHAPE  # 512KB
+        g.add_tensor(Tensor(
+            id="t_in", shape=shape, dtype="fp16",
+            is_model_input=True, consumer_node_ids=["node_0"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_pipe", shape=shape, dtype="fp16", storage="pipe",
+            producer_node_id="node_0", consumer_node_ids=["node_1"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_mid", shape=shape, dtype="fp16",
+            producer_node_id="node_1", consumer_node_ids=["node_2"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_out", shape=shape, dtype="fp16",
+            producer_node_id="node_2", is_model_output=True,
+        ))
+        g.add_node(Node(
+            id="node_0", op_type="vector_add",
+            inputs=["t_in"], outputs=["t_pipe"],
+            compute_unit="vector", npu_op="vector_add", is_mapped=True,
+        ))
+        g.add_node(Node(
+            id="node_1", op_type="vector_add",
+            inputs=["t_pipe"], outputs=["t_mid"],
+            compute_unit="vector", npu_op="vector_add", is_mapped=True,
+        ))
+        g.add_node(Node(
+            id="node_2", op_type="vector_add",
+            inputs=["t_mid"], outputs=["t_out"],
+            compute_unit="vector", npu_op="vector_add", is_mapped=True,
+        ))
+        g.execution_order = ["node_0", "node_1", "node_2"]
+
+        config = _small_l1_config()
+        g, dma_plans = run(g, config)
+
+        # pipe tensor 不分配 HBM 和 L1
+        assert g.tensors["t_pipe"].hbm_offset is None
+        assert g.tensors["t_pipe"].l1_offset is None
+        # 其他 tensor 正常分配
+        assert g.tensors["t_in"].l1_offset is not None
+        assert g.tensors["t_mid"].l1_offset is not None
+        assert g.tensors["t_out"].l1_offset is not None
+        # node_1 不应有 t_pipe 的 DMA load
+        plan_1 = dma_plans[1]
+        load_tids = [inst.tensor_id for inst in plan_1.loads]
+        assert "t_pipe" not in load_tids
+        # post_validate 通过
+        assert post_validate(g) == []
+
+    def test_pipe_saves_l1_space(self):
+        """pipe 比 local 节省 L1：4 个 tensor 汇聚，用 pipe 可避免溢出。
+
+        L1=2MB, tensor=512KB。4 个 tensor 汇聚到 node_4。
+        如果全部是 local（占 L1）：4*512KB + t_out(512KB) = 2.5MB > 2MB → 溢出。
+        如果其中 2 个是 pipe（不占 L1）：2*512KB(local) + t_out(512KB) = 1.5MB < 2MB。
+        """
+        g = Graph()
+        shape = _L1_TEST_SHAPE
+        g.add_tensor(Tensor(
+            id="t_in", shape=shape, dtype="fp16",
+            is_model_input=True, consumer_node_ids=["node_0", "node_1", "node_2", "node_3"],
+        ))
+        # 前 2 个用 pipe，后 2 个用 local
+        for i in range(4):
+            storage = "pipe" if i < 2 else "local"
+            g.add_tensor(Tensor(
+                id=f"t_inter_{i}", shape=shape, dtype="fp16",
+                storage=storage,
+                producer_node_id=f"node_{i}", consumer_node_ids=["node_4"],
+            ))
+        g.add_tensor(Tensor(
+            id="t_out", shape=shape, dtype="fp16",
+            producer_node_id="node_4", is_model_output=True,
+        ))
+        for i in range(4):
+            g.add_node(Node(
+                id=f"node_{i}", op_type="vector_add",
+                inputs=["t_in"], outputs=[f"t_inter_{i}"],
+                compute_unit="vector", npu_op="vector_add", is_mapped=True,
+            ))
+        g.add_node(Node(
+            id="node_4", op_type="vector_add",
+            inputs=["t_inter_0", "t_inter_1", "t_inter_2", "t_inter_3"],
+            outputs=["t_out"],
+            compute_unit="vector", npu_op="vector_add", is_mapped=True,
+        ))
+        g.execution_order = [f"node_{i}" for i in range(5)]
+
+        config = _small_l1_config()
+        # 不应溢出（pipe 节省了 L1）
+        g, _ = run(g, config)
+        assert post_validate(g) == []
+
+        # pipe tensor 无 L1
+        assert g.tensors["t_inter_0"].l1_offset is None
+        assert g.tensors["t_inter_1"].l1_offset is None
+        # local tensor 有 L1
+        assert g.tensors["t_inter_2"].l1_offset is not None
+        assert g.tensors["t_inter_3"].l1_offset is not None

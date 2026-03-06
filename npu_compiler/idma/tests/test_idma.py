@@ -997,3 +997,211 @@ class TestMatmulBiasSoftmaxLnFfn:
         g = self._build()
         node = g.nodes["node_softmax"]
         assert node.params["compute_dtype"] == "fp32"
+
+
+# ── pipe（硬件直连）测试 ──────────────────────────────────
+
+
+def _make_cube_vector_chain(shape: list[int] | None = None) -> Graph:
+    """构建 cube → vector → vector 的简单链。
+
+    t_in(hbm) ─┐
+    t_weight(hbm) ─┤→ [cube_matmul] → t_mid(cube→vector)
+                                          │
+                              [vector_add] → t_mid2(vector→vector)
+                                                  │
+                                      [vector_gelu] → t_out(hbm)
+    """
+    if shape is None:
+        shape = _LARGE_SHAPE
+    g = Graph()
+    g.add_tensor(Tensor(
+        id="t_in", shape=shape, dtype="fp16", format="nd",
+        is_model_input=True, consumer_node_ids=["n_matmul"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_weight", shape=shape, dtype="fp16", format="nz",
+        is_weight=True, consumer_node_ids=["n_matmul"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_mid", shape=shape, dtype="fp16", format="nd",
+        producer_node_id="n_matmul", consumer_node_ids=["n_add"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_mid2", shape=shape, dtype="fp16", format="nd",
+        producer_node_id="n_add", consumer_node_ids=["n_gelu"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_out", shape=shape, dtype="fp16", format="nd",
+        producer_node_id="n_gelu", is_model_output=True,
+    ))
+    g.add_node(Node(
+        id="n_matmul", op_type="cube_matmul",
+        inputs=["t_in", "t_weight"], outputs=["t_mid"],
+        compute_unit="cube", npu_op="cube_matmul", is_mapped=True,
+    ))
+    g.add_node(Node(
+        id="n_add", op_type="vector_add",
+        inputs=["t_mid"], outputs=["t_mid2"],
+        compute_unit="vector", npu_op="vector_add", is_mapped=True,
+    ))
+    g.add_node(Node(
+        id="n_gelu", op_type="vector_gelu",
+        inputs=["t_mid2"], outputs=["t_out"],
+        compute_unit="vector", npu_op="vector_gelu", is_mapped=True,
+    ))
+    g.execution_order = ["n_matmul", "n_add", "n_gelu"]
+    return g
+
+
+class TestPipeStorageAssignment:
+    """pipe 硬件直连标记测试。"""
+
+    def test_pipe_pairs_marks_pipe(self):
+        """配置 pipe_pairs 后，符合条件的 tensor 标记为 pipe。"""
+        g = _make_cube_vector_chain()
+        g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
+        # cube→vector: t_mid 应为 pipe
+        assert g.tensors["t_mid"].storage == "pipe"
+        # vector→vector: t_mid2 不在 pipe_pairs → local
+        assert g.tensors["t_mid2"].storage == "local"
+
+    def test_default_no_pipe(self):
+        """默认配置无 pipe_pairs，所有中间 tensor 标记为 local。"""
+        g = _make_cube_vector_chain()
+        g = run_idma(g, {})
+        assert g.tensors["t_mid"].storage == "local"
+        assert g.tensors["t_mid2"].storage == "local"
+
+    def test_pipe_pairs_empty(self):
+        """pipe_pairs 为空列表时，不标记任何 pipe。"""
+        g = _make_cube_vector_chain()
+        g = run_idma(g, {"pipe_pairs": []})
+        assert g.tensors["t_mid"].storage == "local"
+        assert g.tensors["t_mid2"].storage == "local"
+
+    def test_pipe_requires_allowed_pairs(self):
+        """pipe_pairs 中的对如果不在 allowed_pairs 中，不标 pipe 也不标 local。"""
+        g = _make_cube_vector_chain()
+        # allowed_pairs 只允许 vector→vector，pipe_pairs 配了 cube→vector
+        # cube→vector 不在 allowed_pairs → 不可 local → 不可 pipe
+        g = run_idma(g, {
+            "allowed_pairs": [["vector", "vector"]],
+            "pipe_pairs": [["cube", "vector"]],
+        })
+        assert g.tensors["t_mid"].storage == "hbm"
+        assert g.tensors["t_mid2"].storage == "local"
+
+    def test_pipe_model_io_stays_hbm(self):
+        """模型输入/输出/权重不能标 pipe。"""
+        g = _make_cube_vector_chain()
+        g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
+        assert g.tensors["t_in"].storage == "hbm"
+        assert g.tensors["t_weight"].storage == "hbm"
+        assert g.tensors["t_out"].storage == "hbm"
+
+    def test_multiple_pipe_pairs(self):
+        """多个 pipe_pairs 同时生效。"""
+        g = _make_cube_vector_chain()
+        g = run_idma(g, {
+            "pipe_pairs": [["cube", "vector"], ["vector", "vector"]],
+        })
+        assert g.tensors["t_mid"].storage == "pipe"
+        assert g.tensors["t_mid2"].storage == "pipe"
+
+    def test_post_validate_pipe(self):
+        """pipe tensor 通过 post_validate。"""
+        g = _make_cube_vector_chain()
+        g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
+        assert post_validate(g) == []
+
+    def test_post_validate_pipe_model_input_invalid(self):
+        """pipe tensor 是模型输入时校验报错。"""
+        g = Graph()
+        g.add_tensor(Tensor(
+            id="t0", shape=[1], dtype="fp16", storage="pipe",
+            is_model_input=True, consumer_node_ids=["n0"],
+        ))
+        errors = post_validate(g)
+        assert any("模型输入" in e for e in errors)
+
+
+class TestPipeMemoryPlanner:
+    """pipe tensor 在 memory_planner 中不分配 HBM 和 L1。"""
+
+    def _load_hw_config(self) -> dict:
+        return load_config(HARDWARE_CONFIG_PATH)
+
+    def test_pipe_no_hbm(self):
+        """pipe tensor 不应分配 HBM。"""
+        g = _make_cube_vector_chain()
+        g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
+        config = self._load_hw_config()
+        g, _ = run_memory_planner(g, config)
+
+        t_mid = g.tensors["t_mid"]
+        assert t_mid.storage == "pipe"
+        assert t_mid.hbm_offset is None
+        assert t_mid.hbm_size is None
+
+    def test_pipe_no_l1(self):
+        """pipe tensor 不应分配 L1。"""
+        g = _make_cube_vector_chain()
+        g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
+        config = self._load_hw_config()
+        g, _ = run_memory_planner(g, config)
+
+        t_mid = g.tensors["t_mid"]
+        assert t_mid.l1_offset is None
+
+    def test_pipe_no_dma_load(self):
+        """consumer 不应为 pipe tensor 生成 DMA load。"""
+        g = _make_reformat_chain()  # 大图，走 per-op 路径
+        # cube→idma 设为 pipe
+        g = run_idma(g, {"pipe_pairs": [["cube", "idma"]]})
+        assert g.tensors["t_mid"].storage == "pipe"
+        config = self._load_hw_config()
+        g, plans = run_memory_planner(g, config)
+
+        reformat_plan = [p for p in plans if p.node_id == "node_reformat"][0]
+        load_tids = {ld.tensor_id for ld in reformat_plan.loads}
+        assert "t_mid" not in load_tids
+
+    def test_pipe_no_dma_store(self):
+        """producer 不应为 pipe tensor 生成 DMA store。"""
+        g = _make_reformat_chain()  # 大图，走 per-op 路径
+        g = run_idma(g, {"pipe_pairs": [["cube", "idma"]]})
+        assert g.tensors["t_mid"].storage == "pipe"
+        config = self._load_hw_config()
+        g, plans = run_memory_planner(g, config)
+
+        conv_plan = [p for p in plans if p.node_id == "node_conv"][0]
+        store_tids = {s.tensor_id for s in conv_plan.stores}
+        assert "t_mid" not in store_tids
+
+    def test_pipe_post_validate_passes(self):
+        """pipe tensor 不触发 memory_planner post_validate 错误。"""
+        g = _make_cube_vector_chain()
+        g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
+        config = self._load_hw_config()
+        g, _ = run_memory_planner(g, config)
+
+        errors = mp_post_validate(g)
+        assert errors == [], f"不应有错误: {errors}"
+
+    def test_pipe_and_local_coexist(self):
+        """同一图中 pipe 和 local tensor 共存。"""
+        g = _make_cube_vector_chain()
+        g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
+        config = self._load_hw_config()
+        g, _ = run_memory_planner(g, config)
+
+        # t_mid: pipe（cube→vector），不分配 HBM 和 L1
+        assert g.tensors["t_mid"].storage == "pipe"
+        assert g.tensors["t_mid"].hbm_offset is None
+        assert g.tensors["t_mid"].l1_offset is None
+
+        # t_mid2: local（vector→vector），不分配 HBM，但有 L1
+        assert g.tensors["t_mid2"].storage == "local"
+        assert g.tensors["t_mid2"].hbm_offset is None
+        assert g.tensors["t_mid2"].l1_offset is not None

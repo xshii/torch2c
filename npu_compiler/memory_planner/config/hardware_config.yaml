@@ -27,3 +27,7 @@ local_bypass:
     - ["cube", "idma"]
     - ["idma", "vector"]
     - ["vector", "vector"]
+
+pipe_bypass:
+  pipe_pairs:
+    - ["cube", "vector"]

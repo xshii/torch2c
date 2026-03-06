@@ -56,7 +56,7 @@ class Tensor:
     is_model_input: bool = False
     is_model_output: bool = False
     name: str | None = None
-    storage: str = "hbm"  # "hbm" | "l2" | "local"
+    storage: str = "hbm"  # "hbm" | "l2" | "local" | "pipe"
     producer_node_id: str | None = None
     consumer_node_ids: list[str] = field(default_factory=list)
 

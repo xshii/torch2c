@@ -64,7 +64,8 @@ def build_dma_plan(
     for tid in load_tids:
         t = graph.tensors.get(tid)
         # storage=local 的 tensor 已在 L1 中（由 producer 写入），跳过 DMA load
-        if t and t.storage == "local":
+        # storage=pipe 的 tensor 走硬件直连，跳过 DMA load
+        if t and t.storage in ("local", "pipe"):
             continue
         if t and t.hbm_offset is not None and tid in l1_layout:
             dst_fmt = _get_dst_format(node, tid, t)
@@ -83,7 +84,8 @@ def build_dma_plan(
     for tid in node.outputs:
         t = graph.tensors.get(tid)
         # storage=local 的输出 tensor 不写回 HBM，留在 L1
-        if t and t.storage == "local":
+        # storage=pipe 的输出 tensor 走硬件直连，不写 HBM
+        if t and t.storage in ("local", "pipe"):
             continue
         if t and t.hbm_offset is not None and tid in l1_layout:
             l1_fmt = t.format
@@ -117,6 +119,9 @@ def try_global_l1_layout(
     offset = 0
     layout: dict[str, int] = {}
     for tid, t in graph.tensors.items():
+        # pipe tensor 走硬件直连，不占 L1
+        if t.storage == "pipe":
+            continue
         offset = align_up(offset, l1_alignment)
         layout[tid] = offset
         offset += calc_padded_size(t.shape, t.dtype, t.format, cube_size)
@@ -131,8 +136,8 @@ def try_global_l1_layout(
         t = graph.tensors[tid]
         t.l1_offset = l1_off
         size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
-        # storage=local 的 tensor 不分配 HBM
-        if t.storage == "local":
+        # storage=local/pipe 的 tensor 不分配 HBM
+        if t.storage in ("local", "pipe"):
             continue
         t.hbm_size = size
         t.hbm_offset = hbm_offset
