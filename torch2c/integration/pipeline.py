@@ -18,7 +18,7 @@ from torch2c.codegen.c_project import (
     mock_emitter,
     utils_emitter,
 )
-from torch2c.common import CompilerError, DiagnosticCollector, Graph, dtype_numpy, get_logger, load_config
+from torch2c.common import CompilerError, DiagnosticCollector, Graph, dtype_numpy, get_logger, get_model_config, load_config
 from torch2c.format_annotator import format_annotator
 from torch2c.graph_capture import graph_capture
 from torch2c.reformat_inserter import reformat_inserter
@@ -99,17 +99,24 @@ def _load_configs(
     target_format: str | None = None,
     compute_dtype: str | None = None,
 ) -> dict:
-    """加载全部配置文件。"""
+    """加载全部配置文件。
+
+    model_config.yaml 提供默认值，函数参数可覆盖。
+    """
     hardware = load_config(os.path.join(config_dir, "hardware_config.yaml"))
+
+    format_config: dict = {
+        "target_dtype": target_dtype,
+        "target_format": target_format,
+    }
+    if compute_dtype:
+        format_config["compute_dtype"] = compute_dtype
+
     return {
         "mapping": load_config(os.path.join(config_dir, "direct_mappings.yaml")),
         "decomposition": load_config(os.path.join(config_dir, "decompositions.yaml")),
         "absorption": load_config(os.path.join(config_dir, "absorptions.yaml")),
-        "format": {
-            "target_dtype": target_dtype,
-            "target_format": target_format,
-            "compute_dtype": compute_dtype,
-        },
+        "format": format_config,
         "reformat": {},
         "storage": {
             "enable_local_storage": True,
@@ -251,26 +258,39 @@ def compile(
 ) -> str:
     """完整编译流水线。
 
+    配置优先级：compile() 参数 > 模型 @torch2c_config > 默认值。
+
     Args:
-        model: PyTorch 模型。
+        model: PyTorch 模型（可通过 @torch2c_config 装饰器附带编译配置）。
         dummy_input: 样例输入张量。
         config_dir: 配置文件目录路径。
         output_dir: C 工程输出目录路径。
         mask: 可选 attention mask 张量。
-        target_dtype: 存储 dtype（如 "fp16"），None 则继承模型原始 dtype。
-        target_format: 存储 format（如 "nz"），None 则继承模型原始 format。
-        compute_dtype: 计算精度（如 "fp32"），None 则跟随 target_dtype。
+        target_dtype: 存储 dtype（如 "fp16"），None 则从模型配置或原始 dtype 继承。
+        target_format: 存储 format（如 "nz"），None 则从模型配置或原始 format 继承。
+        compute_dtype: 计算精度（如 "fp32"），None 则从模型配置或 target_dtype 继承。
 
     Returns:
         生成的 C 工程输出目录路径。
     """
     logger.info("=== 编译管线开始 ===")
+
+    # 模型装饰器配置作为默认值，compile() 参数可覆盖
+    model_cfg = get_model_config(model)
+    resolved_dtype = target_dtype or model_cfg.get("target_dtype")
+    resolved_format = target_format or model_cfg.get("target_format")
+    resolved_compute = compute_dtype or model_cfg.get("compute_dtype")
+    compute_rules = model_cfg.get("compute_dtype_rules")
+
     configs = _load_configs(
         config_dir,
-        target_dtype=target_dtype,
-        target_format=target_format,
-        compute_dtype=compute_dtype,
+        target_dtype=resolved_dtype,
+        target_format=resolved_format,
+        compute_dtype=resolved_compute,
     )
+    # 分层 compute_dtype_rules 从模型配置注入（如果有且未被参数覆盖）
+    if compute_rules and not resolved_compute:
+        configs["format"]["compute_dtype_rules"] = compute_rules
     collector = DiagnosticCollector()
 
     # Pass ① graph_capture（特殊：不是 run(graph, config) 模式）

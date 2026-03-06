@@ -1,4 +1,7 @@
-# 模型参数配置
+# 模型编译配置
+#
+# target_dtype / target_format / compute_dtype_rules 由模型自带
+# （通过 @torch2c_config 装饰器），此文件仅存放模型结构参数。
 
 model:
   d_model: 256
@@ -6,4 +9,3 @@ model:
   num_layers: 2
   seq_len: 32
   batch_size: 1
-  dtype: fp16

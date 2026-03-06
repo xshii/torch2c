@@ -17,6 +17,7 @@ from .errors import (
 )
 from .graph_ir import Graph, Node, Tensor
 from .logger import get_logger, setup_logging
+from .compile_config import get_model_config, torch2c_config
 from .pass_protocol import CompilerPass
 from .paths import (
     DEFAULT_OUTPUT_DIR,
@@ -52,6 +53,8 @@ __all__ = [
     "Severity",
     "Tensor",
     "ValidationError",
+    "get_model_config",
+    "torch2c_config",
     "dtype_bytes",
     "dtype_c_enum",
     "dtype_numpy",

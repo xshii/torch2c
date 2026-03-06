@@ -8,6 +8,8 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from torch2c.common import torch2c_config  # noqa: F401 — 供外部 demo 使用
+
 
 class SelfAttention(nn.Module):
     """单头自注意力。"""
@@ -51,6 +53,19 @@ class EncoderLayer(nn.Module):
         return x
 
 
+# TODO: 启用 fp16 混合精度后 C golden 比对失败（fp16 pipeline 有 bug），
+# 待修复后取消注释。
+# @torch2c_config(
+#     target_dtype="fp16",
+#     compute_dtype_rules={
+#         "default": "fp16",
+#         "by_compute_unit": {"cube": "fp32"},
+#         "by_op": {
+#             "vector_softmax_part1": "fp32",
+#             "vector_layernorm_part1": "fp32",
+#         },
+#     },
+# )
 class EncoderModel(nn.Module):
     """2 层 Encoder Transformer 模型。"""
 
