@@ -15,11 +15,13 @@ def run(graph: Graph, config: dict) -> Graph:
     """执行 Format/Dtype 标注 pass。
 
     config 可选键：
-        target_dtype:  用户指定的全局 dtype（如 "fp16"），None 表示继承模型原始值。
-        target_format: 用户指定的全局 format（如 "nz"），None 表示继承模型原始值。
+        target_dtype:   存储 dtype（如 "fp16"），None 则继承模型原始值。
+        target_format:  存储 format（如 "nz"），None 则继承模型原始值。
+        compute_dtype:  计算精度（如 "fp32"），None 则跟随 target_dtype。
     """
     target_dtype = config.get("target_dtype")
     target_format = config.get("target_format")
+    compute_dtype = config.get("compute_dtype")
 
     annotated_nodes = 0
     updated_tensors = 0
@@ -54,6 +56,11 @@ def run(graph: Graph, config: dict) -> Graph:
             "inputs": input_annotations,
             "outputs": output_annotations,
         }
+
+        # compute_dtype 写入 node.params（codegen 通过 param.compute_dtype 取值）
+        if "compute_dtype" not in node.params:
+            node.params["compute_dtype"] = compute_dtype or target_dtype or "fp16"
+
         annotated_nodes += 1
 
     logger.info("Format标注完成。标注了%d个节点，%d个tensor", annotated_nodes, updated_tensors)

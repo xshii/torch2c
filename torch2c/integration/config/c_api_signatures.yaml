@@ -20,7 +20,7 @@ compute_ops:
       - { name: "m",    type: "int",        source: "tensor.input_0.shape.-2" }
       - { name: "n",    type: "int",        source: "tensor.input_1.shape.-1" }
       - { name: "k",    type: "int",        source: "tensor.input_0.shape.-1" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   cube_matmul_bias:
     params:
@@ -32,7 +32,7 @@ compute_ops:
       - { name: "m",    type: "int",         source: "tensor.input_0.shape.-2" }
       - { name: "n",    type: "int",         source: "tensor.input_1.shape.-1" }
       - { name: "k",    type: "int",         source: "tensor.input_0.shape.-1" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   vector_add:
     params:
@@ -40,7 +40,7 @@ compute_ops:
       - { name: "b",   type: "tensor_desc", source: "tensor.input_1" }
       - { name: "out", type: "tensor_desc", source: "tensor.output_0" }
       - { name: "count", type: "int",       source: "tensor.input_0.elem_count" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   vector_mul:
     params:
@@ -48,7 +48,7 @@ compute_ops:
       - { name: "b",   type: "tensor_desc", source: "tensor.input_1" }
       - { name: "out", type: "tensor_desc", source: "tensor.output_0" }
       - { name: "count", type: "int",       source: "tensor.input_0.elem_count" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   vector_mul_scalar:
     params:
@@ -56,14 +56,14 @@ compute_ops:
       - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
       - { name: "scalar", type: "float",      source: "param.scalar_value" }
       - { name: "count",  type: "int",        source: "tensor.input_0.elem_count" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   vector_gelu:
     params:
       - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
       - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
       - { name: "count", type: "int",         source: "tensor.input_0.elem_count" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   vector_softmax:
     params:
@@ -71,7 +71,7 @@ compute_ops:
       - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
       - { name: "dim",   type: "int",         source: "param.dim" }
       - { name: "count", type: "int",         source: "tensor.input_0.elem_count" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   vector_layernorm:
     params:
@@ -82,7 +82,7 @@ compute_ops:
       - { name: "hidden", type: "int",        source: "tensor.input_0.shape.-1" }
       - { name: "seq",    type: "int",        source: "tensor.input_0.shape.-2" }
       - { name: "eps",    type: "float",      source: "param.epsilon" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   vector_layernorm_part1:
     params:
@@ -93,7 +93,7 @@ compute_ops:
       - { name: "hidden", type: "int",        source: "tensor.input_0.shape.-1" }
       - { name: "seq",    type: "int",        source: "tensor.input_0.shape.-2" }
       - { name: "eps",    type: "float",      source: "param.epsilon" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   vector_layernorm_part2:
     params:
@@ -101,7 +101,7 @@ compute_ops:
       - { name: "orig",  type: "tensor_desc", source: "tensor.input_1" }
       - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
       - { name: "size",  type: "int",         source: "tensor.input_0.hbm_size" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   vector_softmax_part1:
     params:
@@ -109,14 +109,14 @@ compute_ops:
       - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
       - { name: "dim",   type: "int",         source: "param.dim" }
       - { name: "count", type: "int",         source: "tensor.input_0.elem_count" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   vector_softmax_part2:
     params:
       - { name: "inter", type: "tensor_desc", source: "tensor.input_0" }
       - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
       - { name: "size",  type: "int",         source: "tensor.input_0.hbm_size" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.output_0.dtype" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   vector_transpose:
     params:
@@ -126,7 +126,7 @@ compute_ops:
       - { name: "dims",  type: "int_array",   source: "tensor.input_0.shape" }
       - { name: "dim0",  type: "int",         source: "param.dim0" }
       - { name: "dim1",  type: "int",         source: "param.dim1" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.input_0.dtype" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   vector_transpose_2d:
     params:
@@ -134,28 +134,28 @@ compute_ops:
       - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
       - { name: "rows",  type: "int",         source: "tensor.input_0.shape.0" }
       - { name: "cols",  type: "int",         source: "tensor.input_0.shape.1" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.input_0.dtype" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   scalar_reshape:
     params:
       - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
       - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
       - { name: "size",  type: "int",         source: "tensor.input_0.hbm_size" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.input_0.dtype" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   scalar_broadcast:
     params:
       - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
       - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
       - { name: "size",  type: "int",         source: "tensor.input_0.hbm_size" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.input_0.dtype" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   scalar_copy:
     params:
       - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
       - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
       - { name: "size",  type: "int",         source: "tensor.input_0.hbm_size" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "tensor.input_0.dtype" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   dma_reformat:
     params:

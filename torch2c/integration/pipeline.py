@@ -97,6 +97,7 @@ def _load_configs(
     config_dir: str,
     target_dtype: str | None = None,
     target_format: str | None = None,
+    compute_dtype: str | None = None,
 ) -> dict:
     """加载全部配置文件。"""
     hardware = load_config(os.path.join(config_dir, "hardware_config.yaml"))
@@ -104,7 +105,11 @@ def _load_configs(
         "mapping": load_config(os.path.join(config_dir, "direct_mappings.yaml")),
         "decomposition": load_config(os.path.join(config_dir, "decompositions.yaml")),
         "absorption": load_config(os.path.join(config_dir, "absorptions.yaml")),
-        "format": {"target_dtype": target_dtype, "target_format": target_format},
+        "format": {
+            "target_dtype": target_dtype,
+            "target_format": target_format,
+            "compute_dtype": compute_dtype,
+        },
         "reformat": {},
         "storage": {
             "enable_local_storage": True,
@@ -240,6 +245,7 @@ def compile(
     *,
     target_dtype: str | None = None,
     target_format: str | None = None,
+    compute_dtype: str | None = None,
     atol: float = 1e-2,
     cosine_tol: float = 0.999,
 ) -> str:
@@ -251,14 +257,20 @@ def compile(
         config_dir: 配置文件目录路径。
         output_dir: C 工程输出目录路径。
         mask: 可选 attention mask 张量。
-        target_dtype: 全局目标 dtype（如 "fp16"），None 则继承模型原始 dtype。
-        target_format: 全局目标 format（如 "nz"），None 则继承模型原始 format。
+        target_dtype: 存储 dtype（如 "fp16"），None 则继承模型原始 dtype。
+        target_format: 存储 format（如 "nz"），None 则继承模型原始 format。
+        compute_dtype: 计算精度（如 "fp32"），None 则跟随 target_dtype。
 
     Returns:
         生成的 C 工程输出目录路径。
     """
     logger.info("=== 编译管线开始 ===")
-    configs = _load_configs(config_dir, target_dtype=target_dtype, target_format=target_format)
+    configs = _load_configs(
+        config_dir,
+        target_dtype=target_dtype,
+        target_format=target_format,
+        compute_dtype=compute_dtype,
+    )
     collector = DiagnosticCollector()
 
     # Pass ① graph_capture（特殊：不是 run(graph, config) 模式）

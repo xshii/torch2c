@@ -39,15 +39,16 @@ class SourceResolver:
             if len(parts) < 2:
                 raise CodegenError(f"tensor_desc source 格式错误（需要至少 2 段）: {source}")
             return self._resolve_tensor_desc(parts[1], addr_shift)
+        # param ref（优先于 dtype_enum 等类型检查，因为 param.compute_dtype 也可以是 dtype_enum 类型）
+        if parts[0] == "param":
+            if len(parts) < 2:
+                raise CodegenError(f"param source 格式错误（需要至少 2 段）: {source}")
+            return self._resolve_param_ref(parts[1], param)
         # dtype_enum / format_enum / tensor ref: 从 tensor 取字段
         if ptype in ("dtype_enum", "format_enum") or parts[0] == "tensor":
             if len(parts) < 3:
                 raise CodegenError(f"tensor ref source 格式错误（需要至少 3 段）: {source}")
             return self._resolve_tensor_ref(parts[1], parts[2], parts[3:], param)
-        if parts[0] == "param":
-            if len(parts) < 2:
-                raise CodegenError(f"param source 格式错误（需要至少 2 段）: {source}")
-            return self._resolve_param_ref(parts[1], param)
         raise CodegenError(f"未知 source 格式: {source}")
 
     def _resolve_tensor_desc(self, tensor_key: str, addr_shift: int) -> str:
@@ -98,7 +99,7 @@ class SourceResolver:
         if val is None:
             default = param.get("default")
             if default is not None:
-                return str(default)
+                return _format_value(default, param["type"])
             raise CodegenError(f"参数 {param_name} 未找到: node={self._node['id']}")
         return _format_value(val, param["type"])
 
@@ -128,6 +129,10 @@ class SourceResolver:
 def _format_value(val, ptype: str) -> str:
     if ptype == "float":
         return f"{float(val):.6f}f"
+    if ptype == "dtype_enum":
+        return DTYPE_C_ENUM_MAP.get(str(val), f"NPU_DTYPE_{str(val).upper()}")
+    if ptype == "format_enum":
+        return FORMAT_MAP.get(str(val), f"NPU_FORMAT_{str(val).upper()}")
     return str(val)
 
 

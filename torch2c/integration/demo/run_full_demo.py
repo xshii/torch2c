@@ -34,6 +34,9 @@ def main() -> None:
         config_dir=_CONFIG_DIR,
         output_dir=_OUTPUT_DIR,
         mask=mask,
+        target_dtype="fp16",
+        target_format="nz",
+        compute_dtype="fp32",
     )
 
     print(f"\n编译完成！输出目录: {os.path.abspath(output_dir)}")
