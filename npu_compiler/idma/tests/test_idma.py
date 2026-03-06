@@ -649,3 +649,366 @@ class TestMatmulBiasSoftmax:
         g = run_idma(g, {})
         node = g.nodes["node_softmax"]
         assert node.params["compute_dtype"] == "fp32"
+
+
+# ── 用例：matmul+bias → softmax → layernorm → ffn ──────────
+
+
+def _make_matmul_bias_softmax_ln_ffn() -> Graph:
+    """HBM(fp16,nd) → matmul → reformat → bias_add → softmax → layernorm → reformat2(nd→nz) → ffn(cube) → HBM
+
+    数据流：
+        t_input(fp16,nd,hbm)  ─┐
+        t_weight(fp16,nz,hbm) ─┤→ [cube_matmul] → t_mm_out(fp16,nz)
+                                                        │ cube→idma
+                                            [dma_reformat(nz→nd)] → t_reformatted(fp16,nd)
+                                                                          │ idma→vector
+        t_bias(fp16,nz,hbm) ──────────────────→ [vector_add] → t_add_out(fp16,nd)
+                                                                       │ vector→vector
+                                                          [safe_softmax(fp32)] → t_sm_out(fp16,nd)
+                                                                                       │ vector→vector
+        t_ln_gamma(fp16,nd,hbm) ─┐ [vector_layernorm] → t_ln_out(fp16,nd)
+        t_ln_beta(fp16,nd,hbm)  ─┘                             │ vector→idma (不在默认 allowed_pairs → hbm)
+                                                    [dma_reformat(nd→nz)] → t_ln_reformatted(fp16,nz)
+                                                                                    │ idma→cube (不在默认 allowed_pairs → hbm)
+        t_ffn_weight(fp16,nz,hbm) ────────→ [cube_matmul] → t_ffn_out(fp16,nz,hbm)
+
+    allowed_pairs 边（默认: cube→idma, cube→vector, idma→vector, vector→vector）：
+      - t_mm_out:           cube → idma     ✓ local
+      - t_reformatted:      idma → vector   ✓ local
+      - t_add_out:          vector → vector  ✓ local
+      - t_sm_out:           vector → vector  ✓ local
+      - t_ln_out:           vector → idma    ✗ hbm
+      - t_ln_reformatted:   idma → cube     ✗ hbm
+
+    13 tensors × 4MB >> 16MB L1 → 走 per-op 路径。
+    """
+    shape = [1, 1024, 2048]
+    g = Graph()
+
+    # ── 张量（原 matmul+bias+softmax 部分） ──
+    g.add_tensor(Tensor(
+        id="t_input", shape=shape, dtype="fp16", format="nd",
+        is_model_input=True, consumer_node_ids=["node_matmul"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_weight", shape=shape, dtype="fp16", format="nz",
+        is_weight=True, consumer_node_ids=["node_matmul"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_mm_out", shape=shape, dtype="fp16", format="nz",
+        producer_node_id="node_matmul", consumer_node_ids=["node_reformat"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_reformatted", shape=shape, dtype="fp16", format="nd",
+        producer_node_id="node_reformat", consumer_node_ids=["node_bias_add"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_bias", shape=shape, dtype="fp16", format="nz",
+        is_weight=True, consumer_node_ids=["node_bias_add"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_add_out", shape=shape, dtype="fp16", format="nd",
+        producer_node_id="node_bias_add", consumer_node_ids=["node_softmax"],
+    ))
+    # softmax 输出 → layernorm 输入（不再是 model output）
+    g.add_tensor(Tensor(
+        id="t_sm_out", shape=shape, dtype="fp16", format="nd",
+        producer_node_id="node_softmax", consumer_node_ids=["node_layernorm"],
+    ))
+
+    # ── 张量（layernorm 部分） ──
+    g.add_tensor(Tensor(
+        id="t_ln_gamma", shape=shape, dtype="fp16", format="nd",
+        is_weight=True, consumer_node_ids=["node_layernorm"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_ln_beta", shape=shape, dtype="fp16", format="nd",
+        is_weight=True, consumer_node_ids=["node_layernorm"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_ln_out", shape=shape, dtype="fp16", format="nd",
+        producer_node_id="node_layernorm", consumer_node_ids=["node_reformat2"],
+    ))
+
+    # ── 张量（reformat2 + ffn 部分） ──
+    g.add_tensor(Tensor(
+        id="t_ln_reformatted", shape=shape, dtype="fp16", format="nz",
+        producer_node_id="node_reformat2", consumer_node_ids=["node_ffn"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_ffn_weight", shape=shape, dtype="fp16", format="nz",
+        is_weight=True, consumer_node_ids=["node_ffn"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_ffn_out", shape=shape, dtype="fp16", format="nz",
+        producer_node_id="node_ffn", is_model_output=True,
+    ))
+
+    # ── 节点（原 matmul+bias+softmax 部分） ──
+    g.add_node(Node(
+        id="node_matmul", op_type="cube_matmul",
+        inputs=["t_input", "t_weight"], outputs=["t_mm_out"],
+        compute_unit="cube", npu_op="cube_matmul", is_mapped=True,
+        format_annotation={
+            "inputs":  [{"format": "nz", "dtype": "fp16"},
+                        {"format": "nz", "dtype": "fp16"}],
+            "outputs": [{"format": "nz", "dtype": "fp16"}],
+        },
+    ))
+    g.add_node(Node(
+        id="node_reformat", op_type="dma_reformat",
+        inputs=["t_mm_out"], outputs=["t_reformatted"],
+        compute_unit="idma", npu_op="dma_reformat", is_mapped=True,
+        format_annotation={
+            "inputs":  [{"format": "nz", "dtype": "fp16"}],
+            "outputs": [{"format": "nd", "dtype": "fp16"}],
+        },
+    ))
+    g.add_node(Node(
+        id="node_bias_add", op_type="vector_add",
+        inputs=["t_reformatted", "t_bias"], outputs=["t_add_out"],
+        compute_unit="vector", npu_op="vector_add", is_mapped=True,
+        format_annotation={
+            "inputs":  [{"format": "nd", "dtype": "fp16"},
+                        {"format": "nd", "dtype": "fp16"}],
+            "outputs": [{"format": "nd", "dtype": "fp16"}],
+        },
+    ))
+    g.add_node(Node(
+        id="node_softmax", op_type="safe_softmax",
+        inputs=["t_add_out"], outputs=["t_sm_out"],
+        params={"compute_dtype": "fp32"},
+        compute_unit="vector", npu_op="safe_softmax", is_mapped=True,
+        format_annotation={
+            "inputs":  [{"format": "nd", "dtype": "fp16"}],
+            "outputs": [{"format": "nd", "dtype": "fp16"}],
+        },
+    ))
+
+    # ── 节点（layernorm） ──
+    g.add_node(Node(
+        id="node_layernorm", op_type="vector_layernorm",
+        inputs=["t_sm_out", "t_ln_gamma", "t_ln_beta"], outputs=["t_ln_out"],
+        compute_unit="vector", npu_op="vector_layernorm", is_mapped=True,
+        format_annotation={
+            "inputs":  [{"format": "nd", "dtype": "fp16"},
+                        {"format": "nd", "dtype": "fp16"},
+                        {"format": "nd", "dtype": "fp16"}],
+            "outputs": [{"format": "nd", "dtype": "fp16"}],
+        },
+    ))
+
+    # ── 节点（reformat2: nd→nz） ──
+    g.add_node(Node(
+        id="node_reformat2", op_type="dma_reformat",
+        inputs=["t_ln_out"], outputs=["t_ln_reformatted"],
+        compute_unit="idma", npu_op="dma_reformat", is_mapped=True,
+        format_annotation={
+            "inputs":  [{"format": "nd", "dtype": "fp16"}],
+            "outputs": [{"format": "nz", "dtype": "fp16"}],
+        },
+    ))
+
+    # ── 节点（ffn: cube_matmul） ──
+    g.add_node(Node(
+        id="node_ffn", op_type="cube_matmul",
+        inputs=["t_ln_reformatted", "t_ffn_weight"], outputs=["t_ffn_out"],
+        compute_unit="cube", npu_op="cube_matmul", is_mapped=True,
+        format_annotation={
+            "inputs":  [{"format": "nz", "dtype": "fp16"},
+                        {"format": "nz", "dtype": "fp16"}],
+            "outputs": [{"format": "nz", "dtype": "fp16"}],
+        },
+    ))
+
+    g.execution_order = [
+        "node_matmul", "node_reformat", "node_bias_add", "node_softmax",
+        "node_layernorm", "node_reformat2", "node_ffn",
+    ]
+    return g
+
+
+class TestMatmulBiasSoftmaxLnFfn:
+    """用例：matmul → reformat → bias_add → softmax → layernorm → reformat2(nd→nz) → ffn(cube)
+
+    重点测试：
+    - softmax→layernorm (vector→vector) 可 local
+    - layernorm→reformat2 (vector→idma) 不在默认 allowed_pairs → hbm
+    - reformat2→ffn (idma→cube) 不在默认 allowed_pairs → hbm
+    """
+
+    def _load_hw_config(self) -> dict:
+        return load_config(HARDWARE_CONFIG_PATH)
+
+    # ── idma 标记 ──
+
+    def test_storage_assignment(self):
+        """前半段 local，后半段 vector→idma / idma→cube 不在默认 pairs → hbm。"""
+        g = _make_matmul_bias_softmax_ln_ffn()
+        g = run_idma(g, {})
+
+        # 前半段：与原用例一致，全部 local
+        assert g.tensors["t_mm_out"].storage == "local"        # cube→idma ✓
+        assert g.tensors["t_reformatted"].storage == "local"   # idma→vector ✓
+        assert g.tensors["t_add_out"].storage == "local"       # vector→vector ✓
+        assert g.tensors["t_sm_out"].storage == "local"        # vector→vector ✓
+
+        # layernorm 输出：vector→idma 不在默认 allowed_pairs
+        assert g.tensors["t_ln_out"].storage == "hbm"
+        # reformat2 输出：idma→cube 不在默认 allowed_pairs
+        assert g.tensors["t_ln_reformatted"].storage == "hbm"
+
+        # 外部输入 / 权重 / 模型输出 → hbm
+        for tid in ("t_input", "t_weight", "t_bias",
+                     "t_ln_gamma", "t_ln_beta", "t_ffn_weight", "t_ffn_out"):
+            assert g.tensors[tid].storage == "hbm", f"{tid} 应为 hbm"
+
+    def test_extend_allowed_pairs_vector_idma(self):
+        """显式允许 vector→idma 后，t_ln_out 可 local。"""
+        g = _make_matmul_bias_softmax_ln_ffn()
+        g = run_idma(g, {"allowed_pairs": [
+            ["cube", "idma"], ["idma", "vector"], ["vector", "vector"],
+            ["vector", "idma"],  # 新增
+        ]})
+
+        assert g.tensors["t_ln_out"].storage == "local"        # vector→idma 现在允许
+        assert g.tensors["t_ln_reformatted"].storage == "hbm"  # idma→cube 仍不允许
+
+    def test_extend_allowed_pairs_full_local(self):
+        """同时允许 vector→idma 和 idma→cube 后，全链 local。"""
+        g = _make_matmul_bias_softmax_ln_ffn()
+        g = run_idma(g, {"allowed_pairs": [
+            ["cube", "idma"], ["idma", "vector"], ["vector", "vector"],
+            ["vector", "idma"], ["idma", "cube"],  # 新增两个
+        ]})
+
+        # 全部中间 tensor 都 local
+        for tid in ("t_mm_out", "t_reformatted", "t_add_out", "t_sm_out",
+                     "t_ln_out", "t_ln_reformatted"):
+            assert g.tensors[tid].storage == "local", f"{tid} 应为 local"
+
+    # ── HBM 分配 ──
+
+    def test_local_tensors_no_hbm(self):
+        """默认配置下 local tensor 不分配 HBM。"""
+        g = _make_matmul_bias_softmax_ln_ffn()
+        g = run_idma(g, {})
+        g, _ = run_memory_planner(g, self._load_hw_config())
+
+        for tid in ("t_mm_out", "t_reformatted", "t_add_out", "t_sm_out"):
+            t = g.tensors[tid]
+            assert t.hbm_offset is None, f"{tid} 不应有 hbm_offset"
+            assert t.hbm_size is None, f"{tid} 不应有 hbm_size"
+            assert t.l1_offset is not None, f"{tid} 应有 l1_offset"
+
+    def test_hbm_tensors_allocated(self):
+        """hbm tensor 必须分配 HBM（含 t_ln_out, t_ln_reformatted）。"""
+        g = _make_matmul_bias_softmax_ln_ffn()
+        g = run_idma(g, {})
+        g, _ = run_memory_planner(g, self._load_hw_config())
+
+        for tid in ("t_input", "t_weight", "t_bias", "t_ln_gamma", "t_ln_beta",
+                     "t_ln_out", "t_ln_reformatted", "t_ffn_weight", "t_ffn_out"):
+            t = g.tensors[tid]
+            assert t.hbm_offset is not None, f"{tid} 应有 hbm_offset"
+
+    # ── DMA 计划 ──
+
+    def test_softmax_no_store(self):
+        """softmax 输出 t_sm_out 是 local(vector→vector) → 不 store。"""
+        g = _make_matmul_bias_softmax_ln_ffn()
+        g = run_idma(g, {})
+        g, plans = run_memory_planner(g, self._load_hw_config())
+
+        sm_plan = [p for p in plans if p.node_id == "node_softmax"][0]
+        store_tids = {s.tensor_id for s in sm_plan.stores}
+        assert "t_sm_out" not in store_tids
+
+    def test_layernorm_dma(self):
+        """layernorm: 不 load t_sm_out(local)；load gamma/beta(hbm)；store t_ln_out(hbm)。"""
+        g = _make_matmul_bias_softmax_ln_ffn()
+        g = run_idma(g, {})
+        g, plans = run_memory_planner(g, self._load_hw_config())
+
+        ln_plan = [p for p in plans if p.node_id == "node_layernorm"][0]
+
+        load_tids = {ld.tensor_id for ld in ln_plan.loads}
+        assert "t_sm_out" not in load_tids       # local → 不 load
+        assert "t_ln_gamma" in load_tids          # weight → 从 hbm load
+        assert "t_ln_beta" in load_tids           # weight → 从 hbm load
+
+        store_tids = {s.tensor_id for s in ln_plan.stores}
+        assert "t_ln_out" in store_tids           # vector→idma 不允许 → hbm → store
+
+    def test_reformat2_dma(self):
+        """reformat2: load t_ln_out(hbm)；store t_ln_reformatted(hbm)。"""
+        g = _make_matmul_bias_softmax_ln_ffn()
+        g = run_idma(g, {})
+        g, plans = run_memory_planner(g, self._load_hw_config())
+
+        rf2_plan = [p for p in plans if p.node_id == "node_reformat2"][0]
+
+        load_tids = {ld.tensor_id for ld in rf2_plan.loads}
+        assert "t_ln_out" in load_tids            # hbm → 需要 load
+
+        store_tids = {s.tensor_id for s in rf2_plan.stores}
+        assert "t_ln_reformatted" in store_tids   # hbm → 需要 store
+
+    def test_ffn_dma(self):
+        """ffn: load t_ln_reformatted(hbm) + t_ffn_weight(hbm)；store t_ffn_out(hbm)。"""
+        g = _make_matmul_bias_softmax_ln_ffn()
+        g = run_idma(g, {})
+        g, plans = run_memory_planner(g, self._load_hw_config())
+
+        ffn_plan = [p for p in plans if p.node_id == "node_ffn"][0]
+
+        load_tids = {ld.tensor_id for ld in ffn_plan.loads}
+        assert "t_ln_reformatted" in load_tids
+        assert "t_ffn_weight" in load_tids
+
+        store_tids = {s.tensor_id for s in ffn_plan.stores}
+        assert "t_ffn_out" in store_tids
+
+    def test_reformat2_nd_to_nz(self):
+        """reformat2 做 nd→nz 格式转换（layernorm 输出 nd，ffn 输入 nz）。"""
+        g = _make_matmul_bias_softmax_ln_ffn()
+        g = run_idma(g, {})
+        g, plans = run_memory_planner(g, self._load_hw_config())
+
+        rf2_plan = [p for p in plans if p.node_id == "node_reformat2"][0]
+
+        # reformat2 load 时 src=nd（layernorm 输出格式）
+        ln_out_load = [ld for ld in rf2_plan.loads if ld.tensor_id == "t_ln_out"][0]
+        assert ln_out_load.src_format == "nd"
+        assert ln_out_load.dst_format == "nd"  # load 原格式
+
+        # reformat2 的 format_annotation 确认 nd→nz 转换
+        node = g.nodes["node_reformat2"]
+        assert node.format_annotation["inputs"][0]["format"] == "nd"
+        assert node.format_annotation["outputs"][0]["format"] == "nz"
+
+    # ── 校验 ──
+
+    def test_post_validate_passes(self):
+        """整个 7 节点流程后 memory_planner 校验应通过。"""
+        g = _make_matmul_bias_softmax_ln_ffn()
+        g = run_idma(g, {})
+        g, _ = run_memory_planner(g, self._load_hw_config())
+
+        errors = mp_post_validate(g)
+        assert errors == [], f"不应有错误: {errors}"
+
+    def test_softmax_compute_dtype_preserved(self):
+        """safe_softmax 的 compute_dtype=fp32 参数应保留。"""
+        g = _make_matmul_bias_softmax_ln_ffn()
+        node = g.nodes["node_softmax"]
+        assert node.params["compute_dtype"] == "fp32"
+
+    def test_execution_order(self):
+        """execution_order 应包含全部 7 个节点且顺序正确。"""
+        g = _make_matmul_bias_softmax_ln_ffn()
+        assert g.execution_order == [
+            "node_matmul", "node_reformat", "node_bias_add", "node_softmax",
+            "node_layernorm", "node_reformat2", "node_ffn",
+        ]
