@@ -13,30 +13,14 @@ import re
 from npu_compiler.common import Graph, get_logger
 from npu_compiler.memory_planner._utils import align_up, calc_padded_size
 from npu_compiler.memory_planner.memory_planner import _analyze_l1_lifetimes, _analyze_lifetimes
+from npu_compiler.viz._utils import (
+    BG_COLORS, BOLD, CYAN, DIM, RESET, STORAGE_SYMBOL,
+    human_size,
+)
 
 logger = get_logger(__name__)
 
-# ── ANSI ──────────────────────────────────────────────────
-
-_COLORS = [
-    "\033[41m", "\033[42m", "\033[43m", "\033[44m",
-    "\033[45m", "\033[46m", "\033[47m", "\033[100m",
-    "\033[101m", "\033[102m", "\033[103m", "\033[104m",
-]
-_RESET = "\033[0m"
-_DIM = "\033[2m"
-_BOLD = "\033[1m"
-_PIPE_MARK = "\033[36m~\033[0m"
-
-STORAGE_SYMBOLS = {"hbm": "#", "local": "=", "pipe": "~"}
-
-
-def _human_size(n: int) -> str:
-    if n >= 1024 * 1024:
-        return f"{n / 1024 / 1024:.1f}M"
-    if n >= 1024:
-        return f"{n / 1024:.1f}K"
-    return str(n)
+_PIPE_MARK = f"{CYAN}~{RESET}"
 
 
 # ── 核心渲染 ──────────────────────────────────────────────
@@ -53,10 +37,7 @@ def render_ascii(
     order = graph.execution_order
     n_ops = len(order)
 
-    if mode == "l1":
-        lifetimes = _analyze_l1_lifetimes(graph)
-    else:
-        lifetimes = _analyze_lifetimes(graph)
+    lifetimes = _analyze_l1_lifetimes(graph) if mode == "l1" else _analyze_lifetimes(graph)
 
     blocks: list[dict] = []
     for tid, (first, last) in lifetimes.items():
@@ -88,15 +69,13 @@ def render_ascii(
 
     canvas = [[None] * n_ops for _ in range(n_rows)]
 
-    color_map = {}
-    for i, b in enumerate(blocks):
-        color_map[b["tid"]] = i % len(_COLORS)
+    color_map = {b["tid"]: i % len(BG_COLORS) for i, b in enumerate(blocks)}
 
     for b in blocks:
         r_start = b["offset"] // row_height
         r_end = min(n_rows - 1, (b["offset"] + b["size"] - 1) // row_height)
         ci = color_map[b["tid"]]
-        sym = STORAGE_SYMBOLS.get(b["storage"], "#")
+        sym = STORAGE_SYMBOL.get(b["storage"], "#")
         for r in range(r_start, r_end + 1):
             for c in range(b["first"], b["last"] + 1):
                 canvas[r][c] = (ci, sym, b["tid"])
@@ -104,7 +83,7 @@ def render_ascii(
     lines: list[str] = []
     mem_label = "L1" if mode == "l1" else "HBM"
 
-    lines.append(f"{_BOLD}{mem_label} Memory Lifetime (row={_human_size(row_height)}/row){_RESET}")
+    lines.append(f"{BOLD}{mem_label} Memory Lifetime (row={human_size(row_height)}/row){RESET}")
     lines.append("")
 
     header = " " * 12
@@ -123,22 +102,24 @@ def render_ascii(
 
     for r in range(n_rows - 1, -1, -1):
         addr = r * row_height
-        row_str = f"{_human_size(addr):>10s} |"
+        row_str = f"{human_size(addr):>10s} |"
         for c in range(n_ops):
             cell = canvas[r][c]
             if cell is None:
-                row_str += _DIM + "." * col_width + _RESET
+                row_str += DIM + "." * col_width + RESET
             else:
                 ci, sym, tid = cell
                 display = tid[:col_width - 2]
                 padded = display.center(col_width, sym)
-                row_str += _COLORS[ci] + padded + _RESET
+                row_str += BG_COLORS[ci] + padded + RESET
         lines.append(row_str)
 
     lines.append(" " * 12 + "-" * (col_width * n_ops))
 
+    # 图例
     lines.append("")
-    lines.append(f"{_BOLD}Legend:{_RESET}")
+    lines.append(f"{BOLD}Legend:{RESET}")
+    absorbed_set = {v for n in graph.nodes.values() for v in n.absorbed_inputs.values()}
     for b in blocks:
         ci = color_map[b["tid"]]
         t = graph.tensors[b["tid"]]
@@ -149,13 +130,12 @@ def render_ascii(
             tags.append("input")
         if t.is_model_output:
             tags.append("output")
-        if b["tid"] in {v for n in graph.nodes.values() for v in n.absorbed_inputs.values()}:
+        if b["tid"] in absorbed_set:
             tags.append("absorbed")
         tag_str = f" ({', '.join(tags)})" if tags else ""
-        sz = _human_size(b["size"])
         lines.append(
-            f"  {_COLORS[ci]} {b['tid']:^12s} {_RESET}"
-            f"  {mem_label}={_human_size(b['offset'])}  size={sz}"
+            f"  {BG_COLORS[ci]} {b['tid']:^12s} {RESET}"
+            f"  {mem_label}={human_size(b['offset'])}  size={human_size(b['size'])}"
             f"  life=[{b['first']},{b['last']}]"
             f"  storage={b['storage']}{tag_str}"
         )
@@ -177,6 +157,8 @@ def render_ascii(
 
 # ── 对外接口（pipeline 调用）──────────────────────────────
 
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+
 
 def emit_lifetime_ascii(graph: Graph, output_dir: str, cube_size: int) -> str:
     """生成 L1 + HBM 生命周期图到 output_dir/viz/，返回目录路径。"""
@@ -185,7 +167,7 @@ def emit_lifetime_ascii(graph: Graph, output_dir: str, cube_size: int) -> str:
 
     for mode in ("l1", "hbm"):
         text = render_ascii(graph, cube_size, mode=mode)
-        clean = re.sub(r"\033\[[0-9;]*m", "", text)
+        clean = _ANSI_RE.sub("", text)
         path = os.path.join(viz_dir, f"lifetime_{mode}.txt")
         with open(path, "w") as f:
             f.write(clean)

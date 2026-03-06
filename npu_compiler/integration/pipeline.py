@@ -45,7 +45,14 @@ class _PassDesc:
     run_fn: Callable
     config_key: str | None
     validate_fn: Callable | None = None
-    post_hook: Callable | None = None
+    # viz_hook(graph, output_dir, cube_size) — Pass 完成后生成可视化产物
+    viz_hook: Callable | None = None
+
+
+def _emit_graph_viz(graph: Graph, output_dir: str, cube_size: int) -> None:
+    """idma 后生成算子依赖图（DOT + ASCII）。"""
+    emit_graph_dot(graph, output_dir, cube_size)
+    emit_graph_ascii(graph, output_dir, cube_size)
 
 
 _MIDDLE_PASSES: list[_PassDesc] = [
@@ -78,6 +85,7 @@ _MIDDLE_PASSES: list[_PassDesc] = [
         idma.run,
         "storage",
         idma.post_validate,
+        _emit_graph_viz,
     ),
 ]
 
@@ -218,15 +226,11 @@ def compile(
     for p in _MIDDLE_PASSES:
         logger.info("Pass %s %s 开始", p.number, p.name)
         graph = p.run_fn(graph, configs[p.config_key])
-        if p.post_hook:
-            p.post_hook(graph)
         if p.validate_fn:
             _run_post_validation(collector, p.name, graph, p.validate_fn)
+        if p.viz_hook:
+            p.viz_hook(graph, output_dir, cube_size)
         logger.info("Pass %s 完成", p.number)
-        # idma 后生成依赖图
-        if p.name == "idma":
-            emit_graph_dot(graph, output_dir, cube_size)
-            emit_graph_ascii(graph, output_dir, cube_size)
 
     # Pass ⑥ validator（特殊：config 从 signatures 派生）
     logger.info("Pass ⑥ validator 开始")
