@@ -29,6 +29,7 @@ Tensor 字段:
   is_weight       W: graph_capture        R: memory_planner, codegen
   is_model_input  W: graph_capture        R: memory_planner, codegen
   is_model_output W: graph_capture        R: memory_planner, codegen
+  storage         W: idma                 R: memory_planner, codegen
   name            W: graph_capture        R: codegen (weight export)
   producer_node_id W: graph_capture/decomp R: memory_planner
   consumer_node_ids W: graph_capture/decomp R: memory_planner
@@ -55,6 +56,7 @@ class Tensor:
     is_model_input: bool = False
     is_model_output: bool = False
     name: str | None = None
+    storage: str = "hbm"  # "hbm" | "l2" | "local"
     producer_node_id: str | None = None
     consumer_node_ids: list[str] = field(default_factory=list)
 

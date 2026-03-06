@@ -63,6 +63,9 @@ def build_dma_plan(
 
     for tid in load_tids:
         t = graph.tensors.get(tid)
+        # storage=local 的 tensor 已在 L1 中（由 producer 写入），跳过 DMA load
+        if t and t.storage == "local":
+            continue
         if t and t.hbm_offset is not None and tid in l1_layout:
             dst_fmt = _get_dst_format(node, tid, t)
             plan.loads.append(
@@ -79,6 +82,9 @@ def build_dma_plan(
 
     for tid in node.outputs:
         t = graph.tensors.get(tid)
+        # storage=local 的输出 tensor 不写回 HBM，留在 L1
+        if t and t.storage == "local":
+            continue
         if t and t.hbm_offset is not None and tid in l1_layout:
             l1_fmt = t.format
             if node.format_annotation and "outputs" in node.format_annotation:
@@ -125,6 +131,9 @@ def try_global_l1_layout(
         t = graph.tensors[tid]
         t.l1_offset = l1_off
         size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+        # storage=local 的 tensor 不分配 HBM
+        if t.storage == "local":
+            continue
         t.hbm_size = size
         t.hbm_offset = hbm_offset
         hbm_offset = align_up(hbm_offset + size, hbm_alignment)

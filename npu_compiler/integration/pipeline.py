@@ -25,6 +25,7 @@ from npu_compiler.op_absorption import op_absorption
 from npu_compiler.op_decomposition import op_decomposition
 from npu_compiler.op_mapping import op_mapping
 from npu_compiler.scheduler import scheduler
+from npu_compiler.idma import idma
 from npu_compiler.validator import validator
 
 logger = get_logger(__name__)
@@ -62,6 +63,13 @@ _MIDDLE_PASSES: list[_PassDesc] = [
         "format",
         format_annotator.post_validate,
     ),
+    _PassDesc(
+        "idma",
+        "⑤b",
+        idma.run,
+        "storage",
+        idma.post_validate,
+    ),
 ]
 
 
@@ -79,6 +87,7 @@ def _load_configs(
         "decomposition": load_config(os.path.join(config_dir, "decompositions.yaml")),
         "absorption": load_config(os.path.join(config_dir, "absorptions.yaml")),
         "format": {"target_dtype": target_dtype, "target_format": target_format},
+        "storage": {"enable_local_storage": True},
         "hardware": load_config(os.path.join(config_dir, "hardware_config.yaml")),
         "signatures": load_config(os.path.join(config_dir, "c_api_signatures.yaml")),
     }

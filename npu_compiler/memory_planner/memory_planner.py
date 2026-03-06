@@ -35,6 +35,10 @@ def _analyze_lifetimes(
 
     lifetimes: dict[str, tuple[int, int]] = {}
     for tid, t in graph.tensors.items():
+        # storage=local 的 tensor 不需要 HBM 分配
+        if t.storage == "local":
+            continue
+
         # 确定 first_use
         if t.is_weight or t.is_model_input:
             first_use = 0
@@ -147,16 +151,30 @@ def _plan_l1_layout(
     l1_alignment: int,
     l1_capacity: int,
     cube_size: int,
+    local_l1_offsets: dict[str, int] | None = None,
 ) -> dict[str, int]:
-    """为单个算子规划 L1 布局，返回 {tensor_id: l1_offset}。"""
+    """为单个算子规划 L1 布局，返回 {tensor_id: l1_offset}。
+
+    Args:
+        local_l1_offsets: storage=local 的 tensor 已由 producer 分配的 L1 偏移。
+            这些 tensor 作为输入时直接复用该偏移，不再重新分配。
+    """
+    if local_l1_offsets is None:
+        local_l1_offsets = {}
     node = graph.nodes[node_id]
     offset = 0
     layout: dict[str, int] = {}
 
-    # 输入 tensor（非 weight）
+    # storage=local 的输入 tensor：复用 producer 分配的 L1 偏移，不占新空间
     for tid in node.inputs:
         t = graph.tensors.get(tid)
-        if t and not t.is_weight:
+        if t and t.storage == "local" and tid in local_l1_offsets:
+            layout[tid] = local_l1_offsets[tid]
+
+    # 输入 tensor（非 weight，非 local）
+    for tid in node.inputs:
+        t = graph.tensors.get(tid)
+        if t and not t.is_weight and t.storage != "local":
             offset = align_up(offset, l1_alignment)
             layout[tid] = offset
             offset += calc_padded_size(t.shape, t.dtype, t.format, cube_size)
@@ -229,13 +247,19 @@ def run(graph: Graph, config: dict) -> tuple[Graph, list[DmaPlan]]:
     lifetimes = _analyze_lifetimes(graph)
     reuse_count = _allocate_hbm(graph, lifetimes, hbm_align, cube_size)
 
+    # 跟踪 storage=local 的 tensor 的 L1 偏移（producer 写入，consumer 复用）
+    local_l1_offsets: dict[str, int] = {}
+
     dma_plans = []
     for nid in graph.execution_order:
-        l1_layout = _plan_l1_layout(graph, nid, l1_align, l1_cap, cube_size)
+        l1_layout = _plan_l1_layout(graph, nid, l1_align, l1_cap, cube_size, local_l1_offsets)
         for tid, off in l1_layout.items():
             t = graph.tensors.get(tid)
             if t:
                 t.l1_offset = off
+                # 输出 tensor 且 storage=local → 记录偏移供下游复用
+                if t.storage == "local" and tid in graph.nodes[nid].outputs:
+                    local_l1_offsets[tid] = off
         plan = build_dma_plan(graph, nid, l1_layout, cube_size)
         dma_plans.append(plan)
         logger.debug("节点 %s: %d loads, %d stores", nid, len(plan.loads), len(plan.stores))
@@ -251,11 +275,19 @@ def run(graph: Graph, config: dict) -> tuple[Graph, list[DmaPlan]]:
 
 
 def post_validate(graph: Graph) -> list[str]:
-    """memory_planner 后的校验：有消费者或是输出的 tensor 必须有内存偏移。"""
+    """memory_planner 后的校验：有消费者或是输出的 tensor 必须有内存偏移。
+
+    storage=local 的 tensor 不需要 HBM 偏移，只需要 L1 偏移。
+    """
     errors: list[str] = []
     for t in graph.tensors.values():
         needs_mem = t.consumer_node_ids or t.is_model_output
         if not needs_mem:
+            continue
+        if t.storage == "local":
+            # local tensor 只需要 l1_offset
+            if t.l1_offset is None:
+                errors.append(f"tensor {t.id} (storage=local) 缺少 l1_offset")
             continue
         if t.hbm_offset is None:
             errors.append(f"tensor {t.id} 缺少 hbm_offset")
