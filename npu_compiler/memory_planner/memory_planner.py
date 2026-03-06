@@ -1,4 +1,4 @@
-"""memory_planner — Pass⑦：HBM 全局规划 + L1 局部排列。
+"""memory_planner — Pass⑦：HBM 全局规划 + L1 全局 liveness best-fit 分配。
 
 DMA 计划生成逻辑见 _dma.py，工具函数见 _utils.py。
 """
@@ -142,71 +142,168 @@ def _allocate_hbm(
     return reuse_count
 
 
-# ── L1 布局 ──────────────────────────────────────────────
+# ── L1 全局 liveness + best-fit 分配 ─────────────────────
 
 
-def _plan_l1_layout(
+def _analyze_l1_lifetimes(
     graph: Graph,
-    node_id: str,
-    l1_alignment: int,
-    l1_capacity: int,
-    cube_size: int,
-    local_l1_offsets: dict[str, int] | None = None,
-) -> dict[str, int]:
-    """为单个算子规划 L1 布局，返回 {tensor_id: l1_offset}。
+) -> dict[str, tuple[int, int]]:
+    """分析每个 tensor 的 L1 生命周期 (first_op_idx, last_op_idx)。
 
-    Args:
-        local_l1_offsets: storage=local 的 tensor 已由 producer 分配的 L1 偏移。
-            这些 tensor 作为输入时直接复用该偏移，不再重新分配。
+    - storage=local 的 tensor：从 producer 到最后一个 consumer（跨算子驻留）。
+    - 普通 tensor：仅在使用它的单个算子内活跃（per-op load/compute/store）。
+      普通输入 tensor 在消费算子处活跃；普通输出 tensor 在生产算子处活跃。
+      若 tensor 被多个算子消费（如 weight 或被多次引用），每个算子独立加载，
+      但分配器会在不同算子间复用空间。
+
+    返回 {tensor_id: (first_op_idx, last_op_idx)}。
     """
-    if local_l1_offsets is None:
-        local_l1_offsets = {}
+    order_map: dict[str, int] = {}
+    for idx, nid in enumerate(graph.execution_order):
+        order_map[nid] = idx
+
+    lifetimes: dict[str, tuple[int, int]] = {}
+    for tid, t in graph.tensors.items():
+        if t.storage == "local":
+            # local tensor 跨算子驻留：producer → last consumer
+            first = order_map.get(t.producer_node_id, 0) if t.producer_node_id else 0
+            if t.consumer_node_ids:
+                last = max(order_map[c] for c in t.consumer_node_ids if c in order_map)
+            else:
+                first = order_map.get(t.producer_node_id, 0) if t.producer_node_id else 0
+                last = first
+            lifetimes[tid] = (first, last)
+        else:
+            # 普通 tensor：per-op 活跃。收集所有使用此 tensor 的算子。
+            ops: set[int] = set()
+            if t.producer_node_id and t.producer_node_id in order_map:
+                ops.add(order_map[t.producer_node_id])
+            for cid in t.consumer_node_ids:
+                if cid in order_map:
+                    ops.add(order_map[cid])
+            # 也检查 absorbed_inputs
+            for nid, node in graph.nodes.items():
+                if tid in node.absorbed_inputs.values() and nid in order_map:
+                    ops.add(order_map[nid])
+            if ops:
+                lifetimes[tid] = (min(ops), max(ops))
+    return lifetimes
+
+
+def _collect_op_tensors(graph: Graph, node_id: str) -> list[str]:
+    """收集单个算子需要的所有 tensor id（输入 + absorbed + 输出）。"""
     node = graph.nodes[node_id]
-    offset = 0
-    layout: dict[str, int] = {}
-
-    # storage=local 的输入 tensor：复用 producer 分配的 L1 偏移，不占新空间
+    tids: list[str] = []
+    # 输入（非 weight 优先，再 weight）
     for tid in node.inputs:
         t = graph.tensors.get(tid)
-        if t and t.storage == "local" and tid in local_l1_offsets:
-            layout[tid] = local_l1_offsets[tid]
-
-    # 输入 tensor（非 weight，非 local）
-    for tid in node.inputs:
-        t = graph.tensors.get(tid)
-        if t and not t.is_weight and t.storage != "local":
-            offset = align_up(offset, l1_alignment)
-            layout[tid] = offset
-            offset += calc_padded_size(t.shape, t.dtype, t.format, cube_size)
-
-    # 权重 tensor
+        if t and not t.is_weight:
+            tids.append(tid)
     for tid in node.inputs:
         t = graph.tensors.get(tid)
         if t and t.is_weight:
-            offset = align_up(offset, l1_alignment)
-            layout[tid] = offset
-            offset += calc_padded_size(t.shape, t.dtype, t.format, cube_size)
-
-    # absorbed_inputs 中的 tensor
+            tids.append(tid)
+    # absorbed_inputs
     for _, atid in sorted(node.absorbed_inputs.items()):
-        t = graph.tensors.get(atid)
-        if t:
-            offset = align_up(offset, l1_alignment)
-            layout[atid] = offset
-            offset += calc_padded_size(t.shape, t.dtype, t.format, cube_size)
-
-    # 输出 tensor
+        if atid not in tids:
+            tids.append(atid)
+    # 输出
     for tid in node.outputs:
-        t = graph.tensors.get(tid)
-        if t:
-            offset = align_up(offset, l1_alignment)
-            layout[tid] = offset
-            offset += calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+        tids.append(tid)
+    return tids
 
-    total = align_up(offset, l1_alignment)
-    if total > l1_capacity:
-        raise MemoryPlanError(f"L1 溢出: 节点 {node_id} 需要 {total} 字节, 容量 {l1_capacity} 字节")
-    return layout
+
+def _allocate_l1_global(
+    graph: Graph,
+    l1_alignment: int,
+    l1_capacity: int,
+    cube_size: int,
+) -> dict[str, int]:
+    """L1 全局 liveness best-fit 分配，返回 {tensor_id: l1_offset}。
+
+    按 execution_order 逐算子处理：
+    1. 释放当前算子不再需要的 tensor（last_op < current_op）。
+    2. 为当前算子的新 tensor 分配 L1 空间（best-fit 复用空闲块）。
+    3. 检查 L1 容量约束。
+    """
+    l1_lifetimes = _analyze_l1_lifetimes(graph)
+    result: dict[str, int] = {}          # tid → l1_offset（最终结果，不删除）
+    live: dict[str, int] = {}            # tid → l1_offset（当前活跃）
+    alloc_sizes: dict[str, int] = {}     # tid → aligned_size（已分配的）
+    free_blocks: list[list[int]] = []    # [offset, size]
+    l1_watermark = 0
+
+    for op_idx, nid in enumerate(graph.execution_order):
+        # ① 释放 last_op < op_idx 的已分配 tensor
+        expired = [
+            tid for tid in live
+            if l1_lifetimes[tid][1] < op_idx
+        ]
+        for tid in expired:
+            free_blocks.append([live[tid], alloc_sizes[tid]])
+            del live[tid]
+            del alloc_sizes[tid]
+            logger.debug("L1 释放: %s (last_op < %d)", tid, op_idx)
+
+        # ② 合并相邻空闲块减少碎片
+        if free_blocks:
+            free_blocks.sort(key=lambda b: b[0])
+            merged: list[list[int]] = [free_blocks[0]]
+            for blk in free_blocks[1:]:
+                prev = merged[-1]
+                if prev[0] + prev[1] == blk[0]:
+                    prev[1] += blk[1]
+                else:
+                    merged.append(blk)
+            free_blocks = merged
+
+        # ③ 为当前算子需要的 tensor 分配 L1（跳过已分配的）
+        op_tids = _collect_op_tensors(graph, nid)
+        for tid in op_tids:
+            if tid in live:
+                continue  # 已分配（如 local tensor 由 producer 分配）
+            t = graph.tensors.get(tid)
+            if not t or tid not in l1_lifetimes:
+                continue
+            size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+            aligned_size = align_up(size, l1_alignment)
+
+            offset = _best_fit_alloc(free_blocks, aligned_size)
+            if offset is not None:
+                live[tid] = offset
+                result[tid] = offset
+                alloc_sizes[tid] = aligned_size
+                logger.debug("L1 复用: %s -> offset=%d, size=%d (op=%s)", tid, offset, size, nid)
+            else:
+                offset = align_up(l1_watermark, l1_alignment)
+                live[tid] = offset
+                result[tid] = offset
+                alloc_sizes[tid] = aligned_size
+                l1_watermark = offset + aligned_size
+                logger.debug("L1 新分配: %s -> offset=%d, size=%d (op=%s)", tid, offset, size, nid)
+
+        # ④ 检查当前 L1 峰值（已分配 tensor 的最大 end）
+        if live:
+            peak = max(live[t] + alloc_sizes[t] for t in live)
+            if peak > l1_capacity:
+                raise MemoryPlanError(
+                    f"L1 溢出: 节点 {nid} 处峰值 {peak} 字节, 容量 {l1_capacity} 字节"
+                )
+
+    return result
+
+
+def _build_per_op_l1_layouts(
+    graph: Graph,
+    global_l1: dict[str, int],
+) -> list[dict[str, int]]:
+    """从全局 L1 分配结果中提取每个算子的 l1_layout。"""
+    layouts: list[dict[str, int]] = []
+    for nid in graph.execution_order:
+        op_tids = _collect_op_tensors(graph, nid)
+        l1_layout = {tid: global_l1[tid] for tid in op_tids if tid in global_l1}
+        layouts.append(l1_layout)
+    return layouts
 
 
 # ── 主入口 ───────────────────────────────────────────────
@@ -243,23 +340,21 @@ def run(graph: Graph, config: dict) -> tuple[Graph, list[DmaPlan]]:
         )
         return graph, dma_plans
 
-    # 常规路径：HBM 全局分配 + per-op L1 布局
+    # 常规路径：HBM 全局分配 + L1 全局 liveness best-fit 分配
     lifetimes = _analyze_lifetimes(graph)
     reuse_count = _allocate_hbm(graph, lifetimes, hbm_align, cube_size)
 
-    # 跟踪 storage=local 的 tensor 的 L1 偏移（producer 写入，consumer 复用）
-    local_l1_offsets: dict[str, int] = {}
+    # L1 全局分配
+    global_l1 = _allocate_l1_global(graph, l1_align, l1_cap, cube_size)
+    for tid, off in global_l1.items():
+        t = graph.tensors.get(tid)
+        if t:
+            t.l1_offset = off
 
+    # 生成 per-op DMA 计划
+    per_op_layouts = _build_per_op_l1_layouts(graph, global_l1)
     dma_plans = []
-    for nid in graph.execution_order:
-        l1_layout = _plan_l1_layout(graph, nid, l1_align, l1_cap, cube_size, local_l1_offsets)
-        for tid, off in l1_layout.items():
-            t = graph.tensors.get(tid)
-            if t:
-                t.l1_offset = off
-                # 输出 tensor 且 storage=local → 记录偏移供下游复用
-                if t.storage == "local" and tid in graph.nodes[nid].outputs:
-                    local_l1_offsets[tid] = off
+    for nid, l1_layout in zip(graph.execution_order, per_op_layouts):
         plan = build_dma_plan(graph, nid, l1_layout, cube_size)
         dma_plans.append(plan)
         logger.debug("节点 %s: %d loads, %d stores", nid, len(plan.loads), len(plan.stores))

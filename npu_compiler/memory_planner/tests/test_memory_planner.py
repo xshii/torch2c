@@ -469,6 +469,284 @@ class TestL1OnlyOptimization:
             assert t.l1_offset is not None
 
 
+# ── L1 全局分配专项测试 ──────────────────────────────────
+# 使用 2MB L1 + 较小 shape 精确测试边界条件
+
+# [1, 512, 512] fp16 nd = 512*512*2 = 512KB
+_L1_TEST_SHAPE = [1, 512, 512]
+_L1_2MB = 2 * 1024 * 1024  # 2MB
+
+
+def _small_l1_config() -> dict:
+    """基于默认配置，将 L1 缩小到 2MB。"""
+    config = _load_config()
+    config["memory"]["l1"]["total_size_bytes"] = _L1_2MB
+    return config
+
+
+class TestL1GlobalLiveness:
+    """L1 全局 liveness best-fit 分配的专项测试。L1=2MB, tensor=512KB。"""
+
+    def test_l1_reuse_across_ops(self):
+        """线性链中，前序算子释放的 L1 空间被后续算子复用。
+
+        5 算子链，每个 tensor 512KB，L1=2MB。
+        per-op 需要 2 tensor（输入+输出）= 1MB < 2MB。
+        全局分配应复用已释放空间，峰值不应超过 L1。
+        """
+        g = _make_linear_chain(5, shape=_L1_TEST_SHAPE)
+        config = _small_l1_config()
+        g, _ = run(g, config)
+
+        for t in g.tensors.values():
+            assert t.l1_offset is not None, f"{t.id} 缺少 l1_offset"
+
+        # L1 offset 应有复用（unique offsets < total tensors）
+        l1_offsets = [t.l1_offset for t in g.tensors.values()]
+        assert len(set(l1_offsets)) < len(l1_offsets), (
+            "期望 L1 offset 有复用，但所有 tensor 都有独立偏移"
+        )
+
+    def test_l1_no_overlap_coexisting(self):
+        """同时活跃在 L1 的 tensor 地址不重叠。"""
+        g = _make_linear_chain(5, shape=_L1_TEST_SHAPE)
+        config = _small_l1_config()
+        g, _ = run(g, config)
+
+        cube_size = config["fractal"]["cube_size"]
+        for nid in g.execution_order:
+            node = g.nodes[nid]
+            op_tids = list(node.inputs) + list(node.outputs)
+            op_tensors = [g.tensors[tid] for tid in op_tids if tid in g.tensors]
+            for i, t1 in enumerate(op_tensors):
+                for t2 in op_tensors[i + 1:]:
+                    if t1.l1_offset is None or t2.l1_offset is None:
+                        continue
+                    s1 = calc_padded_size(t1.shape, t1.dtype, t1.format, cube_size)
+                    s2 = calc_padded_size(t2.shape, t2.dtype, t2.format, cube_size)
+                    end1 = t1.l1_offset + s1
+                    end2 = t2.l1_offset + s2
+                    overlap = t1.l1_offset < end2 and t2.l1_offset < end1
+                    assert not overlap, (
+                        f"节点 {nid}: L1 重叠 {t1.id}[{t1.l1_offset}:{end1}]"
+                        f" 和 {t2.id}[{t2.l1_offset}:{end2}]"
+                    )
+
+    def test_local_tensor_cross_op_residence(self):
+        """storage=local 的 tensor 跨算子驻留 L1，不走 DMA。
+
+        L1=2MB, tensor=512KB。node_0→t_local→node_1→...→node_3。
+        t_local 应保持 L1 offset 且 node_1 无 DMA load。
+        """
+        g = Graph()
+        shape = _L1_TEST_SHAPE
+        g.add_tensor(Tensor(
+            id="t_in", shape=shape, dtype="fp16",
+            is_model_input=True, consumer_node_ids=["node_0"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_local", shape=shape, dtype="fp16",
+            storage="local",
+            producer_node_id="node_0", consumer_node_ids=["node_1"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_mid", shape=shape, dtype="fp16",
+            producer_node_id="node_1", consumer_node_ids=["node_2"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_mid2", shape=shape, dtype="fp16",
+            producer_node_id="node_2", consumer_node_ids=["node_3"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_out", shape=shape, dtype="fp16",
+            producer_node_id="node_3", is_model_output=True,
+        ))
+        for i, (inp, out) in enumerate([
+            (["t_in"], ["t_local"]),
+            (["t_local"], ["t_mid"]),
+            (["t_mid"], ["t_mid2"]),
+            (["t_mid2"], ["t_out"]),
+        ]):
+            g.add_node(Node(
+                id=f"node_{i}", op_type="vector_add",
+                inputs=inp, outputs=out,
+                compute_unit="vector", npu_op="vector_add", is_mapped=True,
+            ))
+        g.execution_order = [f"node_{i}" for i in range(4)]
+
+        config = _small_l1_config()
+        g, dma_plans = run(g, config)
+
+        t_local = g.tensors["t_local"]
+        assert t_local.l1_offset is not None, "t_local 应有 L1 offset"
+        assert t_local.hbm_offset is None, "storage=local 不应有 HBM offset"
+
+        plan_1 = dma_plans[1]
+        load_tids = [inst.tensor_id for inst in plan_1.loads]
+        assert "t_local" not in load_tids, "t_local 不应有 DMA load"
+        assert post_validate(g) == []
+
+    def test_local_tensors_no_l1_overlap(self):
+        """多个 local tensor 同时驻留 L1 时不重叠。
+
+        L1=2MB。node_0→(t_local_a, t_mid), node_1→t_local_b,
+        node_2 消费 t_local_a+t_local_b。两个 512KB local 同时在 L1。
+        """
+        g = Graph()
+        shape = _L1_TEST_SHAPE
+        g.add_tensor(Tensor(
+            id="t_in", shape=shape, dtype="fp16",
+            is_model_input=True, consumer_node_ids=["node_0"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_local_a", shape=shape, dtype="fp16", storage="local",
+            producer_node_id="node_0", consumer_node_ids=["node_2"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_mid", shape=shape, dtype="fp16",
+            producer_node_id="node_0", consumer_node_ids=["node_1"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_local_b", shape=shape, dtype="fp16", storage="local",
+            producer_node_id="node_1", consumer_node_ids=["node_2"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_out", shape=shape, dtype="fp16",
+            producer_node_id="node_2", is_model_output=True,
+        ))
+        g.add_node(Node(
+            id="node_0", op_type="vector_add",
+            inputs=["t_in"], outputs=["t_local_a", "t_mid"],
+            compute_unit="vector", npu_op="vector_add", is_mapped=True,
+        ))
+        g.add_node(Node(
+            id="node_1", op_type="vector_add",
+            inputs=["t_mid"], outputs=["t_local_b"],
+            compute_unit="vector", npu_op="vector_add", is_mapped=True,
+        ))
+        g.add_node(Node(
+            id="node_2", op_type="vector_add",
+            inputs=["t_local_a", "t_local_b"], outputs=["t_out"],
+            compute_unit="vector", npu_op="vector_add", is_mapped=True,
+        ))
+        g.execution_order = ["node_0", "node_1", "node_2"]
+
+        config = _small_l1_config()
+        g, _ = run(g, config)
+
+        t_a = g.tensors["t_local_a"]
+        t_b = g.tensors["t_local_b"]
+        assert t_a.l1_offset is not None
+        assert t_b.l1_offset is not None
+
+        cube_size = config["fractal"]["cube_size"]
+        sa = calc_padded_size(t_a.shape, t_a.dtype, t_a.format, cube_size)
+        sb = calc_padded_size(t_b.shape, t_b.dtype, t_b.format, cube_size)
+        end_a = t_a.l1_offset + sa
+        end_b = t_b.l1_offset + sb
+        overlap = t_a.l1_offset < end_b and t_b.l1_offset < end_a
+        assert not overlap, (
+            f"L1 重叠: t_local_a[{t_a.l1_offset}:{end_a}]"
+            f" 和 t_local_b[{t_b.l1_offset}:{end_b}]"
+        )
+
+    def test_l1_overflow_accumulated_local(self):
+        """累积的 local tensor 超出 L1=2MB 时抛出 MemoryPlanError。
+
+        每个 tensor 512KB，3 个 local tensor 全部汇聚到 node_3。
+        node_3: 3 local (1.5MB) + t_out (512KB) = 2MB，刚好满。
+        再加 1 个 local → 2.5MB > 2MB → 溢出。
+        """
+        g = Graph()
+        shape = _L1_TEST_SHAPE  # 512KB each
+        g.add_tensor(Tensor(
+            id="t_in", shape=shape, dtype="fp16",
+            is_model_input=True, consumer_node_ids=["node_0", "node_1", "node_2", "node_3"],
+        ))
+        # 4 个 local tensor 汇聚到 node_4
+        for i in range(4):
+            g.add_tensor(Tensor(
+                id=f"t_local_{i}", shape=shape, dtype="fp16",
+                storage="local",
+                producer_node_id=f"node_{i}", consumer_node_ids=["node_4"],
+            ))
+        g.add_tensor(Tensor(
+            id="t_out", shape=shape, dtype="fp16",
+            producer_node_id="node_4", is_model_output=True,
+        ))
+        for i in range(4):
+            g.add_node(Node(
+                id=f"node_{i}", op_type="vector_add",
+                inputs=["t_in"], outputs=[f"t_local_{i}"],
+                compute_unit="vector", npu_op="vector_add", is_mapped=True,
+            ))
+        g.add_node(Node(
+            id="node_4", op_type="vector_add",
+            inputs=["t_local_0", "t_local_1", "t_local_2", "t_local_3"],
+            outputs=["t_out"],
+            compute_unit="vector", npu_op="vector_add", is_mapped=True,
+        ))
+        g.execution_order = [f"node_{i}" for i in range(5)]
+
+        config = _small_l1_config()
+        # node_4: 4 local (2MB) + t_out (512KB) = 2.5MB > 2MB
+        with pytest.raises(MemoryPlanError, match="L1 溢出"):
+            run(g, config)
+
+    def test_l1_boundary_exact_fit(self):
+        """L1 刚好满不溢出的边界测试。
+
+        L1=2MB, 3 个 local (1.5MB) + t_out (512KB) = 2MB 刚好不溢出。
+        """
+        g = Graph()
+        shape = _L1_TEST_SHAPE  # 512KB each
+        g.add_tensor(Tensor(
+            id="t_in", shape=shape, dtype="fp16",
+            is_model_input=True, consumer_node_ids=["node_0", "node_1", "node_2"],
+        ))
+        for i in range(3):
+            g.add_tensor(Tensor(
+                id=f"t_local_{i}", shape=shape, dtype="fp16",
+                storage="local",
+                producer_node_id=f"node_{i}", consumer_node_ids=["node_3"],
+            ))
+        g.add_tensor(Tensor(
+            id="t_out", shape=shape, dtype="fp16",
+            producer_node_id="node_3", is_model_output=True,
+        ))
+        for i in range(3):
+            g.add_node(Node(
+                id=f"node_{i}", op_type="vector_add",
+                inputs=["t_in"], outputs=[f"t_local_{i}"],
+                compute_unit="vector", npu_op="vector_add", is_mapped=True,
+            ))
+        g.add_node(Node(
+            id="node_3", op_type="vector_add",
+            inputs=["t_local_0", "t_local_1", "t_local_2"],
+            outputs=["t_out"],
+            compute_unit="vector", npu_op="vector_add", is_mapped=True,
+        ))
+        g.execution_order = [f"node_{i}" for i in range(4)]
+
+        config = _small_l1_config()
+        # node_3: 3 local (1.5MB) + t_out (512KB) = 2MB = L1 容量，刚好不溢出
+        g, _ = run(g, config)
+        assert post_validate(g) == []
+
+    def test_l1_alignment_global(self):
+        """全局 L1 分配的所有 offset 满足对齐要求。"""
+        g = _make_linear_chain(5, shape=_L1_TEST_SHAPE)
+        config = _small_l1_config()
+        l1_align = config["memory"]["l1"]["alignment_bytes"]
+        g, _ = run(g, config)
+
+        for t in g.tensors.values():
+            if t.l1_offset is not None:
+                assert t.l1_offset % l1_align == 0, (
+                    f"{t.id} L1 offset {t.l1_offset} 不是 {l1_align} 的倍数"
+                )
+
+
 class TestPostValidate:
     def test_valid(self):
         g = Graph()
