@@ -330,7 +330,7 @@ class Graph:
 **每个模块一个独立文件夹，包含代码、配置、UT和局部demo，可被独立的AI Agent开发和测试。**
 
 ```
-npu_compiler/
+torch2c/
 │
 ├── common/                           ← Agent 0（最先开发）
 │   ├── README.md
@@ -1921,7 +1921,7 @@ Agent 0在集成阶段检查：
 
 | 检查项 | 方法 |
 |--------|------|
-| 所有模块UT通过 | `cd npu_compiler && pytest --tb=short` |
+| 所有模块UT通过 | `cd torch2c && pytest --tb=short` |
 | 端到端管线跑通 | `python integration/demo/run_full_demo.py` 无报错 |
 | 生成的C代码语法正确 | `gcc -fsyntax-only -include npu_mock.h output/src/model_graph.c` |
 | C侧UT通过 | `cd output && cmake . && make && ctest` |

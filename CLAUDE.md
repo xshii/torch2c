@@ -11,7 +11,7 @@
 - 精度：max_abs_diff < 1e-3 (FP16), cosine > 0.999
 
 ## 项目结构
-- `npu_compiler/` — Python 编译器包
+- `torch2c/` — Python 编译器包
 - `npu_cpu_mock/` — NPU C API 的 CPU 模拟实现（测试框架）
 - `docs/ordr.md` — 需求文档（权威来源）
 - `docs/develop.md` — 多 Agent 并行开发指南

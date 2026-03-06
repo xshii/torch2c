@@ -214,8 +214,8 @@ Commit 5: R3-4d ~ R3-4f        (__init__.py 导出 + 类型标注 + mypy 修复)
 ## 最终验证
 
 ```bash
-ruff check npu_compiler/
-mypy npu_compiler/
+ruff check torch2c/
+mypy torch2c/
 python3 -m pytest --tb=short -q
 cd npu_cpu_mock/build && cmake .. && make && ctest --output-on-failure
 ```

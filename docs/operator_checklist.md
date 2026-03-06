@@ -48,16 +48,16 @@
 
 ```bash
 # 配置一致性
-pytest npu_compiler/integration/tests/test_config_consistency.py -v
+pytest torch2c/integration/tests/test_config_consistency.py -v
 
 # 单算子语义
-pytest npu_compiler/integration/tests/test_op_semantics.py -v
+pytest torch2c/integration/tests/test_op_semantics.py -v
 
 # 单算子 C 精度
-pytest npu_compiler/integration/tests/demo_ut/test_c_ops.py -v
+pytest torch2c/integration/tests/demo_ut/test_c_ops.py -v
 
 # 端到端 golden 比对
-pytest npu_compiler/integration/tests/test_pipeline.py::TestCGoldenComparison -v
+pytest torch2c/integration/tests/test_pipeline.py::TestCGoldenComparison -v
 
 # 全量测试
 pytest --tb=short

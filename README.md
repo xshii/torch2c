@@ -86,7 +86,7 @@ Unified Buffer（Vector工作空间）
 
 ```
 torch2c/
-├── npu_compiler/                Python包
+├── torch2c/                Python包
 │   ├── common/                  基础设施（Graph IR、日志、配置、异常）
 │   │   ├── graph_ir.py
 │   │   ├── logger.py
@@ -209,24 +209,24 @@ pip install pytest pytest-cov  # 开发依赖
 pytest
 
 # 单模块UT
-pytest npu_compiler/common/tests/
-pytest npu_compiler/op_mapping/tests/
+pytest torch2c/common/tests/
+pytest torch2c/op_mapping/tests/
 ```
 
 ### 运行端到端Demo
 
 ```bash
-python -m npu_compiler.main
+python -m torch2c.main
 ```
 
 或分步运行：
 
 ```bash
 # 1. 图捕获
-python -m npu_compiler.graph_capture.demo.run_demo
+python -m torch2c.graph_capture.demo.run_demo
 
 # 2. 端到端流水线
-python -m npu_compiler.integration.demo.run_full_demo
+python -m torch2c.integration.demo.run_full_demo
 ```
 
 ### 验证生成的C工程

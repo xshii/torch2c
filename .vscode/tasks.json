@@ -19,7 +19,7 @@
       "label": "run:demo",
       "type": "shell",
       "command": "${workspaceFolder}/.venv/bin/python",
-      "args": ["-m", "npu_compiler.main"]
+      "args": ["-m", "torch2c.main"]
     },
     {
       "label": "install:dev",
@@ -32,7 +32,7 @@
     {
       "id": "module",
       "type": "promptString",
-      "description": "Module test path, e.g. npu_compiler/common/tests/"
+      "description": "Module test path, e.g. torch2c/common/tests/"
     }
   ]
 }

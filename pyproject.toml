@@ -22,10 +22,10 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["npu_compiler*"]
+include = ["torch2c*"]
 
 [tool.pytest.ini_options]
-testpaths = ["npu_compiler"]
+testpaths = ["torch2c"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
@@ -34,7 +34,7 @@ python_functions = ["test_*"]
 [tool.ruff]
 target-version = "py310"
 line-length = 100
-src = ["npu_compiler"]
+src = ["torch2c"]
 
 [tool.ruff.lint]
 select = [
@@ -66,7 +66,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["npu_compiler"]
+known-first-party = ["torch2c"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -75,7 +75,7 @@ indent-style = "space"
 # ── Mypy ──────────────────────────────────────────────────────
 [tool.mypy]
 python_version = "3.10"
-packages = ["npu_compiler"]
+packages = ["torch2c"]
 ignore_missing_imports = true
 warn_unused_configs = true
 warn_redundant_casts = true

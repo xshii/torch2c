@@ -39,7 +39,7 @@ main
 
 | 终端 | worktree 分支 | 负责目录 | 语言 | 验证命令 |
 |------|-------------|---------|------|---------|
-| 终端 A | feature/common-dev | `npu_compiler/common/` | Python | `pytest npu_compiler/common/tests/` |
+| 终端 A | feature/common-dev | `torch2c/common/` | Python | `pytest torch2c/common/tests/` |
 | 终端 B | feature/npu-cpu-mock | `npu_cpu_mock/` | C | `cd npu_cpu_mock && cmake -B build && cmake --build build && cd build && ctest` |
 
 ```bash
@@ -58,9 +58,9 @@ cd .claude/worktrees/common && claude
 Prompt:
 
 ```
-阅读 npu_compiler/common/README.md，开发 common 模块全部代码和测试。
+阅读 torch2c/common/README.md，开发 common 模块全部代码和测试。
 具体：graph_ir.py、logger.py、config_loader.py、errors.py 及对应 tests/。
-pytest npu_compiler/common/tests/ 全绿后 commit。
+pytest torch2c/common/tests/ 全绿后 commit。
 ```
 
 ### 终端 B — npu_cpu_mock (C)
@@ -88,7 +88,7 @@ git merge feature/common-dev
 git merge feature/npu-cpu-mock
 
 # 验证
-pytest npu_compiler/common/tests/ --tb=short
+pytest torch2c/common/tests/ --tb=short
 cd npu_cpu_mock && cmake -B build && cmake --build build && cd build && ctest --output-on-failure
 ```
 
@@ -117,8 +117,8 @@ Prompt:
 你负责开发 graph_capture、op_mapping、op_decomposition 三个模块。
 
 前置阅读（必读）：
-1. npu_compiler/common/ 下全部代码（graph_ir.py, logger.py, config_loader.py, errors.py）
-2. 每个模块的 README：npu_compiler/graph_capture/README.md、npu_compiler/op_mapping/README.md、npu_compiler/op_decomposition/README.md
+1. torch2c/common/ 下全部代码（graph_ir.py, logger.py, config_loader.py, errors.py）
+2. 每个模块的 README：torch2c/graph_capture/README.md、torch2c/op_mapping/README.md、torch2c/op_decomposition/README.md
 3. docs/ordr.md 第 5.2 节（Graph IR JSON 格式）
 4. 各模块 config/ 目录下的 yaml 配置文件
 5. docs/ordr.md 第 16.2、16.4、16.5 节（补充决策）
@@ -139,8 +139,8 @@ Prompt:
 你负责开发 op_absorption、format_annotator、validator 三个模块。
 
 前置阅读（必读）：
-1. npu_compiler/common/ 下全部代码（graph_ir.py, logger.py, config_loader.py, errors.py）
-2. 每个模块的 README：npu_compiler/op_absorption/README.md、npu_compiler/format_annotator/README.md、npu_compiler/validator/README.md
+1. torch2c/common/ 下全部代码（graph_ir.py, logger.py, config_loader.py, errors.py）
+2. 每个模块的 README：torch2c/op_absorption/README.md、torch2c/format_annotator/README.md、torch2c/validator/README.md
 3. docs/ordr.md 第 5.2 节（Graph IR JSON 格式）
 4. 各模块 config/ 目录下的 yaml 配置文件
 5. docs/ordr.md 第 16.3、16.7 节（补充决策）
@@ -161,8 +161,8 @@ Prompt:
 你负责开发 memory_planner、scheduler 两个模块。
 
 前置阅读（必读）：
-1. npu_compiler/common/ 下全部代码（graph_ir.py, logger.py, config_loader.py, errors.py）
-2. 每个模块的 README：npu_compiler/memory_planner/README.md、npu_compiler/scheduler/README.md
+1. torch2c/common/ 下全部代码（graph_ir.py, logger.py, config_loader.py, errors.py）
+2. 每个模块的 README：torch2c/memory_planner/README.md、torch2c/scheduler/README.md
 3. docs/ordr.md 第 5.2 节（Graph IR JSON 格式）
 4. 各模块 config/ 目录下的 yaml 配置文件（hardware_config.yaml）
 
@@ -182,8 +182,8 @@ Prompt:
 你负责开发 codegen 模块。
 
 前置阅读（必读）：
-1. npu_compiler/common/ 下全部代码（graph_ir.py, logger.py, config_loader.py, errors.py）
-2. npu_compiler/codegen/README.md
+1. torch2c/common/ 下全部代码（graph_ir.py, logger.py, config_loader.py, errors.py）
+2. torch2c/codegen/README.md
 3. docs/ordr.md 第 5.2 节（Graph IR JSON 格式）
 4. codegen 的 config/ 目录下的 yaml（c_api_signatures.yaml, codegen_config.yaml）和 templates/
 5. docs/ordr.md 第 16.4 节（补充决策：transpose 4D 接口）
@@ -223,14 +223,14 @@ Prompt:
 你负责开发 integration 模块，将所有 Pass 串联成完整编译 pipeline。
 
 前置阅读（必读）：
-1. npu_compiler/common/ 下全部代码
-2. npu_compiler/integration/README.md
+1. torch2c/common/ 下全部代码
+2. torch2c/integration/README.md
 3. 各 Pass 模块的代码（graph_capture, op_mapping, op_decomposition, op_absorption, format_annotator, validator, memory_planner, scheduler, codegen）
 4. docs/ordr.md 第 3.1 节（整体流程）
 
 交付要求：
 1. pipeline.py — 串联全部 Pass
-2. 端到端 demo：python -m npu_compiler.integration.demo.run_full_demo
+2. 端到端 demo：python -m torch2c.integration.demo.run_full_demo
 3. pytest 全绿后 commit
 ```
 
@@ -263,7 +263,7 @@ git worktree remove .claude/worktrees/agent4
 | 检查项 | 命令 |
 |--------|------|
 | 全量 UT 通过 | `pytest --tb=short` |
-| 端到端跑通 | `python -m npu_compiler.integration.demo.run_full_demo` |
+| 端到端跑通 | `python -m torch2c.integration.demo.run_full_demo` |
 | C mock UT 通过 | `cd npu_cpu_mock/build && ctest` |
 | C 生成代码语法 | `gcc -fsyntax-only -include npu_api.h output/src/model_graph.c` |
 | 算子数 = 62 | 检查 model_graph.c |
