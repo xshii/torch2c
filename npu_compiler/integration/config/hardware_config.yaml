@@ -23,4 +23,6 @@ dma:
 local_bypass:
   allowed_pairs:
     - ["cube", "vector"]
+    - ["cube", "idma"]
+    - ["idma", "vector"]
     - ["vector", "vector"]

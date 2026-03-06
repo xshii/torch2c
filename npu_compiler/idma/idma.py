@@ -8,6 +8,11 @@
   4. 只有一个消费者节点（单 consumer）
   5. producer → consumer 的计算单元对在 allowed_pairs 中
 
+计算单元类型包括：
+  "cube"   — 矩阵计算单元
+  "vector" — 向量计算单元
+  "idma"   — DMA 搬运/格式转换单元
+
 storage 取值：
   "hbm"   — 默认，落主存
   "l2"    — 片上 L2 buffer
@@ -16,8 +21,10 @@ storage 取值：
 配置示例（hardware_config.yaml）：
   local_bypass:
     allowed_pairs:
-      - ["cube", "vector"]
-      - ["vector", "vector"]
+      - ["cube", "vector"]     # matmul 输出 → vector op
+      - ["cube", "idma"]       # matmul 输出 → DMA reformat
+      - ["idma", "vector"]     # DMA reformat 输出 → vector op
+      - ["vector", "vector"]   # vector op → vector op
 """
 
 from __future__ import annotations
@@ -29,12 +36,14 @@ logger = get_logger(__name__)
 # 没有配置时的默认 allowed_pairs
 _DEFAULT_ALLOWED_PAIRS: set[tuple[str, str]] = {
     ("cube", "vector"),
+    ("cube", "idma"),
+    ("idma", "vector"),
     ("vector", "vector"),
 }
 
 
 def _parse_allowed_pairs(config: dict) -> set[tuple[str, str]]:
-    """从配置中解析 allowed_pairs，返回 frozenset of (producer_unit, consumer_unit)。"""
+    """从配置中解析 allowed_pairs，返回 set of (producer_unit, consumer_unit)。"""
     raw = config.get("allowed_pairs")
     if raw is None:
         return _DEFAULT_ALLOWED_PAIRS
@@ -81,9 +90,9 @@ def run(graph: Graph, config: dict) -> Graph:
         graph: 经过 format_annotator 的 Graph IR。
         config: 配置字典，可选键：
             enable_local_storage: bool — 是否启用 local buffer 优化，默认 True。
-            allowed_pairs: list[list[str]] — 允许 local 直通的计算单元对，
-                如 [["cube", "vector"], ["vector", "vector"]]。
-                默认 [["cube", "vector"], ["vector", "vector"]]。
+            allowed_pairs: list[list[str]] — 允许 local 直通的计算单元对。
+                计算单元: "cube", "vector", "idma"。
+                默认: cube→vector, cube→idma, idma→vector, vector→vector。
 
     Returns:
         同一 Graph 对象（原地修改）。

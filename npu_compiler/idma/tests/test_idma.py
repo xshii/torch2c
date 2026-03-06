@@ -219,6 +219,113 @@ class TestStorageAssignment:
         assert g.tensors["t_inter"].storage == "local"
 
 
+class TestIdmaComputeUnit:
+    """idma 作为计算单元参与 allowed_pairs 判定。
+
+    场景：matmul(cube) → reformat(idma) → add(vector)
+    """
+
+    def _make_cube_idma_vector_chain(self) -> Graph:
+        """cube → idma → vector 三节点图。"""
+        shape = _LARGE_SHAPE
+        g = Graph()
+        g.add_tensor(Tensor(
+            id="t_in", shape=shape, dtype="fp16", format="nd",
+            is_model_input=True, consumer_node_ids=["n_matmul"],
+        ))
+        # matmul 输出 nz → reformat 的输入
+        g.add_tensor(Tensor(
+            id="t_mm_out", shape=shape, dtype="fp16", format="nz",
+            producer_node_id="n_matmul", consumer_node_ids=["n_reformat"],
+        ))
+        # reformat 输出 nd → add 的输入
+        g.add_tensor(Tensor(
+            id="t_reformatted", shape=shape, dtype="fp16", format="nd",
+            producer_node_id="n_reformat", consumer_node_ids=["n_add"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_out", shape=shape, dtype="fp16", format="nd",
+            producer_node_id="n_add", is_model_output=True,
+        ))
+
+        g.add_node(Node(
+            id="n_matmul", op_type="cube_matmul",
+            inputs=["t_in"], outputs=["t_mm_out"],
+            compute_unit="cube", npu_op="cube_matmul", is_mapped=True,
+        ))
+        g.add_node(Node(
+            id="n_reformat", op_type="dma_reformat",
+            inputs=["t_mm_out"], outputs=["t_reformatted"],
+            compute_unit="idma", npu_op="dma_reformat", is_mapped=True,
+        ))
+        g.add_node(Node(
+            id="n_add", op_type="vector_add",
+            inputs=["t_reformatted"], outputs=["t_out"],
+            compute_unit="vector", npu_op="vector_add", is_mapped=True,
+        ))
+        g.execution_order = ["n_matmul", "n_reformat", "n_add"]
+        return g
+
+    def test_default_allows_cube_idma_and_idma_vector(self):
+        """默认配置：cube→idma 和 idma→vector 都允许 local。"""
+        g = self._make_cube_idma_vector_chain()
+        g = run_idma(g, {})
+        # cube→idma：t_mm_out 可 local
+        assert g.tensors["t_mm_out"].storage == "local"
+        # idma→vector：t_reformatted 可 local
+        assert g.tensors["t_reformatted"].storage == "local"
+
+    def test_block_idma_to_vector(self):
+        """只允许 cube→idma，不允许 idma→vector 时，reformat 输出必须落 hbm。"""
+        g = self._make_cube_idma_vector_chain()
+        g = run_idma(g, {"allowed_pairs": [["cube", "idma"]]})
+        # cube→idma：允许
+        assert g.tensors["t_mm_out"].storage == "local"
+        # idma→vector：不允许
+        assert g.tensors["t_reformatted"].storage == "hbm"
+
+    def test_block_cube_to_idma(self):
+        """只允许 idma→vector，不允许 cube→idma 时，matmul 输出必须落 hbm。"""
+        g = self._make_cube_idma_vector_chain()
+        g = run_idma(g, {"allowed_pairs": [["idma", "vector"]]})
+        # cube→idma：不允许
+        assert g.tensors["t_mm_out"].storage == "hbm"
+        # idma→vector：允许
+        assert g.tensors["t_reformatted"].storage == "local"
+
+    def test_idma_to_cube_blocked_by_default(self):
+        """默认不允许 idma→cube。"""
+        shape = _LARGE_SHAPE
+        g = Graph()
+        g.add_tensor(Tensor(
+            id="t_in", shape=shape, dtype="fp16",
+            is_model_input=True, consumer_node_ids=["n_reformat"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_reformatted", shape=shape, dtype="fp16",
+            producer_node_id="n_reformat", consumer_node_ids=["n_matmul"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_out", shape=shape, dtype="fp16",
+            producer_node_id="n_matmul", is_model_output=True,
+        ))
+        g.add_node(Node(
+            id="n_reformat", op_type="dma_reformat",
+            inputs=["t_in"], outputs=["t_reformatted"],
+            compute_unit="idma", npu_op="dma_reformat", is_mapped=True,
+        ))
+        g.add_node(Node(
+            id="n_matmul", op_type="cube_matmul",
+            inputs=["t_reformatted"], outputs=["t_out"],
+            compute_unit="cube", npu_op="cube_matmul", is_mapped=True,
+        ))
+        g.execution_order = ["n_reformat", "n_matmul"]
+
+        g = run_idma(g, {})
+        # idma→cube 默认不允许
+        assert g.tensors["t_reformatted"].storage == "hbm"
+
+
 class TestPostValidate:
     def test_valid_local_tensor(self):
         g = Graph()
