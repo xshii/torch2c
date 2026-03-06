@@ -1205,3 +1205,154 @@ class TestPipeMemoryPlanner:
         assert g.tensors["t_mid2"].storage == "local"
         assert g.tensors["t_mid2"].hbm_offset is None
         assert g.tensors["t_mid2"].l1_offset is not None
+
+
+class TestPipeWithAbsorbedInputs:
+    """matmul+bias 吸收后只有 cube 一个计算单元，bias 是 absorbed_input。
+
+    吸收后的图：
+      t_input(hbm) ─┐
+      t_weight(hbm) ─┤→ [cube_matmul, absorbed: bias=t_bias] → t_mm_out(pipe, cube→vector)
+      t_bias(hbm)   ─┘                                              │
+                                                         [vector_gelu] → t_out(hbm)
+
+    t_mm_out 的计算单元对是 (cube, vector)，在 pipe_pairs 中 → storage=pipe。
+    t_bias 作为 absorbed_input 仍需从 HBM load 到 L1。
+    """
+
+    def _make_matmul_bias_absorbed(self) -> Graph:
+        """构建吸收后的 matmul+bias → add → gelu → add2 图（足够大走 per-op 路径）。
+
+        t_input(hbm) ─┐
+        t_weight(hbm) ─┤→ [cube_matmul, absorbed: bias=t_bias] → t_mm_out(pipe)
+        t_bias(hbm)   ─┘                                              │
+                                                           [vector_add] → t_mid(local)
+                                                                           │
+                                                            [vector_gelu] → t_mid2(local)
+                                                                             │
+                                                             [vector_add2] → t_out(hbm)
+        """
+        shape = _LARGE_SHAPE
+        g = Graph()
+        g.add_tensor(Tensor(
+            id="t_input", shape=shape, dtype="fp16", format="nd",
+            is_model_input=True, consumer_node_ids=["n_matmul"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_weight", shape=shape, dtype="fp16", format="nz",
+            is_weight=True, consumer_node_ids=["n_matmul"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_bias", shape=[1, 1, shape[-1]], dtype="fp16", format="nd",
+            is_weight=True, consumer_node_ids=["n_matmul"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_mm_out", shape=shape, dtype="fp16", format="nd",
+            producer_node_id="n_matmul", consumer_node_ids=["n_add"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_mid", shape=shape, dtype="fp16", format="nd",
+            producer_node_id="n_add", consumer_node_ids=["n_gelu"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_mid2", shape=shape, dtype="fp16", format="nd",
+            producer_node_id="n_gelu", consumer_node_ids=["n_add2"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_out", shape=shape, dtype="fp16", format="nd",
+            producer_node_id="n_add2", is_model_output=True,
+        ))
+        g.add_node(Node(
+            id="n_matmul", op_type="cube_matmul",
+            inputs=["t_input", "t_weight"], outputs=["t_mm_out"],
+            compute_unit="cube", npu_op="cube_matmul", is_mapped=True,
+            absorbed_inputs={"bias": "t_bias"},
+        ))
+        g.add_node(Node(
+            id="n_add", op_type="vector_add",
+            inputs=["t_mm_out"], outputs=["t_mid"],
+            compute_unit="vector", npu_op="vector_add", is_mapped=True,
+        ))
+        g.add_node(Node(
+            id="n_gelu", op_type="vector_gelu",
+            inputs=["t_mid"], outputs=["t_mid2"],
+            compute_unit="vector", npu_op="vector_gelu", is_mapped=True,
+        ))
+        g.add_node(Node(
+            id="n_add2", op_type="vector_add",
+            inputs=["t_mid2"], outputs=["t_out"],
+            compute_unit="vector", npu_op="vector_add", is_mapped=True,
+        ))
+        g.execution_order = ["n_matmul", "n_add", "n_gelu", "n_add2"]
+        return g
+
+    def _load_hw_config(self) -> dict:
+        return load_config(HARDWARE_CONFIG_PATH)
+
+    def test_pipe_on_absorbed_matmul_output(self):
+        """吸收后 matmul+bias(cube) 输出走 pipe 到 vector。"""
+        g = self._make_matmul_bias_absorbed()
+        g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
+
+        # cube→vector: t_mm_out 应为 pipe
+        assert g.tensors["t_mm_out"].storage == "pipe"
+        # vector→vector: t_mid, t_mid2 应为 local
+        assert g.tensors["t_mid"].storage == "local"
+        assert g.tensors["t_mid2"].storage == "local"
+        # 外部 tensor 不变
+        assert g.tensors["t_input"].storage == "hbm"
+        assert g.tensors["t_weight"].storage == "hbm"
+        assert g.tensors["t_bias"].storage == "hbm"
+        assert g.tensors["t_out"].storage == "hbm"
+
+    def test_absorbed_bias_still_gets_hbm_and_l1(self):
+        """absorbed_input t_bias 仍然分配 HBM 和 L1。"""
+        g = self._make_matmul_bias_absorbed()
+        g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
+        config = self._load_hw_config()
+        g, _ = run_memory_planner(g, config)
+
+        # t_bias: 权重，正常分配 HBM 和 L1
+        assert g.tensors["t_bias"].hbm_offset is not None
+        assert g.tensors["t_bias"].l1_offset is not None
+        # t_mm_out: pipe，无 HBM 和 L1
+        assert g.tensors["t_mm_out"].hbm_offset is None
+        assert g.tensors["t_mm_out"].l1_offset is None
+
+    def test_absorbed_bias_dma_load(self):
+        """matmul 的 DMA 计划应 load t_bias（absorbed_input），不 store pipe 输出。"""
+        g = self._make_matmul_bias_absorbed()
+        g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
+        config = self._load_hw_config()
+        g, plans = run_memory_planner(g, config)
+
+        matmul_plan = [p for p in plans if p.node_id == "n_matmul"][0]
+        load_tids = {ld.tensor_id for ld in matmul_plan.loads}
+        # absorbed_input t_bias 仍需 DMA load
+        assert "t_bias" in load_tids
+        assert "t_input" in load_tids
+        assert "t_weight" in load_tids
+        # pipe 输出不 store
+        store_tids = {s.tensor_id for s in matmul_plan.stores}
+        assert "t_mm_out" not in store_tids
+
+    def test_consumer_no_load_pipe_tensor(self):
+        """n_add（pipe tensor 的消费者）不应 DMA load t_mm_out。"""
+        g = self._make_matmul_bias_absorbed()
+        g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
+        config = self._load_hw_config()
+        g, plans = run_memory_planner(g, config)
+
+        add_plan = [p for p in plans if p.node_id == "n_add"][0]
+        load_tids = {ld.tensor_id for ld in add_plan.loads}
+        assert "t_mm_out" not in load_tids
+
+    def test_post_validate_passes(self):
+        """整个流程校验通过。"""
+        g = self._make_matmul_bias_absorbed()
+        g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
+        config = self._load_hw_config()
+        g, _ = run_memory_planner(g, config)
+
+        assert post_validate(g) == []
+        assert mp_post_validate(g) == []
