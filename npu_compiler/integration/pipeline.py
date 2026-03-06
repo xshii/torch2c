@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 
 from npu_compiler.codegen import c_emitter, golden_exporter, weight_exporter
+from npu_compiler.viz import emit_graph_ascii, emit_graph_dot, emit_lifetime_ascii
 from npu_compiler.codegen.c_project import (
     cmake_emitter,
     main_emitter,
@@ -213,6 +214,7 @@ def compile(
     logger.info("Pass ① 完成: %s", graph.summary())
 
     # Pass ②-⑤ 声明式循环
+    cube_size = configs["hardware"]["fractal"]["cube_size"]
     for p in _MIDDLE_PASSES:
         logger.info("Pass %s %s 开始", p.number, p.name)
         graph = p.run_fn(graph, configs[p.config_key])
@@ -221,6 +223,10 @@ def compile(
         if p.validate_fn:
             _run_post_validation(collector, p.name, graph, p.validate_fn)
         logger.info("Pass %s 完成", p.number)
+        # idma 后生成依赖图
+        if p.name == "idma":
+            emit_graph_dot(graph, output_dir, cube_size)
+            emit_graph_ascii(graph, output_dir, cube_size)
 
     # Pass ⑥ validator（特殊：config 从 signatures 派生）
     logger.info("Pass ⑥ validator 开始")
@@ -236,6 +242,7 @@ def compile(
     logger.info("Pass ⑦ memory_planner 开始")
     graph, dma_plans = memory_planner.run(graph, configs["hardware"])
     _run_post_validation(collector, "memory_planner", graph, memory_planner.post_validate)
+    emit_lifetime_ascii(graph, output_dir, cube_size)
     logger.info("Pass ⑦ 完成")
 
     # Pass ⑧ scheduler（特殊：无 config）

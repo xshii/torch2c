@@ -78,6 +78,13 @@ class TestEndToEnd:
         assert os.path.isfile(os.path.join(result_dir, "npu_mock.h"))
         assert os.path.isfile(os.path.join(result_dir, "CMakeLists.txt"))
 
+        # viz 产物
+        viz = os.path.join(result_dir, "viz")
+        assert os.path.isfile(os.path.join(viz, "graph.dot"))
+        assert os.path.isfile(os.path.join(viz, "graph.txt"))
+        assert os.path.isfile(os.path.join(viz, "lifetime_l1.txt"))
+        assert os.path.isfile(os.path.join(viz, "lifetime_hbm.txt"))
+
     def test_golden_data_exported(self, output_dir):
         """golden 数据正确导出。"""
         model = EncoderModel(d_model=256, dim_ff=512, num_layers=2)
