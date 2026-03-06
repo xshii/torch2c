@@ -5,17 +5,15 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import torch
 
-from torch2c.common import load_config
+from torch2c.common import INTEGRATION_CONFIG_DIR, load_config
 
 # ── YAML 规则加载 ──────────────────────────────────────
 
-_CONFIG_PATH = Path(__file__).resolve().parents[1] / "integration" / "config" / "capture_rules.yaml"
-_RULES = load_config(str(_CONFIG_PATH))
+_RULES = load_config(str(INTEGRATION_CONFIG_DIR / "capture_rules.yaml"))
 
 PARAM_RENAMES: dict[str, dict[str, str]] = _RULES.get("param_renames", {})
 INPUT_REORDER: dict[str, list[int]] = _RULES.get("input_reorder", {})

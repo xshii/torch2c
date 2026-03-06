@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import os
-import pathlib
 import shutil
 
 import pytest
 import torch
 
+from torch2c.common import INTEGRATION_CONFIG_DIR
 from torch2c.integration.demo.encoder_model import EncoderModel
 from torch2c.integration.pipeline import (
     _build_validator_config,
@@ -16,7 +16,7 @@ from torch2c.integration.pipeline import (
     compile,
 )
 
-_CONFIG_DIR = str(pathlib.Path(__file__).resolve().parent.parent / "config")
+_CONFIG_DIR = str(INTEGRATION_CONFIG_DIR)
 
 
 # ---- 配置加载 ----

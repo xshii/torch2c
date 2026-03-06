@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import os
-import pathlib
 import shutil
 
 import numpy as np
@@ -23,9 +22,10 @@ import pytest
 import torch
 import torch.nn as nn
 
+from torch2c.common import INTEGRATION_CONFIG_DIR
 from torch2c.integration.pipeline import compile
 
-_CONFIG_DIR = str(pathlib.Path(__file__).resolve().parent.parent / "config")
+_CONFIG_DIR = str(INTEGRATION_CONFIG_DIR)
 _HAS_CC = shutil.which("cc") is not None or shutil.which("gcc") is not None
 pytestmark = pytest.mark.skipif(not _HAS_CC, reason="C 编译器不可用")
 

@@ -11,9 +11,9 @@ from pathlib import Path
 import pytest
 
 from torch2c.codegen import c_emitter, mock_emitter
-from torch2c.common import CodegenError, load_config
+from torch2c.common import INTEGRATION_CONFIG_DIR, CodegenError, load_config
 
-_CONFIG_DIR = str(Path(__file__).resolve().parents[2] / "integration" / "config")
+_CONFIG_DIR = str(INTEGRATION_CONFIG_DIR)
 _DEMO_PLAN = str(Path(__file__).resolve().parents[1] / "demo" / "demo_input_plan.json")
 
 

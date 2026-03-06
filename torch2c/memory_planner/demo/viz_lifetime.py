@@ -15,12 +15,12 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
-from torch2c.common import Graph, Node, Tensor, load_config
+from torch2c.common import HARDWARE_CONFIG_PATH, Graph, Node, Tensor, load_config
 from torch2c.storage_assigner import run as run_idma
 from torch2c.memory_planner import run as run_memory_planner
 from torch2c.viz.lifetime_viz import render_ascii
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "hardware_config.yaml")
+CONFIG_PATH = str(HARDWARE_CONFIG_PATH)
 
 
 def _build_demo_graph() -> tuple[Graph, list]:

@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import pathlib
-
-from ...common.config_loader import load_config
-from ...common.graph_ir import Graph, Node, Tensor
+from torch2c.common import INTEGRATION_CONFIG_DIR, load_config
+from torch2c.common.graph_ir import Graph, Node, Tensor
 from ..op_decomposition import post_validate, run
 
-_CONFIG_PATH = str(
-    pathlib.Path(__file__).resolve().parents[2] / "integration" / "config" / "decompositions.yaml"
-)
+_CONFIG_PATH = str(INTEGRATION_CONFIG_DIR / "decompositions.yaml")
 
 
 def _load_rules() -> dict:

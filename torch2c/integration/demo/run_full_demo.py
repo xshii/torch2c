@@ -7,17 +7,15 @@
 from __future__ import annotations
 
 import os
-import pathlib
 
 import torch
 
-from torch2c.common import setup_logging
+from torch2c.common import DEFAULT_OUTPUT_DIR, INTEGRATION_CONFIG_DIR, setup_logging
 from torch2c.integration.demo.encoder_model import EncoderModel
 from torch2c.integration.pipeline import compile
 
-_HERE = pathlib.Path(__file__).resolve().parent
-_CONFIG_DIR = str(_HERE.parent / "config")
-_OUTPUT_DIR = str(_HERE.parent.parent.parent.parent / "output")
+_CONFIG_DIR = str(INTEGRATION_CONFIG_DIR)
+_OUTPUT_DIR = str(DEFAULT_OUTPUT_DIR)
 
 
 def main() -> None:

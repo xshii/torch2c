@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import pathlib
-
-from ...common.config_loader import load_config
-from ...common.graph_ir import Graph, Node, Tensor
+from torch2c.common import INTEGRATION_CONFIG_DIR, load_config
+from torch2c.common.graph_ir import Graph, Node, Tensor
 from ..op_mapping import post_validate, run
 
-_CONFIG_PATH = str(
-    pathlib.Path(__file__).resolve().parents[2] / "integration" / "config" / "direct_mappings.yaml"
-)
+_CONFIG_PATH = str(INTEGRATION_CONFIG_DIR / "direct_mappings.yaml")
 
 
 def _make_5node_graph() -> Graph:

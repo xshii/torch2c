@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-import os
-
 from torch2c.common import Graph, Node, Tensor, load_config
-
-# ---- 配置路径 ----
-
-_MODULE_ROOT = os.path.dirname(os.path.dirname(__file__))
-HARDWARE_CONFIG_PATH = os.path.join(_MODULE_ROOT, "memory_planner", "config", "hardware_config.yaml")
+from torch2c.common.paths import HARDWARE_CONFIG_PATH
 
 
 def load_hw_config() -> dict:
     """加载 memory_planner 的 hardware_config.yaml 测试配置。"""
-    return load_config(HARDWARE_CONFIG_PATH)
+    return load_config(str(HARDWARE_CONFIG_PATH))
 
 
 # ---- Graph builder ----

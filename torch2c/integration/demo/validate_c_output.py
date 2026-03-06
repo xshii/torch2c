@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import os
-import pathlib
 import shutil
 import subprocess
 
-from torch2c.common import get_logger
+from torch2c.common import NPU_CPU_MOCK_DIR, get_logger
 
 logger = get_logger(__name__)
 
-_PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent.parent
-_NPU_MOCK_DIR = _PROJECT_ROOT / "npu_cpu_mock"
+_NPU_MOCK_DIR = NPU_CPU_MOCK_DIR
 
 # npu_cpu_mock 的所有源文件
 _MOCK_SOURCES = [

@@ -18,8 +18,9 @@ import subprocess
 import numpy as np
 import pytest
 
-_PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent.parent.parent
-_NPU_MOCK_DIR = _PROJECT_ROOT / "npu_cpu_mock"
+from torch2c.common import NPU_CPU_MOCK_DIR
+
+_NPU_MOCK_DIR = NPU_CPU_MOCK_DIR
 _MOCK_SOURCES = [
     "src/npu_dtype_utils.c",
     "src/npu_compute_elementwise.c",

@@ -6,21 +6,17 @@
 
 from __future__ import annotations
 
-import pathlib
-
 import pytest
 
-from torch2c.common import load_config
-
-_CONFIG_DIR = pathlib.Path(__file__).resolve().parent.parent / "config"
+from torch2c.common import INTEGRATION_CONFIG_DIR, load_config
 
 
 @pytest.fixture(scope="module")
 def configs() -> dict:
     return {
-        "signatures": load_config(str(_CONFIG_DIR / "c_api_signatures.yaml")),
-        "mapping": load_config(str(_CONFIG_DIR / "direct_mappings.yaml")),
-        "decomposition": load_config(str(_CONFIG_DIR / "decompositions.yaml")),
+        "signatures": load_config(str(INTEGRATION_CONFIG_DIR / "c_api_signatures.yaml")),
+        "mapping": load_config(str(INTEGRATION_CONFIG_DIR / "direct_mappings.yaml")),
+        "decomposition": load_config(str(INTEGRATION_CONFIG_DIR / "decompositions.yaml")),
     }
 
 

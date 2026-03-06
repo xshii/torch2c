@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from torch2c.common import DTYPE_INFO, get_logger, load_config
+from torch2c.common import DTYPE_INFO, INTEGRATION_CONFIG_DIR, get_logger, load_config
 
 logger = get_logger("codegen._helpers")
 
@@ -44,7 +44,7 @@ PARAM_TYPE_C = {
 
 # ---- 配置加载 ----
 
-_DEFAULT_CONFIG_DIR = Path(__file__).resolve().parents[1] / "integration" / "config"
+_DEFAULT_CONFIG_DIR = INTEGRATION_CONFIG_DIR
 
 
 def resolve_config_dir(config_dir: str | None) -> str:
