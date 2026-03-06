@@ -30,6 +30,14 @@ _HAS_CC = shutil.which("cc") is not None or shutil.which("gcc") is not None
 pytestmark = pytest.mark.skipif(not _HAS_CC, reason="C 编译器不可用")
 
 
+# ---- 共享 fixture ----
+
+
+@pytest.fixture
+def output_dir(tmp_path):
+    return str(tmp_path / "output")
+
+
 # ---- 工具函数 ----
 
 
@@ -156,10 +164,6 @@ class TestLinearSemantics:
     历史 bug：曾忘记对 weight 做转置。
     """
 
-    @pytest.fixture
-    def output_dir(self, tmp_path):
-        return str(tmp_path / "output")
-
     def test_linear_matches_pytorch(self, output_dir):
         torch.manual_seed(42)
         model = LinearOnly(in_f=64, out_f=32)
@@ -187,10 +191,6 @@ class TestLinearSemantics:
 class TestMatmulSemantics:
     """验证 aten.mm.default → cube_matmul 的语义等价性。"""
 
-    @pytest.fixture
-    def output_dir(self, tmp_path):
-        return str(tmp_path / "output")
-
     def test_mm_matches_pytorch(self, output_dir):
         torch.manual_seed(43)
         model = MatmulOnly(k=64, n=32)
@@ -213,10 +213,6 @@ class TestMatmulSemantics:
 
 class TestSoftmaxSemantics:
     """验证 softmax 分解（part1 + part2）与 PyTorch 语义一致。"""
-
-    @pytest.fixture
-    def output_dir(self, tmp_path):
-        return str(tmp_path / "output")
 
     def test_softmax_matches_pytorch(self, output_dir):
         torch.manual_seed(44)
@@ -241,10 +237,6 @@ class TestSoftmaxSemantics:
 class TestLayerNormSemantics:
     """验证 layernorm 分解（part1 + part2）与 PyTorch 语义一致。"""
 
-    @pytest.fixture
-    def output_dir(self, tmp_path):
-        return str(tmp_path / "output")
-
     def test_layernorm_matches_pytorch(self, output_dir):
         torch.manual_seed(45)
         model = LayerNormOnly(dim=64)
@@ -268,10 +260,6 @@ class TestLayerNormSemantics:
 class TestGeluSemantics:
     """验证 GELU 与 PyTorch 语义一致。"""
 
-    @pytest.fixture
-    def output_dir(self, tmp_path):
-        return str(tmp_path / "output")
-
     def test_gelu_matches_pytorch(self, output_dir):
         torch.manual_seed(46)
         model = GeluOnly(dim=64)
@@ -294,10 +282,6 @@ class TestGeluSemantics:
 
 class TestLinearChainSemantics:
     """验证多层 Linear 链路（多次 weight transpose）正确性。"""
-
-    @pytest.fixture
-    def output_dir(self, tmp_path):
-        return str(tmp_path / "output")
 
     def test_two_linear_chain(self, output_dir):
         torch.manual_seed(47)

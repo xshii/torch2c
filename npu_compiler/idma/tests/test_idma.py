@@ -329,14 +329,12 @@ class TestPostValidate:
 class TestMemoryPlannerWithLocalStorage:
     """验证 memory_planner 正确处理 storage=local 的 tensor（含 idma 节点）。"""
 
-    def _load_hw_config(self) -> dict:
-        return load_hw_config()
 
     def test_local_tensor_no_hbm(self):
         """storage=local 的 tensor 不应分配 HBM。"""
         g = _make_reformat_chain()
         g = run_idma(g, {})
-        config = self._load_hw_config()
+        config = load_hw_config()
         g, _ = run_memory_planner(g, config)
 
         for tid in ("t_mid", "t_reformatted", "t_mid2"):
@@ -349,7 +347,7 @@ class TestMemoryPlannerWithLocalStorage:
         """producer 不应为 storage=local 的输出生成 DMA store。"""
         g = _make_reformat_chain()
         g = run_idma(g, {})
-        config = self._load_hw_config()
+        config = load_hw_config()
         g, dma_plans = run_memory_planner(g, config)
 
         # node_conv 不 store t_mid（cube→idma local）
@@ -366,7 +364,7 @@ class TestMemoryPlannerWithLocalStorage:
         """consumer 不应为 storage=local 的输入生成 DMA load。"""
         g = _make_reformat_chain()
         g = run_idma(g, {})
-        config = self._load_hw_config()
+        config = load_hw_config()
         g, dma_plans = run_memory_planner(g, config)
 
         # node_reformat 不 load t_mid（local from matmul）
@@ -383,7 +381,7 @@ class TestMemoryPlannerWithLocalStorage:
         """local tensor 的 L1 偏移在 producer 输出和 consumer 输入间一致。"""
         g = _make_reformat_chain()
         g = run_idma(g, {})
-        config = self._load_hw_config()
+        config = load_hw_config()
         g, _ = run_memory_planner(g, config)
 
         for tid in ("t_mid", "t_reformatted", "t_mid2"):
@@ -394,7 +392,7 @@ class TestMemoryPlannerWithLocalStorage:
         """memory_planner post_validate 不应对 local tensor 报 hbm 缺失错误。"""
         g = _make_reformat_chain()
         g = run_idma(g, {})
-        config = self._load_hw_config()
+        config = load_hw_config()
         g, _ = run_memory_planner(g, config)
 
         errors = mp_post_validate(g)
@@ -507,8 +505,6 @@ def _make_matmul_bias_softmax() -> Graph:
 class TestMatmulBiasSoftmax:
     """用例：matmul(cube) → reformat(idma) → bias_add(vector) → softmax(vector)"""
 
-    def _load_hw_config(self) -> dict:
-        return load_hw_config()
 
     # ── idma 标记 ──
 
@@ -544,7 +540,7 @@ class TestMatmulBiasSoftmax:
         """local tensor 不分配 HBM。"""
         g = _make_matmul_bias_softmax()
         g = run_idma(g, {})
-        g, _ = run_memory_planner(g, self._load_hw_config())
+        g, _ = run_memory_planner(g, load_hw_config())
 
         for tid in ("t_mm_out", "t_reformatted", "t_add_out"):
             t = g.tensors[tid]
@@ -556,7 +552,7 @@ class TestMatmulBiasSoftmax:
         """hbm tensor 必须分配 HBM。"""
         g = _make_matmul_bias_softmax()
         g = run_idma(g, {})
-        g, _ = run_memory_planner(g, self._load_hw_config())
+        g, _ = run_memory_planner(g, load_hw_config())
 
         for tid in ("t_input", "t_weight", "t_bias", "t_out"):
             t = g.tensors[tid]
@@ -568,7 +564,7 @@ class TestMatmulBiasSoftmax:
         """matmul: load input(nd→nz) + weight(nz)；不 store t_mm_out（local, cube→idma）。"""
         g = _make_matmul_bias_softmax()
         g = run_idma(g, {})
-        g, plans = run_memory_planner(g, self._load_hw_config())
+        g, plans = run_memory_planner(g, load_hw_config())
 
         matmul_plan = [p for p in plans if p.node_id == "node_matmul"][0]
 
@@ -589,7 +585,7 @@ class TestMatmulBiasSoftmax:
         """reformat(idma): 不 load t_mm_out（local）；不 store t_reformatted（local）。"""
         g = _make_matmul_bias_softmax()
         g = run_idma(g, {})
-        g, plans = run_memory_planner(g, self._load_hw_config())
+        g, plans = run_memory_planner(g, load_hw_config())
 
         reformat_plan = [p for p in plans if p.node_id == "node_reformat"][0]
 
@@ -603,7 +599,7 @@ class TestMatmulBiasSoftmax:
         """bias_add: 不 load t_reformatted（local）；从 HBM load t_bias；不 store t_add_out（local）。"""
         g = _make_matmul_bias_softmax()
         g = run_idma(g, {})
-        g, plans = run_memory_planner(g, self._load_hw_config())
+        g, plans = run_memory_planner(g, load_hw_config())
 
         add_plan = [p for p in plans if p.node_id == "node_bias_add"][0]
 
@@ -618,7 +614,7 @@ class TestMatmulBiasSoftmax:
         """softmax: 不 load t_add_out（local）；store t_out 到 HBM。"""
         g = _make_matmul_bias_softmax()
         g = run_idma(g, {})
-        g, plans = run_memory_planner(g, self._load_hw_config())
+        g, plans = run_memory_planner(g, load_hw_config())
 
         sm_plan = [p for p in plans if p.node_id == "node_softmax"][0]
 
@@ -634,7 +630,7 @@ class TestMatmulBiasSoftmax:
         """整个流程后 memory_planner 校验应通过。"""
         g = _make_matmul_bias_softmax()
         g = run_idma(g, {})
-        g, _ = run_memory_planner(g, self._load_hw_config())
+        g, _ = run_memory_planner(g, load_hw_config())
 
         errors = mp_post_validate(g)
         assert errors == [], f"不应有错误: {errors}"
@@ -810,8 +806,6 @@ class TestMatmulBiasSoftmaxLnFfn:
         g = run_idma(g, idma_config or {})
         return g
 
-    def _load_hw_config(self) -> dict:
-        return load_hw_config()
 
     # ── reformat_inserter ──
 
@@ -905,7 +899,7 @@ class TestMatmulBiasSoftmaxLnFfn:
     def test_local_tensors_no_hbm(self):
         """默认配置下 local tensor 不分配 HBM。"""
         g = self._build()
-        g, _ = run_memory_planner(g, self._load_hw_config())
+        g, _ = run_memory_planner(g, load_hw_config())
         rfs = _find_reformat_nodes(g)
         rf1_out_tid = rfs[0].outputs[0]
 
@@ -918,7 +912,7 @@ class TestMatmulBiasSoftmaxLnFfn:
     def test_hbm_tensors_allocated(self):
         """hbm tensor 必须分配 HBM。"""
         g = self._build()
-        g, _ = run_memory_planner(g, self._load_hw_config())
+        g, _ = run_memory_planner(g, load_hw_config())
         rfs = _find_reformat_nodes(g)
         rf2_out_tid = rfs[1].outputs[0]
 
@@ -932,7 +926,7 @@ class TestMatmulBiasSoftmaxLnFfn:
     def test_softmax_no_store(self):
         """softmax 输出 t_sm_out 是 local(vector→vector) → 不 store。"""
         g = self._build()
-        g, plans = run_memory_planner(g, self._load_hw_config())
+        g, plans = run_memory_planner(g, load_hw_config())
 
         sm_plan = [p for p in plans if p.node_id == "node_softmax"][0]
         store_tids = {s.tensor_id for s in sm_plan.stores}
@@ -941,7 +935,7 @@ class TestMatmulBiasSoftmaxLnFfn:
     def test_layernorm_dma(self):
         """layernorm: 不 load t_sm_out(local)；load gamma/beta(hbm)；store t_ln_out(hbm)。"""
         g = self._build()
-        g, plans = run_memory_planner(g, self._load_hw_config())
+        g, plans = run_memory_planner(g, load_hw_config())
 
         ln_plan = [p for p in plans if p.node_id == "node_layernorm"][0]
 
@@ -956,7 +950,7 @@ class TestMatmulBiasSoftmaxLnFfn:
     def test_ffn_dma(self):
         """ffn: load reformat 输出(hbm) + weight(hbm)；store t_ffn_out(hbm)。"""
         g = self._build()
-        g, plans = run_memory_planner(g, self._load_hw_config())
+        g, plans = run_memory_planner(g, load_hw_config())
         rfs = _find_reformat_nodes(g)
         rf2_out_tid = rfs[1].outputs[0]
 
@@ -982,7 +976,7 @@ class TestMatmulBiasSoftmaxLnFfn:
     def test_post_validate_passes(self):
         """整个流程后 memory_planner 校验应通过。"""
         g = self._build()
-        g, _ = run_memory_planner(g, self._load_hw_config())
+        g, _ = run_memory_planner(g, load_hw_config())
 
         errors = mp_post_validate(g)
         assert errors == [], f"不应有错误: {errors}"
@@ -1124,14 +1118,12 @@ class TestPipeStorageAssignment:
 class TestPipeMemoryPlanner:
     """pipe tensor 在 memory_planner 中不分配 HBM 和 L1。"""
 
-    def _load_hw_config(self) -> dict:
-        return load_hw_config()
 
     def test_pipe_no_hbm(self):
         """pipe tensor 不应分配 HBM。"""
         g = _make_cube_vector_chain()
         g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
-        config = self._load_hw_config()
+        config = load_hw_config()
         g, _ = run_memory_planner(g, config)
 
         t_mid = g.tensors["t_mid"]
@@ -1143,7 +1135,7 @@ class TestPipeMemoryPlanner:
         """pipe tensor 不应分配 L1。"""
         g = _make_cube_vector_chain()
         g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
-        config = self._load_hw_config()
+        config = load_hw_config()
         g, _ = run_memory_planner(g, config)
 
         t_mid = g.tensors["t_mid"]
@@ -1155,7 +1147,7 @@ class TestPipeMemoryPlanner:
         # cube→idma 设为 pipe
         g = run_idma(g, {"pipe_pairs": [["cube", "idma"]]})
         assert g.tensors["t_mid"].storage == "pipe"
-        config = self._load_hw_config()
+        config = load_hw_config()
         g, plans = run_memory_planner(g, config)
 
         reformat_plan = [p for p in plans if p.node_id == "node_reformat"][0]
@@ -1167,7 +1159,7 @@ class TestPipeMemoryPlanner:
         g = _make_reformat_chain()  # 大图，走 per-op 路径
         g = run_idma(g, {"pipe_pairs": [["cube", "idma"]]})
         assert g.tensors["t_mid"].storage == "pipe"
-        config = self._load_hw_config()
+        config = load_hw_config()
         g, plans = run_memory_planner(g, config)
 
         conv_plan = [p for p in plans if p.node_id == "node_conv"][0]
@@ -1178,7 +1170,7 @@ class TestPipeMemoryPlanner:
         """pipe tensor 不触发 memory_planner post_validate 错误。"""
         g = _make_cube_vector_chain()
         g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
-        config = self._load_hw_config()
+        config = load_hw_config()
         g, _ = run_memory_planner(g, config)
 
         errors = mp_post_validate(g)
@@ -1188,7 +1180,7 @@ class TestPipeMemoryPlanner:
         """同一图中 pipe 和 local tensor 共存。"""
         g = _make_cube_vector_chain()
         g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
-        config = self._load_hw_config()
+        config = load_hw_config()
         g, _ = run_memory_planner(g, config)
 
         # t_mid: pipe（cube→vector），不分配 HBM 和 L1
@@ -1281,8 +1273,6 @@ class TestPipeWithAbsorbedInputs:
         g.execution_order = ["n_matmul", "n_add", "n_gelu", "n_add2"]
         return g
 
-    def _load_hw_config(self) -> dict:
-        return load_hw_config()
 
     def test_pipe_on_absorbed_matmul_output(self):
         """吸收后 matmul+bias(cube) 输出走 pipe 到 vector。"""
@@ -1304,7 +1294,7 @@ class TestPipeWithAbsorbedInputs:
         """absorbed_input t_bias 仍然分配 HBM 和 L1。"""
         g = self._make_matmul_bias_absorbed()
         g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
-        config = self._load_hw_config()
+        config = load_hw_config()
         g, _ = run_memory_planner(g, config)
 
         # t_bias: 权重，正常分配 HBM 和 L1
@@ -1318,7 +1308,7 @@ class TestPipeWithAbsorbedInputs:
         """matmul 的 DMA 计划应 load t_bias（absorbed_input），不 store pipe 输出。"""
         g = self._make_matmul_bias_absorbed()
         g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
-        config = self._load_hw_config()
+        config = load_hw_config()
         g, plans = run_memory_planner(g, config)
 
         matmul_plan = [p for p in plans if p.node_id == "n_matmul"][0]
@@ -1335,7 +1325,7 @@ class TestPipeWithAbsorbedInputs:
         """n_add（pipe tensor 的消费者）不应 DMA load t_mm_out。"""
         g = self._make_matmul_bias_absorbed()
         g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
-        config = self._load_hw_config()
+        config = load_hw_config()
         g, plans = run_memory_planner(g, config)
 
         add_plan = [p for p in plans if p.node_id == "n_add"][0]
@@ -1346,7 +1336,7 @@ class TestPipeWithAbsorbedInputs:
         """整个流程校验通过。"""
         g = self._make_matmul_bias_absorbed()
         g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
-        config = self._load_hw_config()
+        config = load_hw_config()
         g, _ = run_memory_planner(g, config)
 
         assert post_validate(g) == []
