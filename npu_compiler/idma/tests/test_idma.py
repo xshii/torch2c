@@ -21,110 +21,91 @@ _LARGE_SHAPE = [1, 1024, 2048]
 
 
 def _make_reformat_chain(shape: list[int] | None = None) -> Graph:
-    """构建 conv → reformat → add 的图，中间 tensor 是裂解产生的。
+    """构建 matmul(cube) → reformat(idma) → add(vector) → gelu(vector) 的图。
 
-    conv → t_mid(local候选) → add → t_mid2 → gelu → t_out
+    t_in(nd,hbm) ─┐
+    t_weight(nz,hbm) ─┤→ [cube_matmul] → t_mid(nz)
+                                              │ cube→idma
+                                  [dma_reformat(nz→nd)] → t_reformatted(nd)
+                                                                │ idma→vector
+                                                    [vector_add] → t_mid2(nd)
+                                                                      │ vector→vector
+                                                          [vector_gelu] → t_out(nd,hbm)
 
-    使用 5+ tensors（每个 ~4MB）确保超出 L1 (16MB)，走 per-op 路径。
+    allowed_pairs 边：
+      - t_mid:          cube → idma    (matmul → reformat)
+      - t_reformatted:  idma → vector  (reformat → add)
+      - t_mid2:         vector → vector (add → gelu)
+
+    6+ tensors × 4MB > 16MB L1 → 走 per-op 路径。
     """
     if shape is None:
         shape = _LARGE_SHAPE
     g = Graph()
-    g.add_tensor(
-        Tensor(
-            id="t_in",
-            shape=shape,
-            dtype="fp16",
-            format="nd",
-            is_model_input=True,
-            consumer_node_ids=["node_conv"],
-        )
-    )
-    g.add_tensor(
-        Tensor(
-            id="t_weight",
-            shape=shape,
-            dtype="fp16",
-            format="nz",
-            is_weight=True,
-            consumer_node_ids=["node_conv"],
-        )
-    )
-    # 中间 tensor：conv 的输出 → add 的输入（local 候选）
-    g.add_tensor(
-        Tensor(
-            id="t_mid",
-            shape=shape,
-            dtype="fp16",
-            format="nz",
-            producer_node_id="node_conv",
-            consumer_node_ids=["node_add"],
-        )
-    )
-    g.add_tensor(
-        Tensor(
-            id="t_mid2",
-            shape=shape,
-            dtype="fp16",
-            format="nd",
-            producer_node_id="node_add",
-            consumer_node_ids=["node_gelu"],
-        )
-    )
-    g.add_tensor(
-        Tensor(
-            id="t_out",
-            shape=shape,
-            dtype="fp16",
-            format="nd",
-            producer_node_id="node_gelu",
-            is_model_output=True,
-        )
-    )
+    g.add_tensor(Tensor(
+        id="t_in", shape=shape, dtype="fp16", format="nd",
+        is_model_input=True, consumer_node_ids=["node_conv"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_weight", shape=shape, dtype="fp16", format="nz",
+        is_weight=True, consumer_node_ids=["node_conv"],
+    ))
+    # matmul 输出 nz → reformat 输入
+    g.add_tensor(Tensor(
+        id="t_mid", shape=shape, dtype="fp16", format="nz",
+        producer_node_id="node_conv", consumer_node_ids=["node_reformat"],
+    ))
+    # reformat 输出 nd → add 输入
+    g.add_tensor(Tensor(
+        id="t_reformatted", shape=shape, dtype="fp16", format="nd",
+        producer_node_id="node_reformat", consumer_node_ids=["node_add"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_mid2", shape=shape, dtype="fp16", format="nd",
+        producer_node_id="node_add", consumer_node_ids=["node_gelu"],
+    ))
+    g.add_tensor(Tensor(
+        id="t_out", shape=shape, dtype="fp16", format="nd",
+        producer_node_id="node_gelu", is_model_output=True,
+    ))
 
-    g.add_node(
-        Node(
-            id="node_conv",
-            op_type="cube_matmul",
-            inputs=["t_in", "t_weight"],
-            outputs=["t_mid"],
-            compute_unit="cube",
-            npu_op="cube_matmul",
-            is_mapped=True,
-        )
-    )
-    g.add_node(
-        Node(
-            id="node_add",
-            op_type="vector_add",
-            inputs=["t_mid"],
-            outputs=["t_mid2"],
-            compute_unit="vector",
-            npu_op="vector_add",
-            is_mapped=True,
-        )
-    )
-    g.add_node(
-        Node(
-            id="node_gelu",
-            op_type="vector_gelu",
-            inputs=["t_mid2"],
-            outputs=["t_out"],
-            compute_unit="vector",
-            npu_op="vector_gelu",
-            is_mapped=True,
-        )
-    )
-    g.execution_order = ["node_conv", "node_add", "node_gelu"]
+    g.add_node(Node(
+        id="node_conv", op_type="cube_matmul",
+        inputs=["t_in", "t_weight"], outputs=["t_mid"],
+        compute_unit="cube", npu_op="cube_matmul", is_mapped=True,
+    ))
+    g.add_node(Node(
+        id="node_reformat", op_type="dma_reformat",
+        inputs=["t_mid"], outputs=["t_reformatted"],
+        compute_unit="idma", npu_op="dma_reformat", is_mapped=True,
+    ))
+    g.add_node(Node(
+        id="node_add", op_type="vector_add",
+        inputs=["t_reformatted"], outputs=["t_mid2"],
+        compute_unit="vector", npu_op="vector_add", is_mapped=True,
+    ))
+    g.add_node(Node(
+        id="node_gelu", op_type="vector_gelu",
+        inputs=["t_mid2"], outputs=["t_out"],
+        compute_unit="vector", npu_op="vector_gelu", is_mapped=True,
+    ))
+    g.execution_order = ["node_conv", "node_reformat", "node_add", "node_gelu"]
     return g
 
 
 class TestStorageAssignment:
-    def test_intermediate_tensor_marked_local(self):
+    """基础 idma 标记测试，使用 cube→idma→vector→vector 图。"""
+
+    def test_intermediate_tensors_marked_local(self):
         """单消费者的中间 tensor 应被标记为 local。"""
         g = _make_reformat_chain()
         g = run_idma(g, {})
+        # cube→idma: t_mid 可 local
         assert g.tensors["t_mid"].storage == "local"
+        # idma→vector: t_reformatted 可 local
+        assert g.tensors["t_reformatted"].storage == "local"
+        # vector→vector: t_mid2 可 local
+        assert g.tensors["t_mid2"].storage == "local"
 
     def test_model_input_stays_hbm(self):
         """模型输入不能标记为 local。"""
@@ -147,7 +128,6 @@ class TestStorageAssignment:
     def test_multi_consumer_stays_hbm(self):
         """多消费者的中间 tensor 不能标记为 local。"""
         g = _make_reformat_chain()
-        # 添加第二个消费者
         g.tensors["t_mid"].consumer_node_ids.append("node_extra")
         g = run_idma(g, {})
         assert g.tensors["t_mid"].storage == "hbm"
@@ -157,23 +137,18 @@ class TestStorageAssignment:
         g = _make_reformat_chain()
         g = run_idma(g, {"enable_local_storage": False})
         assert g.tensors["t_mid"].storage == "hbm"
-
-    def test_allowed_pairs_default(self):
-        """默认 allowed_pairs 包含 cube→vector 和 vector→vector。"""
-        g = _make_reformat_chain()
-        # conv(cube)→t_mid→add(vector): cube→vector 默认允许
-        g = run_idma(g, {})
-        assert g.tensors["t_mid"].storage == "local"
-        # add(vector)→t_mid2→gelu(vector): vector→vector 默认允许
-        assert g.tensors["t_mid2"].storage == "local"
+        assert g.tensors["t_reformatted"].storage == "hbm"
+        assert g.tensors["t_mid2"].storage == "hbm"
 
     def test_allowed_pairs_restrict(self):
-        """只允许 vector→vector 时，cube→vector 的中间 tensor 不标 local。"""
+        """只允许 vector→vector 时，cube→idma 和 idma→vector 不标 local。"""
         g = _make_reformat_chain()
         g = run_idma(g, {"allowed_pairs": [["vector", "vector"]]})
-        # conv(cube)→t_mid→add(vector): cube→vector 不允许
+        # cube→idma: 不允许
         assert g.tensors["t_mid"].storage == "hbm"
-        # add(vector)→t_mid2→gelu(vector): vector→vector 允许
+        # idma→vector: 不允许
+        assert g.tensors["t_reformatted"].storage == "hbm"
+        # vector→vector: 允许
         assert g.tensors["t_mid2"].storage == "local"
 
     def test_allowed_pairs_empty(self):
@@ -181,6 +156,7 @@ class TestStorageAssignment:
         g = _make_reformat_chain()
         g = run_idma(g, {"allowed_pairs": []})
         assert g.tensors["t_mid"].storage == "hbm"
+        assert g.tensors["t_reformatted"].storage == "hbm"
         assert g.tensors["t_mid2"].storage == "hbm"
 
     def test_allowed_pairs_cube_cube(self):
@@ -355,7 +331,7 @@ class TestPostValidate:
 
 
 class TestMemoryPlannerWithLocalStorage:
-    """验证 memory_planner 正确处理 storage=local 的 tensor。"""
+    """验证 memory_planner 正确处理 storage=local 的 tensor（含 idma 节点）。"""
 
     def _load_hw_config(self) -> dict:
         return load_config(HARDWARE_CONFIG_PATH)
@@ -365,12 +341,13 @@ class TestMemoryPlannerWithLocalStorage:
         g = _make_reformat_chain()
         g = run_idma(g, {})
         config = self._load_hw_config()
-        g, dma_plans = run_memory_planner(g, config)
+        g, _ = run_memory_planner(g, config)
 
-        t_mid = g.tensors["t_mid"]
-        assert t_mid.storage == "local"
-        assert t_mid.hbm_offset is None
-        assert t_mid.l1_offset is not None
+        for tid in ("t_mid", "t_reformatted", "t_mid2"):
+            t = g.tensors[tid]
+            assert t.storage == "local"
+            assert t.hbm_offset is None, f"{tid} 不应有 hbm_offset"
+            assert t.l1_offset is not None, f"{tid} 应有 l1_offset"
 
     def test_local_tensor_no_dma_store(self):
         """producer 不应为 storage=local 的输出生成 DMA store。"""
@@ -379,11 +356,15 @@ class TestMemoryPlannerWithLocalStorage:
         config = self._load_hw_config()
         g, dma_plans = run_memory_planner(g, config)
 
-        # node_conv 的 DMA plan
+        # node_conv 不 store t_mid（cube→idma local）
         conv_plan = [p for p in dma_plans if p.node_id == "node_conv"][0]
-        # 不应有 t_mid 的 store
         store_tids = [s.tensor_id for s in conv_plan.stores]
         assert "t_mid" not in store_tids
+
+        # node_reformat 不 store t_reformatted（idma→vector local）
+        reformat_plan = [p for p in dma_plans if p.node_id == "node_reformat"][0]
+        store_tids = [s.tensor_id for s in reformat_plan.stores]
+        assert "t_reformatted" not in store_tids
 
     def test_local_tensor_no_dma_load(self):
         """consumer 不应为 storage=local 的输入生成 DMA load。"""
@@ -392,11 +373,15 @@ class TestMemoryPlannerWithLocalStorage:
         config = self._load_hw_config()
         g, dma_plans = run_memory_planner(g, config)
 
-        # node_add 的 DMA plan
-        add_plan = [p for p in dma_plans if p.node_id == "node_add"][0]
-        # 不应有 t_mid 的 load
-        load_tids = [ld.tensor_id for ld in add_plan.loads]
+        # node_reformat 不 load t_mid（local from matmul）
+        reformat_plan = [p for p in dma_plans if p.node_id == "node_reformat"][0]
+        load_tids = [ld.tensor_id for ld in reformat_plan.loads]
         assert "t_mid" not in load_tids
+
+        # node_add 不 load t_reformatted（local from reformat）
+        add_plan = [p for p in dma_plans if p.node_id == "node_add"][0]
+        load_tids = [ld.tensor_id for ld in add_plan.loads]
+        assert "t_reformatted" not in load_tids
 
     def test_local_tensor_l1_offset_shared(self):
         """local tensor 的 L1 偏移在 producer 输出和 consumer 输入间一致。"""
@@ -405,9 +390,9 @@ class TestMemoryPlannerWithLocalStorage:
         config = self._load_hw_config()
         g, _ = run_memory_planner(g, config)
 
-        # t_mid 只有一个 l1_offset，producer 和 consumer 共用
-        t_mid = g.tensors["t_mid"]
-        assert t_mid.l1_offset is not None
+        for tid in ("t_mid", "t_reformatted", "t_mid2"):
+            t = g.tensors[tid]
+            assert t.l1_offset is not None, f"{tid} 应有 l1_offset"
 
     def test_post_validate_local_passes(self):
         """memory_planner post_validate 不应对 local tensor 报 hbm 缺失错误。"""
@@ -424,22 +409,24 @@ class TestMemoryPlannerWithLocalStorage:
 
 
 def _make_matmul_bias_softmax() -> Graph:
-    """HBM(fp16,nd) → matmul(nz,fp16) → bias_add(nz,fp16) → safe_softmax(fp32) → HBM
+    """HBM(fp16,nd) → matmul(cube,nz) → reformat(idma,nz→nd) → bias_add(vector) → softmax(vector,fp32) → HBM
 
     数据流：
         t_input(fp16,nd,hbm)  ─┐
-        t_weight(fp16,nz,hbm) ─┤→ [cube_matmul] → t_mm_out(fp16,nd,local)
-                                │                        │
-        t_bias(fp16,nz,hbm)  ──┤──────────────→ [vector_add] → t_add_out(fp16,nd,local)
-                                                                       │
+        t_weight(fp16,nz,hbm) ─┤→ [cube_matmul] → t_mm_out(fp16,nz)
+                                                        │ cube→idma
+                                            [dma_reformat(nz→nd)] → t_reformatted(fp16,nd)
+                                                                          │ idma→vector
+        t_bias(fp16,nz,hbm) ──────────────────→ [vector_add] → t_add_out(fp16,nd)
+                                                                       │ vector→vector
                                                           [safe_softmax(fp32)] → t_out(fp16,nd,hbm)
 
-    format_annotation:
-      - matmul: inputs 期望 nz，DMA 搬运时 nd→nz reformat；输出 nd
-      - bias_add: t_bias 存储为 nz，DMA 搬运时 nz→nd reformat；输出 nd
-      - safe_softmax: compute fp32（params.compute_dtype="fp32"）；输出 fp16,nd
+    allowed_pairs 边：
+      - t_mm_out:      cube → idma     (matmul → reformat)
+      - t_reformatted: idma → vector   (reformat → bias_add)
+      - t_add_out:     vector → vector (bias_add → softmax)
 
-    6 tensors × 4MB > 16MB L1 → 走 per-op 路径。
+    7 tensors × 4MB > 16MB L1 → 走 per-op 路径。
     """
     shape = [1, 1024, 2048]
     g = Graph()
@@ -453,9 +440,15 @@ def _make_matmul_bias_softmax() -> Graph:
         id="t_weight", shape=shape, dtype="fp16", format="nz",
         is_weight=True, consumer_node_ids=["node_matmul"],
     ))
+    # matmul 输出 nz → reformat 输入
     g.add_tensor(Tensor(
-        id="t_mm_out", shape=shape, dtype="fp16", format="nd",
-        producer_node_id="node_matmul", consumer_node_ids=["node_bias_add"],
+        id="t_mm_out", shape=shape, dtype="fp16", format="nz",
+        producer_node_id="node_matmul", consumer_node_ids=["node_reformat"],
+    ))
+    # reformat 输出 nd → bias_add 输入
+    g.add_tensor(Tensor(
+        id="t_reformatted", shape=shape, dtype="fp16", format="nd",
+        producer_node_id="node_reformat", consumer_node_ids=["node_bias_add"],
     ))
     g.add_tensor(Tensor(
         id="t_bias", shape=shape, dtype="fp16", format="nz",
@@ -478,12 +471,21 @@ def _make_matmul_bias_softmax() -> Graph:
         format_annotation={
             "inputs":  [{"format": "nz", "dtype": "fp16"},
                         {"format": "nz", "dtype": "fp16"}],
+            "outputs": [{"format": "nz", "dtype": "fp16"}],
+        },
+    ))
+    g.add_node(Node(
+        id="node_reformat", op_type="dma_reformat",
+        inputs=["t_mm_out"], outputs=["t_reformatted"],
+        compute_unit="idma", npu_op="dma_reformat", is_mapped=True,
+        format_annotation={
+            "inputs":  [{"format": "nz", "dtype": "fp16"}],
             "outputs": [{"format": "nd", "dtype": "fp16"}],
         },
     ))
     g.add_node(Node(
         id="node_bias_add", op_type="vector_add",
-        inputs=["t_mm_out", "t_bias"], outputs=["t_add_out"],
+        inputs=["t_reformatted", "t_bias"], outputs=["t_add_out"],
         compute_unit="vector", npu_op="vector_add", is_mapped=True,
         format_annotation={
             "inputs":  [{"format": "nd", "dtype": "fp16"},
@@ -502,12 +504,12 @@ def _make_matmul_bias_softmax() -> Graph:
         },
     ))
 
-    g.execution_order = ["node_matmul", "node_bias_add", "node_softmax"]
+    g.execution_order = ["node_matmul", "node_reformat", "node_bias_add", "node_softmax"]
     return g
 
 
 class TestMatmulBiasSoftmax:
-    """用例：HBM(fp16,nd) → matmul(nz,fp16) → bias(nz) → softmax(fp32) → HBM"""
+    """用例：matmul(cube) → reformat(idma) → bias_add(vector) → softmax(vector)"""
 
     def _load_hw_config(self) -> dict:
         return load_config(HARDWARE_CONFIG_PATH)
@@ -515,17 +517,30 @@ class TestMatmulBiasSoftmax:
     # ── idma 标记 ──
 
     def test_storage_assignment(self):
-        """t_mm_out 和 t_add_out 应标记 local；输入/权重/输出留 hbm。"""
+        """中间 tensor 根据 allowed_pairs 标 local；输入/权重/输出留 hbm。"""
         g = _make_matmul_bias_softmax()
         g = run_idma(g, {})
 
+        # cube→idma: t_mm_out 可 local
         assert g.tensors["t_mm_out"].storage == "local"
+        # idma→vector: t_reformatted 可 local
+        assert g.tensors["t_reformatted"].storage == "local"
+        # vector→vector: t_add_out 可 local
         assert g.tensors["t_add_out"].storage == "local"
         # 外部输入 / 权重 / 模型输出 不能 local
         assert g.tensors["t_input"].storage == "hbm"
         assert g.tensors["t_weight"].storage == "hbm"
         assert g.tensors["t_bias"].storage == "hbm"
         assert g.tensors["t_out"].storage == "hbm"
+
+    def test_block_idma_pair_forces_hbm(self):
+        """禁止 cube→idma 时，t_mm_out 回落 hbm，但 idma→vector 仍然 local。"""
+        g = _make_matmul_bias_softmax()
+        g = run_idma(g, {"allowed_pairs": [["idma", "vector"], ["vector", "vector"]]})
+
+        assert g.tensors["t_mm_out"].storage == "hbm"         # cube→idma 被阻
+        assert g.tensors["t_reformatted"].storage == "local"   # idma→vector 允许
+        assert g.tensors["t_add_out"].storage == "local"       # vector→vector 允许
 
     # ── HBM 分配 ──
 
@@ -535,7 +550,7 @@ class TestMatmulBiasSoftmax:
         g = run_idma(g, {})
         g, _ = run_memory_planner(g, self._load_hw_config())
 
-        for tid in ("t_mm_out", "t_add_out"):
+        for tid in ("t_mm_out", "t_reformatted", "t_add_out"):
             t = g.tensors[tid]
             assert t.hbm_offset is None, f"{tid} 不应有 hbm_offset"
             assert t.hbm_size is None, f"{tid} 不应有 hbm_size"
@@ -554,14 +569,13 @@ class TestMatmulBiasSoftmax:
     # ── DMA 计划 ──
 
     def test_matmul_dma(self):
-        """matmul: 从 HBM load input(nd→nz) 和 weight(nz)；不 store t_mm_out（local）。"""
+        """matmul: load input(nd→nz) + weight(nz)；不 store t_mm_out（local, cube→idma）。"""
         g = _make_matmul_bias_softmax()
         g = run_idma(g, {})
         g, plans = run_memory_planner(g, self._load_hw_config())
 
         matmul_plan = [p for p in plans if p.node_id == "node_matmul"][0]
 
-        # loads: t_input(nd→nz reformat) + t_weight(nz→nz)
         load_tids = {ld.tensor_id for ld in matmul_plan.loads}
         assert "t_input" in load_tids
         assert "t_weight" in load_tids
@@ -571,25 +585,36 @@ class TestMatmulBiasSoftmax:
         assert input_load.src_format == "nd"
         assert input_load.dst_format == "nz"
 
-        # stores: t_mm_out 是 local，不应出现
+        # t_mm_out 是 local → 不 store
         store_tids = {s.tensor_id for s in matmul_plan.stores}
         assert "t_mm_out" not in store_tids
 
+    def test_reformat_dma(self):
+        """reformat(idma): 不 load t_mm_out（local）；不 store t_reformatted（local）。"""
+        g = _make_matmul_bias_softmax()
+        g = run_idma(g, {})
+        g, plans = run_memory_planner(g, self._load_hw_config())
+
+        reformat_plan = [p for p in plans if p.node_id == "node_reformat"][0]
+
+        load_tids = {ld.tensor_id for ld in reformat_plan.loads}
+        assert "t_mm_out" not in load_tids
+
+        store_tids = {s.tensor_id for s in reformat_plan.stores}
+        assert "t_reformatted" not in store_tids
+
     def test_bias_add_dma(self):
-        """bias_add: 不 load t_mm_out（local）；从 HBM load t_bias；不 store t_add_out（local）。"""
+        """bias_add: 不 load t_reformatted（local）；从 HBM load t_bias；不 store t_add_out（local）。"""
         g = _make_matmul_bias_softmax()
         g = run_idma(g, {})
         g, plans = run_memory_planner(g, self._load_hw_config())
 
         add_plan = [p for p in plans if p.node_id == "node_bias_add"][0]
 
-        # t_mm_out 是 local → 不从 HBM load
         load_tids = {ld.tensor_id for ld in add_plan.loads}
-        assert "t_mm_out" not in load_tids
-        # t_bias 必须从 HBM load
+        assert "t_reformatted" not in load_tids
         assert "t_bias" in load_tids
 
-        # t_add_out 是 local → 不 store
         store_tids = {s.tensor_id for s in add_plan.stores}
         assert "t_add_out" not in store_tids
 
@@ -601,11 +626,9 @@ class TestMatmulBiasSoftmax:
 
         sm_plan = [p for p in plans if p.node_id == "node_softmax"][0]
 
-        # t_add_out 是 local → 不从 HBM load
         load_tids = {ld.tensor_id for ld in sm_plan.loads}
         assert "t_add_out" not in load_tids
 
-        # t_out 是 model_output → 必须 store 到 HBM
         store_tids = {s.tensor_id for s in sm_plan.stores}
         assert "t_out" in store_tids
 
