@@ -37,11 +37,21 @@ def run(graph: Graph, config: dict) -> Graph:
             node.compute_unit = entry["compute_unit"]
             node.is_mapped = True
             mapped_count += 1
-            logger.debug("映射 %s: %s → %s (%s)",
-                         node.id, node.op_type, node.npu_op, node.compute_unit)
+            logger.debug(
+                "映射 %s: %s → %s (%s)", node.id, node.op_type, node.npu_op, node.compute_unit
+            )
         else:
             unmapped_count += 1
             logger.debug("未映射 %s: %s", node.id, node.op_type)
 
     logger.info("映射完成。已映射: %d, 未映射: %d", mapped_count, unmapped_count)
     return graph
+
+
+def post_validate(graph: Graph) -> list[str]:
+    """op_mapping 后的校验：已映射节点必须有 npu_op。"""
+    errors: list[str] = []
+    for n in graph.nodes.values():
+        if n.is_mapped and not n.npu_op:
+            errors.append(f"已映射节点 {n.id} 缺少 npu_op")
+    return errors

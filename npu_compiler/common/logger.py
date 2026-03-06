@@ -12,7 +12,7 @@ _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 _initialized = False
 
 
-def setup_logging(level: str = None, log_file: str = None) -> None:
+def setup_logging(level: str | None = None, log_file: str | None = None) -> None:
     """配置全局日志。
 
     Args:

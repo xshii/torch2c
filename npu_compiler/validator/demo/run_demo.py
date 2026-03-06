@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 from npu_compiler.common import Graph, ValidationError, get_logger, setup_logging
-
 from npu_compiler.validator import load_validator_config, run
 
 logger = get_logger(__name__)
@@ -31,10 +30,11 @@ def main() -> None:
 
     try:
         run(invalid_graph, config)
-        assert False, "应该抛出 ValidationError"
+        raise AssertionError("应该抛出 ValidationError")
     except ValidationError as e:
         logger.info("非法图校验失败（预期）: %s", e)
-        assert "npu_unknown" in str(e)
+        if "npu_unknown" not in str(e):
+            raise AssertionError("错误消息应包含 'npu_unknown'") from e
 
     logger.info("Demo 通过！")
 

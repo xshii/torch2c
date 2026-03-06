@@ -1,44 +1,20 @@
 """scheduler 单元测试。"""
 
 from npu_compiler.common import Graph, Node, Tensor
-from npu_compiler.scheduler import run
+from npu_compiler.common.testing import make_linear_chain
+from npu_compiler.scheduler.scheduler import post_validate, run
+
+_SCHEDULER_OPS = [
+    ("node_0", "cube_matmul", "cube"),
+    ("node_1", "vector_add", "vector"),
+    ("node_2", "cube_matmul", "cube"),
+    ("node_3", "vector_gelu", "vector"),
+]
 
 
 def _make_linear_chain() -> Graph:
     """创建 matmul→add→matmul→gelu 线性链。"""
-    g = Graph()
-    ops = [
-        ("node_0", "npu_matmul", "cube"),
-        ("node_1", "npu_add", "vector"),
-        ("node_2", "npu_matmul", "cube"),
-        ("node_3", "npu_gelu", "vector"),
-    ]
-    t_in = Tensor(
-        id="tensor_input", shape=[1, 32, 64], dtype="fp16",
-        is_model_input=True, consumer_node_ids=["node_0"],
-    )
-    g.add_tensor(t_in)
-
-    prev_tid = "tensor_input"
-    for i, (nid, op, unit) in enumerate(ops):
-        out_tid = f"tensor_{i}" if i < len(ops) - 1 else "tensor_output"
-        node = Node(
-            id=nid, op_type=op, inputs=[prev_tid], outputs=[out_tid],
-            compute_unit=unit, npu_op=op, is_mapped=True,
-        )
-        g.add_node(node)
-        is_last = i == len(ops) - 1
-        t = Tensor(
-            id=out_tid, shape=[1, 32, 64], dtype="fp16",
-            producer_node_id=nid,
-            consumer_node_ids=[] if is_last else [ops[i + 1][0]],
-            is_model_output=is_last,
-        )
-        g.add_tensor(t)
-        prev_tid = out_tid
-
-    g.execution_order = [nid for nid, _, _ in ops]
-    return g
+    return make_linear_chain(ops=_SCHEDULER_OPS)
 
 
 def _make_parallel_graph() -> Graph:
@@ -49,30 +25,64 @@ def _make_parallel_graph() -> Graph:
     两者无数据依赖。
     """
     g = Graph()
-    g.add_tensor(Tensor(
-        id="input_a", shape=[1, 32, 64], dtype="fp16",
-        is_model_input=True, consumer_node_ids=["node_a"],
-    ))
-    g.add_tensor(Tensor(
-        id="input_b", shape=[1, 32, 64], dtype="fp16",
-        is_model_input=True, consumer_node_ids=["node_b"],
-    ))
-    g.add_tensor(Tensor(
-        id="out_a", shape=[1, 32, 64], dtype="fp16",
-        producer_node_id="node_a", is_model_output=True,
-    ))
-    g.add_tensor(Tensor(
-        id="out_b", shape=[1, 32, 64], dtype="fp16",
-        producer_node_id="node_b", is_model_output=True,
-    ))
-    g.add_node(Node(
-        id="node_a", op_type="npu_matmul", inputs=["input_a"], outputs=["out_a"],
-        compute_unit="cube", npu_op="npu_matmul", is_mapped=True,
-    ))
-    g.add_node(Node(
-        id="node_b", op_type="npu_add", inputs=["input_b"], outputs=["out_b"],
-        compute_unit="vector", npu_op="npu_add", is_mapped=True,
-    ))
+    g.add_tensor(
+        Tensor(
+            id="input_a",
+            shape=[1, 32, 64],
+            dtype="fp16",
+            is_model_input=True,
+            consumer_node_ids=["node_a"],
+        )
+    )
+    g.add_tensor(
+        Tensor(
+            id="input_b",
+            shape=[1, 32, 64],
+            dtype="fp16",
+            is_model_input=True,
+            consumer_node_ids=["node_b"],
+        )
+    )
+    g.add_tensor(
+        Tensor(
+            id="out_a",
+            shape=[1, 32, 64],
+            dtype="fp16",
+            producer_node_id="node_a",
+            is_model_output=True,
+        )
+    )
+    g.add_tensor(
+        Tensor(
+            id="out_b",
+            shape=[1, 32, 64],
+            dtype="fp16",
+            producer_node_id="node_b",
+            is_model_output=True,
+        )
+    )
+    g.add_node(
+        Node(
+            id="node_a",
+            op_type="cube_matmul",
+            inputs=["input_a"],
+            outputs=["out_a"],
+            compute_unit="cube",
+            npu_op="cube_matmul",
+            is_mapped=True,
+        )
+    )
+    g.add_node(
+        Node(
+            id="node_b",
+            op_type="vector_add",
+            inputs=["input_b"],
+            outputs=["out_b"],
+            compute_unit="vector",
+            npu_op="vector_add",
+            is_mapped=True,
+        )
+    )
     g.execution_order = ["node_a", "node_b"]
     return g
 
@@ -80,30 +90,64 @@ def _make_parallel_graph() -> Graph:
 def _make_same_unit_graph() -> Graph:
     """创建两个无数据依赖、相同 compute_unit 的算子。"""
     g = Graph()
-    g.add_tensor(Tensor(
-        id="input_a", shape=[1, 32, 64], dtype="fp16",
-        is_model_input=True, consumer_node_ids=["node_a"],
-    ))
-    g.add_tensor(Tensor(
-        id="input_b", shape=[1, 32, 64], dtype="fp16",
-        is_model_input=True, consumer_node_ids=["node_b"],
-    ))
-    g.add_tensor(Tensor(
-        id="out_a", shape=[1, 32, 64], dtype="fp16",
-        producer_node_id="node_a", is_model_output=True,
-    ))
-    g.add_tensor(Tensor(
-        id="out_b", shape=[1, 32, 64], dtype="fp16",
-        producer_node_id="node_b", is_model_output=True,
-    ))
-    g.add_node(Node(
-        id="node_a", op_type="npu_add", inputs=["input_a"], outputs=["out_a"],
-        compute_unit="vector", npu_op="npu_add", is_mapped=True,
-    ))
-    g.add_node(Node(
-        id="node_b", op_type="npu_gelu", inputs=["input_b"], outputs=["out_b"],
-        compute_unit="vector", npu_op="npu_gelu", is_mapped=True,
-    ))
+    g.add_tensor(
+        Tensor(
+            id="input_a",
+            shape=[1, 32, 64],
+            dtype="fp16",
+            is_model_input=True,
+            consumer_node_ids=["node_a"],
+        )
+    )
+    g.add_tensor(
+        Tensor(
+            id="input_b",
+            shape=[1, 32, 64],
+            dtype="fp16",
+            is_model_input=True,
+            consumer_node_ids=["node_b"],
+        )
+    )
+    g.add_tensor(
+        Tensor(
+            id="out_a",
+            shape=[1, 32, 64],
+            dtype="fp16",
+            producer_node_id="node_a",
+            is_model_output=True,
+        )
+    )
+    g.add_tensor(
+        Tensor(
+            id="out_b",
+            shape=[1, 32, 64],
+            dtype="fp16",
+            producer_node_id="node_b",
+            is_model_output=True,
+        )
+    )
+    g.add_node(
+        Node(
+            id="node_a",
+            op_type="vector_add",
+            inputs=["input_a"],
+            outputs=["out_a"],
+            compute_unit="vector",
+            npu_op="vector_add",
+            is_mapped=True,
+        )
+    )
+    g.add_node(
+        Node(
+            id="node_b",
+            op_type="vector_gelu",
+            inputs=["input_b"],
+            outputs=["out_b"],
+            compute_unit="vector",
+            npu_op="vector_gelu",
+            is_mapped=True,
+        )
+    )
     g.execution_order = ["node_a", "node_b"]
     return g
 
@@ -148,7 +192,10 @@ class TestScheduleOrder:
         g = _make_linear_chain()
         g = run(g)
 
-        orders = [g.nodes[nid].schedule_order for nid in g.execution_order]
+        raw_orders = [g.nodes[nid].schedule_order for nid in g.execution_order]
+        assert all(o is not None for o in raw_orders)
+        orders: list[int] = [o for o in raw_orders if o is not None]
+        assert len(orders) == len(raw_orders)
         assert orders == sorted(orders)
         assert orders == list(range(len(orders)))
 
@@ -169,3 +216,20 @@ class TestAdjacentOnlyDeps:
         # node_3 不应直接依赖 node_0 或 node_1
         assert "node_0" not in g.nodes["node_3"].dependencies
         assert "node_1" not in g.nodes["node_3"].dependencies
+
+
+class TestPostValidate:
+    def test_post_validate_after_schedule(self):
+        """调度后校验通过。"""
+        g = _make_linear_chain()
+        g = run(g)
+        errors = post_validate(g)
+        assert errors == []
+
+    def test_post_validate_missing_schedule_order(self):
+        """未调度的节点报错。"""
+        g = _make_linear_chain()
+        # 不运行 scheduler，直接校验
+        errors = post_validate(g)
+        assert len(errors) > 0
+        assert any("schedule_order" in e for e in errors)

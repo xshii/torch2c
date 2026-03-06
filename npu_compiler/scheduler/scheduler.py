@@ -12,10 +12,7 @@ def _has_data_dependency(graph: Graph, pred_id: str, succ_id: str) -> bool:
     pred = graph.nodes[pred_id]
     succ = graph.nodes[succ_id]
     pred_outputs = set(pred.outputs)
-    for tid in succ.inputs:
-        if tid in pred_outputs:
-            return True
-    return False
+    return any(tid in pred_outputs for tid in succ.inputs)
 
 
 def run(graph: Graph, config: dict | None = None) -> Graph:
@@ -63,3 +60,14 @@ def run(graph: Graph, config: dict | None = None) -> Graph:
 
     logger.info("调度完成。依赖关系: %d 条，可并行算子对: %d", dep_count, parallel_count)
     return graph
+
+
+def post_validate(graph: Graph) -> list[str]:
+    """scheduler 后的校验：所有节点有 schedule_order 且 dependencies 非 None。"""
+    errors: list[str] = []
+    for node in graph.nodes.values():
+        if node.schedule_order is None:
+            errors.append(f"节点 {node.id} 缺少 schedule_order")
+        if node.dependencies is None:
+            errors.append(f"节点 {node.id} 的 dependencies 为 None")
+    return errors

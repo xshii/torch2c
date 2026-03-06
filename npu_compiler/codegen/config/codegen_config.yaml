@@ -1,3 +1,4 @@
+# TEST FIXTURE — 生产配置在 integration/config/
 codegen:
   output_dir: "output/"
   debug:

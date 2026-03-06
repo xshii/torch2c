@@ -8,11 +8,10 @@ import os
 from npu_compiler.common import CodegenError, get_logger
 
 from ._helpers import (
-    DTYPE_MAP,
+    DTYPE_C_ENUM_MAP,
     FORMAT_MAP,
     c_header_guard,
     load_signatures,
-    resolve_config_dir,
     write_files,
 )
 
@@ -21,69 +20,109 @@ logger = get_logger("codegen.c_emitter")
 
 # ---- 参数解析 ----
 
-def _resolve_param(param: dict, node: dict, tensors: dict) -> str:
-    """根据 source 规则解析参数值为 C 字符串。"""
-    source = param.get("source", "")
-    parts = source.split(".")
 
-    if parts[0] == "tensor":
-        tensor_key, field = parts[1], parts[2]
-        t = _find_tensor(tensor_key, node, tensors)
+class SourceResolver:
+    """将 c_api_signatures 中的 source 规则解析为 C 字符串。"""
+
+    def __init__(self, node: dict, tensors: dict):
+        self._node = node
+        self._tensors = tensors
+
+    def resolve(self, param: dict, addr_shift: int = 0) -> str:
+        """解析单个参数的 source → C 字符串。"""
+        source = param.get("source", "")
+        ptype = param.get("type", "")
+        parts = source.split(".")
+
+        # tensor_desc: 整个 tensor 展开为结构体
+        if ptype == "tensor_desc":
+            if len(parts) < 2:
+                raise CodegenError(f"tensor_desc source 格式错误（需要至少 2 段）: {source}")
+            return self._resolve_tensor_desc(parts[1], addr_shift)
+        # dtype_enum / format_enum / tensor ref: 从 tensor 取字段
+        if ptype in ("dtype_enum", "format_enum") or parts[0] == "tensor":
+            if len(parts) < 3:
+                raise CodegenError(f"tensor ref source 格式错误（需要至少 3 段）: {source}")
+            return self._resolve_tensor_ref(parts[1], parts[2], parts[3:], param)
+        if parts[0] == "param":
+            if len(parts) < 2:
+                raise CodegenError(f"param source 格式错误（需要至少 2 段）: {source}")
+            return self._resolve_param_ref(parts[1], param)
+        raise CodegenError(f"未知 source 格式: {source}")
+
+    def _resolve_tensor_desc(self, tensor_key: str, addr_shift: int) -> str:
+        """生成 (npu_tensor_t){addr >> shift, dtype, format} 复合字面量。"""
+        t = self.find_tensor(tensor_key)
+        if t is None:
+            raise CodegenError(f"张量 {tensor_key} 未找到: node={self._node['id']}")
+        offset = t.get("l1_offset", 0) or 0
+        shifted = offset >> addr_shift if addr_shift > 0 else offset
+        dtype_enum = DTYPE_C_ENUM_MAP.get(t.get("dtype", "fp16"), "NPU_DTYPE_FP16")
+        fmt_enum = FORMAT_MAP.get(t.get("format", "nd"), "NPU_FORMAT_ND")
+        return f"(npu_tensor_t){{{shifted}, {dtype_enum}, {fmt_enum}}}"
+
+    def find_tensor(self, key: str):
+        """根据 key (input_0, output_0, mask 等) 查找 tensor。"""
+        if key.startswith("input_"):
+            try:
+                idx = int(key.split("_")[1])
+            except (IndexError, ValueError) as exc:
+                raise CodegenError(f"无效的 tensor key: {key}") from exc
+            inputs = self._node.get("inputs", [])
+            absorbed_tids = set(self._node.get("absorbed_inputs", {}).values())
+            regular = [tid for tid in inputs if tid not in absorbed_tids]
+            return self._tensors.get(regular[idx]) if idx < len(regular) else None
+        if key.startswith("output_"):
+            try:
+                idx = int(key.split("_")[1])
+            except (IndexError, ValueError) as exc:
+                raise CodegenError(f"无效的 tensor key: {key}") from exc
+            outputs = self._node.get("outputs", [])
+            return self._tensors.get(outputs[idx]) if idx < len(outputs) else None
+        if key == "mask":
+            mask_tid = self._node.get("absorbed_inputs", {}).get("mask")
+            return self._tensors.get(mask_tid) if mask_tid else None
+        return None
+
+    def _resolve_tensor_ref(self, tensor_key, field, extra, param):
+        t = self.find_tensor(tensor_key)
         if t is None:
             default = param.get("default")
             if default is not None:
                 return str(default)
-            raise CodegenError(f"张量 {tensor_key} 未找到: node={node['id']}")
-        return _extract_tensor_field(t, field, parts[3:])
+            raise CodegenError(f"张量 {tensor_key} 未找到: node={self._node['id']}")
+        return self._extract_field(t, field, extra)
 
-    if parts[0] == "param":
-        val = node.get("params", {}).get(parts[1])
+    def _resolve_param_ref(self, param_name, param):
+        val = self._node.get("params", {}).get(param_name)
         if val is None:
             default = param.get("default")
             if default is not None:
                 return str(default)
-            raise CodegenError(f"参数 {parts[1]} 未找到: node={node['id']}")
+            raise CodegenError(f"参数 {param_name} 未找到: node={self._node['id']}")
         return _format_value(val, param["type"])
 
-    raise CodegenError(f"未知 source 格式: {source}")
-
-
-def _find_tensor(key: str, node: dict, tensors: dict):
-    """根据 key (input_0, output_0, mask 等) 查找 tensor。"""
-    if key.startswith("input_"):
-        idx = int(key.split("_")[1])
-        inputs = node.get("inputs", [])
-        absorbed_tids = set(node.get("absorbed_inputs", {}).values())
-        regular = [tid for tid in inputs if tid not in absorbed_tids]
-        return tensors.get(regular[idx]) if idx < len(regular) else None
-    if key.startswith("output_"):
-        idx = int(key.split("_")[1])
-        outputs = node.get("outputs", [])
-        return tensors.get(outputs[idx]) if idx < len(outputs) else None
-    if key == "mask":
-        mask_tid = node.get("absorbed_inputs", {}).get("mask")
-        return tensors.get(mask_tid) if mask_tid else None
-    return None
-
-
-def _extract_tensor_field(t: dict, field: str, extra: list[str]) -> str:
-    """从 tensor dict 提取字段值。"""
-    if field in ("l1_offset", "hbm_offset"):
-        offset = t.get(field, 0) or 0
-        buf = "l1" if field == "l1_offset" else "hbm"
-        return f"(void*)({buf} + {offset})"
-    if field == "dtype":
-        return DTYPE_MAP.get(t.get("dtype", "fp16"), "NPU_DTYPE_FP16")
-    if field == "format":
-        return FORMAT_MAP.get(t.get("format", "nd"), "NPU_FORMAT_ND")
-    if field == "shape":
-        shape = t.get("shape", [])
-        return str(shape[int(extra[0])]) if extra else str(shape)
-    if field == "ndim":
-        return str(len(t.get("shape", [])))
-    if field == "elem_count":
-        return str(math.prod(t.get("shape", [1])))
-    return str(t.get(field, 0))
+    @staticmethod
+    def _extract_field(t: dict, field: str, extra: list[str]) -> str:
+        """从 tensor dict 提取字段值。"""
+        if field in ("l1_offset", "hbm_offset"):
+            offset = t.get(field, 0) or 0
+            buf = "l1" if field == "l1_offset" else "hbm"
+            return f"(void*)({buf} + {offset})"
+        if field in ("dtype", "dtype_enum"):
+            return DTYPE_C_ENUM_MAP.get(t.get("dtype", "fp16"), "NPU_DTYPE_FP16")
+        if field in ("format", "format_enum"):
+            return FORMAT_MAP.get(t.get("format", "nd"), "NPU_FORMAT_ND")
+        if field == "shape":
+            shape = t.get("shape", [])
+            return str(shape[int(extra[0])]) if extra else str(shape)
+        if field == "ndim":
+            return str(len(t.get("shape", [])))
+        if field == "elem_count":
+            return str(math.prod(t.get("shape", [1])))
+        if field not in t:
+            raise CodegenError(f"未知的 tensor 字段: {field}")
+        return str(t[field])
 
 
 def _format_value(val, ptype: str) -> str:
@@ -94,20 +133,26 @@ def _format_value(val, ptype: str) -> str:
 
 # ---- 代码生成 ----
 
-def _gen_op_call(npu_op: str, sig: dict, node: dict, tensors: dict) -> str:
+
+def _gen_op_call(
+    npu_op: str, sig: dict, node: dict, tensors: dict, addr_shift: int = 0
+) -> str:
     """生成单个算子的 C 调用语句。"""
+    resolver = SourceResolver(node, tensors)
     args = []
     for p in sig.get("params", []):
         if p["type"] == "int_array":
             parts = p["source"].split(".")
-            t = _find_tensor(parts[1], node, tensors)
+            if len(parts) < 2:
+                raise CodegenError(f"int_array source 格式错误: {p['source']}")
+            t = resolver.find_tensor(parts[1])
             shape = t.get("shape", []) if t else []
             args.append(f"(const int[]){{{', '.join(str(s) for s in shape)}}}")
         else:
-            args.append(_resolve_param(p, node, tensors))
+            args.append(resolver.resolve(p, addr_shift=addr_shift))
 
     for p in sig.get("optional_params", []):
-        args.append(_resolve_param(p, node, tensors))
+        args.append(resolver.resolve(p, addr_shift=addr_shift))
 
     return f"{npu_op}({', '.join(args)})"
 
@@ -117,12 +162,16 @@ def _gen_dma_line(instr: dict) -> str:
     src_fmt = FORMAT_MAP.get(instr.get("src_format", "nd"), "NPU_FORMAT_ND")
     dst_fmt = FORMAT_MAP.get(instr.get("dst_format", "nd"), "NPU_FORMAT_ND")
     if instr["op"] == "load":
-        return (f"npu_dma_load((void*)(l1 + {instr['l1_offset']}), "
-                f"(void*)(hbm + {instr['hbm_offset']}), "
-                f"{instr['size_bytes']}, {src_fmt}, {dst_fmt});")
-    return (f"npu_dma_store((void*)(hbm + {instr['hbm_offset']}), "
-            f"(void*)(l1 + {instr['l1_offset']}), "
-            f"{instr['size_bytes']}, {src_fmt}, {dst_fmt});")
+        return (
+            f"npu_dma_load((void*)(l1 + {instr['l1_offset']}), "
+            f"(void*)(hbm + {instr['hbm_offset']}), "
+            f"{instr['size_bytes']}, {src_fmt}, {dst_fmt});"
+        )
+    return (
+        f"npu_dma_store((void*)(hbm + {instr['hbm_offset']}), "
+        f"(void*)(l1 + {instr['l1_offset']}), "
+        f"{instr['size_bytes']}, {src_fmt}, {dst_fmt});"
+    )
 
 
 def _gen_dma_block(instructions: list[dict], indent: str) -> str:
@@ -130,21 +179,20 @@ def _gen_dma_block(instructions: list[dict], indent: str) -> str:
     return "\n".join(f"{indent}{_gen_dma_line(i)}" for i in instructions)
 
 
-def gen_op_block(node: dict, tensors: dict, dma_plan: dict,
-                 signatures: dict) -> str:
+def gen_op_block(node: dict, tensors: dict, dma_plan: dict, signatures: dict) -> str:
     """为单个算子生成完整的三段式代码块。"""
     npu_op = node.get("npu_op", "unknown")
     sig = signatures.get("compute_ops", {}).get(npu_op)
     if sig is None:
         raise CodegenError(f"签名未找到: {npu_op}")
 
+    addr_shift = signatures.get("addr_shift", 0)
     indent = "    "
-    op_call = _gen_op_call(npu_op, sig, node, tensors)
+    op_call = _gen_op_call(npu_op, sig, node, tensors, addr_shift=addr_shift)
     loads = _gen_dma_block(dma_plan.get("loads", []), indent)
     stores = _gen_dma_block(dma_plan.get("stores", []), indent)
 
-    lines = [f"{indent}/* === {node['id']}: {npu_op} "
-             f"({node.get('compute_unit', '?')}) === */"]
+    lines = [f"{indent}/* === {node['id']}: {npu_op} ({node.get('compute_unit', '?')}) === */"]
     if loads:
         lines.append(loads)
         lines.append(f"{indent}npu_dma_barrier();")
@@ -156,6 +204,7 @@ def gen_op_block(node: dict, tensors: dict, dma_plan: dict,
 
 
 # ---- 文件级生成 ----
+
 
 def _gen_bulk_dma(dma_plan: dict, label: str) -> str:
     """生成 bulk DMA (load/store) 代码块。"""
@@ -201,6 +250,7 @@ def emit_model_graph_c(plan: dict, signatures: dict) -> str:
         '#include "model_weights.h"\n'
         '#include "npu_mock.h"\n\n'
         "void model_run(unsigned char* hbm, unsigned char* l1) {\n"
+        "    npu_l1_base = l1;\n\n"
         f"{body}\n"
         "}\n"
     )
@@ -242,9 +292,12 @@ def run(plan: dict, output_dir: str, config_dir: str | None = None) -> None:
     logger.info("c_emitter: 开始生成 model_graph 文件")
     sigs = load_signatures(config_dir)
     src_dir = os.path.join(output_dir, "src")
-    write_files(src_dir, [
-        ("model_graph.c", emit_model_graph_c(plan, sigs)),
-        ("model_graph.h", emit_model_graph_h()),
-        ("model_memory.h", emit_model_memory_h(plan)),
-        ("model_params.h", emit_model_params_h(plan)),
-    ])
+    write_files(
+        src_dir,
+        [
+            ("model_graph.c", emit_model_graph_c(plan, sigs)),
+            ("model_graph.h", emit_model_graph_h()),
+            ("model_memory.h", emit_model_memory_h(plan)),
+            ("model_params.h", emit_model_params_h(plan)),
+        ],
+    )

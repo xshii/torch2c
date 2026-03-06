@@ -1,55 +1,69 @@
-"""format_annotator — Pass⑤：Format/Dtype 标注。"""
+"""format_annotator — Pass⑤：Format/Dtype 标注。
+
+dtype 和 format 由模型自身决定（graph_capture 捕获），用户可通过
+target_dtype / target_format 覆盖。不再依赖静态 YAML 配置。
+"""
 
 from __future__ import annotations
 
-from npu_compiler.common import Graph, get_logger, load_config
+from npu_compiler.common import Graph, get_logger
 
 logger = get_logger(__name__)
 
-_CONFIG_REQUIRED_KEYS = ["op_format_requirements"]
-
-
-def load_format_config(path: str) -> dict:
-    """加载 format/dtype 标注配置。"""
-    return load_config(path, required_keys=_CONFIG_REQUIRED_KEYS)
-
-
-def _annotate_node(graph: Graph, node, req: dict) -> int:
-    """为单个节点标注 format/dtype，返回更新的 tensor 数量。"""
-    node.format_annotation = {
-        "inputs": [{"format": r["format"], "dtype": r["dtype"]} for r in req["inputs"]],
-        "outputs": [{"format": r["format"], "dtype": r["dtype"]} for r in req["outputs"]],
-        "compute_dtype": req["compute_dtype"],
-        "supports_format_convert": req.get("supports_format_convert", False),
-        "supports_dtype_cast": req.get("supports_dtype_cast", False),
-    }
-
-    updated = 0
-    for i, tid in enumerate(node.outputs):
-        if i < len(req["outputs"]):
-            tensor = graph.get_tensor(tid)
-            if tensor is not None:
-                tensor.format = req["outputs"][i]["format"]
-                tensor.dtype = req["outputs"][i]["dtype"]
-                updated += 1
-    return updated
-
 
 def run(graph: Graph, config: dict) -> Graph:
-    """执行 Format/Dtype 标注 pass。"""
-    requirements = config["op_format_requirements"]
+    """执行 Format/Dtype 标注 pass。
+
+    config 可选键：
+        target_dtype:  用户指定的全局 dtype（如 "fp16"），None 表示继承模型原始值。
+        target_format: 用户指定的全局 format（如 "nz"），None 表示继承模型原始值。
+    """
+    target_dtype = config.get("target_dtype")
+    target_format = config.get("target_format")
+
     annotated_nodes = 0
     updated_tensors = 0
 
     for node in graph.nodes.values():
-        op = node.npu_op
-        if op is None:
+        if node.npu_op is None:
             continue
-        if op not in requirements:
-            continue
-        req = requirements[op]
-        updated_tensors += _annotate_node(graph, node, req)
+
+        # 为每个输入构建标注，dtype/format 来自 tensor 自身或用户覆盖
+        input_annotations = []
+        for tid in node.inputs:
+            t = graph.get_tensor(tid)
+            if t is not None:
+                input_annotations.append({
+                    "format": target_format or t.format or "nd",
+                    "dtype": target_dtype or t.dtype or "fp16",
+                })
+
+        # 为每个输出构建标注并同步更新 tensor
+        output_annotations = []
+        for tid in node.outputs:
+            t = graph.get_tensor(tid)
+            if t is not None:
+                fmt = target_format or t.format or "nd"
+                dt = target_dtype or t.dtype or "fp16"
+                output_annotations.append({"format": fmt, "dtype": dt})
+                t.format = fmt
+                t.dtype = dt
+                updated_tensors += 1
+
+        node.format_annotation = {
+            "inputs": input_annotations,
+            "outputs": output_annotations,
+        }
         annotated_nodes += 1
 
     logger.info("Format标注完成。标注了%d个节点，%d个tensor", annotated_nodes, updated_tensors)
     return graph
+
+
+def post_validate(graph: Graph) -> list[str]:
+    """format_annotator 后的校验：有 producer 的 tensor 必须有 dtype。"""
+    errors: list[str] = []
+    for t in graph.tensors.values():
+        if t.producer_node_id is not None and not t.dtype:
+            errors.append(f"有 producer 的 tensor {t.id} 缺少 dtype")
+    return errors

@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 from npu_compiler.common import Graph, get_logger, setup_logging
-
 from npu_compiler.op_absorption import load_absorption_config, run
 
 logger = get_logger(__name__)

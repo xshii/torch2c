@@ -1,0 +1,41 @@
+# graph_capture 规则配置
+# param_renames: 将 positional param 名重命名为 codegen 期望的 param 名
+# input_reorder: 输入 tensor 重排规则
+# param_defaults: 当参数缺失时补充默认值
+
+param_renames:
+  aten.transpose.int:
+    p0: dim0
+    p1: dim1
+  aten._softmax.default:
+    p0: dim
+  aten.softmax.int:
+    p0: dim
+  aten.native_layer_norm.default:
+    p1: epsilon
+    eps: epsilon
+  aten.layer_norm.default:
+    p0: normalized_shape
+    p1: epsilon
+    eps: epsilon
+
+input_reorder:
+  # addmm(bias, mat1, mat2) → NPU 期望 (mat1, mat2, bias)
+  aten.addmm.default: [1, 2, 0]
+
+# 需要将 dim 索引转换为维度大小的算子
+dim_to_size_ops:
+  - aten._softmax.default
+  - aten.softmax.int
+
+# 需要对 weight 输入做转置的算子（如 aten.linear.default）
+# 值为 weight 输入的索引位置
+weight_transpose_input:
+  aten.linear.default: 1
+
+# 当参数缺失时补充默认值
+param_defaults:
+  aten.layer_norm.default:
+    epsilon: 1.0e-5
+  aten.native_layer_norm.default:
+    epsilon: 1.0e-5

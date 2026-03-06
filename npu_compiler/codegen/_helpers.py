@@ -5,27 +5,41 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from npu_compiler.common import get_logger, load_config
+from npu_compiler.common import DTYPE_INFO, get_logger, load_config
 
 logger = get_logger("codegen._helpers")
 
+# ---- 模板加载 ----
+
+_TMPL_DIR = Path(__file__).parent / "templates"
+
+
+def load_template(name: str) -> str:
+    """从 codegen/templates/ 加载模板文件内容。"""
+    with open(_TMPL_DIR / name, "r", encoding="utf-8") as f:
+        return f.read()
+
+
 # ---- NPU C 枚举映射 ----
 
-DTYPE_MAP = {
-    "fp16": "NPU_DTYPE_FP16", "fp32": "NPU_DTYPE_FP32",
-    "bf16": "NPU_DTYPE_BF16", "int8": "NPU_DTYPE_INT8",
-    "int32": "NPU_DTYPE_INT32",
-}
+DTYPE_C_ENUM_MAP = {k: v.c_enum for k, v in DTYPE_INFO.items()}
 
 FORMAT_MAP = {
-    "nd": "NPU_FORMAT_ND", "nz": "NPU_FORMAT_NZ",
+    "nd": "NPU_FORMAT_ND",
+    "nz": "NPU_FORMAT_NZ",
     "nc1hwc0": "NPU_FORMAT_NC1HWC0",
 }
 
 # param type → C type 映射
 PARAM_TYPE_C = {
-    "addr": "void*", "int": "int", "float": "float",
-    "enum": "int", "int_array": "const int*",
+    "addr": "void*",
+    "int": "int",
+    "float": "float",
+    "enum": "int",
+    "int_array": "const int*",
+    "tensor_desc": "npu_tensor_t",
+    "dtype_enum": "npu_dtype_t",
+    "format_enum": "npu_format_t",
 }
 
 # ---- 配置加载 ----
@@ -49,6 +63,7 @@ def load_signatures(config_dir: str | None = None) -> dict:
 
 # ---- 文件输出 ----
 
+
 def write_file(path: str, content: str) -> None:
     """写入文件并记录日志。"""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -66,6 +81,41 @@ def write_files(directory: str, files: list[tuple[str, str]]) -> None:
 
 # ---- C 代码生成辅助 ----
 
+
 def c_header_guard(guard_name: str, body: str) -> str:
     """生成带 include guard 的 C 头文件。"""
     return f"#ifndef {guard_name}\n#define {guard_name}\n\n{body}\n#endif\n"
+
+
+# ---- compute op 声明生成 ----
+
+
+def gen_compute_decl(name: str, sig: dict) -> str:
+    """从 YAML 签名生成单个 C 函数声明。"""
+    params = sig.get("params", [])
+    if not params:
+        return f"void {name}(void);"
+    args = ", ".join(f"{PARAM_TYPE_C.get(p['type'], 'int')} {p['name']}" for p in params)
+    return f"void {name}({args});"
+
+
+def gen_compute_declarations(signatures: dict) -> str:
+    """从 c_api_signatures.yaml 生成所有 compute op 的 C 函数声明。
+
+    按计算单元前缀分组输出：cube_ / vector_ / scalar_。
+    """
+    ops = signatures.get("compute_ops", {})
+    groups: dict[str, list[str]] = {"cube": [], "vector": [], "scalar": []}
+    for name, sig in ops.items():
+        prefix = name.split("_", 1)[0]
+        groups.setdefault(prefix, []).append(gen_compute_decl(name, sig))
+
+    lines: list[str] = []
+    for unit, label in [("cube", "cube compute ops"), ("vector", "vector compute ops"),
+                        ("scalar", "scalar compute ops")]:
+        decls = groups.get(unit, [])
+        if decls:
+            lines.append(f"/* ---- {label} ---- */")
+            lines.extend(decls)
+            lines.append("")
+    return "\n".join(lines)

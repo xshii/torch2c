@@ -25,59 +25,51 @@ def _find_single_consumer(graph: Graph, tensor_id: str) -> str | None:
     return None
 
 
+def _absorb_one(graph: Graph, node, consumer, consumer_id: str, rule: dict) -> str:
+    """执行单次吸收：重连 consumer 输入，清理旧引用。返回待删除的中间 tensor id。"""
+    param_tid = node.inputs[rule["absorbed_input_index"]]
+    passthrough_tid = node.inputs[rule["passthrough_input_index"]]
+    out_tid = node.outputs[0]
+
+    consumer.absorbed_inputs[rule["param_name"]] = param_tid
+    for i, tid in enumerate(consumer.inputs):
+        if tid == out_tid:
+            consumer.inputs[i] = passthrough_tid
+            break
+
+    for tid in node.inputs:
+        t = graph.get_tensor(tid)
+        if t and node.id in t.consumer_node_ids:
+            t.consumer_node_ids.remove(node.id)
+
+    pt = graph.get_tensor(passthrough_tid)
+    if pt and consumer_id not in pt.consumer_node_ids:
+        pt.consumer_node_ids.append(consumer_id)
+    at = graph.get_tensor(param_tid)
+    if at and consumer_id not in at.consumer_node_ids:
+        at.consumer_node_ids.append(consumer_id)
+
+    return out_tid
+
+
 def _try_absorb(graph: Graph, rule: dict) -> tuple[int, int]:
     """尝试按一条规则执行吸收，返回 (吸收算子数, 消除tensor数)。"""
     absorbed_op = rule["absorbed_op"]
     target_op = rule["target_op"]
-    param_name = rule["param_name"]
-    absorbed_idx = rule["absorbed_input_index"]
-    passthrough_idx = rule["passthrough_input_index"]
-
     nodes_to_remove: list[str] = []
     tensors_to_remove: list[str] = []
 
     for node in list(graph.nodes.values()):
-        if node.npu_op != absorbed_op:
+        if node.npu_op != absorbed_op or len(node.outputs) != 1:
             continue
-        if len(node.outputs) != 1:
-            continue
-
-        out_tid = node.outputs[0]
-        consumer_id = _find_single_consumer(graph, out_tid)
+        consumer_id = _find_single_consumer(graph, node.outputs[0])
         if consumer_id is None:
             continue
-
         consumer = graph.get_node(consumer_id)
         if consumer is None or consumer.npu_op != target_op:
             continue
 
-        # 执行吸收
-        param_tid = node.inputs[absorbed_idx]
-        passthrough_tid = node.inputs[passthrough_idx]
-
-        consumer.absorbed_inputs[param_name] = param_tid
-        # 消费者的对应输入改为被吸收节点的直通输入
-        for i, tid in enumerate(consumer.inputs):
-            if tid == out_tid:
-                consumer.inputs[i] = passthrough_tid
-                break
-
-        # 清理被吸收节点在其输入 tensor 上的消费者记录
-        for tid in node.inputs:
-            t = graph.get_tensor(tid)
-            if t and node.id in t.consumer_node_ids:
-                t.consumer_node_ids.remove(node.id)
-
-        # 更新 passthrough tensor 的消费者列表
-        pt = graph.get_tensor(passthrough_tid)
-        if pt and consumer_id not in pt.consumer_node_ids:
-            pt.consumer_node_ids.append(consumer_id)
-
-        # 更新 absorbed param tensor 的消费者列表
-        at = graph.get_tensor(param_tid)
-        if at and consumer_id not in at.consumer_node_ids:
-            at.consumer_node_ids.append(consumer_id)
-
+        out_tid = _absorb_one(graph, node, consumer, consumer_id, rule)
         nodes_to_remove.append(node.id)
         tensors_to_remove.append(out_tid)
 
@@ -87,6 +79,18 @@ def _try_absorb(graph: Graph, rule: dict) -> tuple[int, int]:
         graph.remove_tensor(tid)
 
     return len(nodes_to_remove), len(tensors_to_remove)
+
+
+def post_validate(graph: Graph) -> list[str]:
+    """op_absorption 后的校验：被吸收节点已清理，absorbed_inputs 引用的 tensor 存在。"""
+    errors: list[str] = []
+    for node in graph.nodes.values():
+        for param_name, tid in node.absorbed_inputs.items():
+            if tid not in graph.tensors:
+                errors.append(
+                    f"节点 {node.id} 的 absorbed_inputs[{param_name}] 引用了不存在的 tensor {tid}"
+                )
+    return errors
 
 
 def run(graph: Graph, config: dict) -> Graph:

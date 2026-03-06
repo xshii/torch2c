@@ -2,64 +2,99 @@
 #include "npu_api.h"
 #include <string.h>
 
-static int test_layernorm_basic(void) {
-    /* seq=1, hidden=4, gamma=1, beta=0 => standard normalization */
-    float input[4] = {1.0f, 2.0f, 3.0f, 4.0f};
-    float gamma[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-    float beta[4]  = {0.0f, 0.0f, 0.0f, 0.0f};
-    float out[4]   = {0};
-    npu_layernorm_part1(input, gamma, beta, out, 4, 1, 1e-5f, NPU_DTYPE_FP32);
+#define OFF_IN    0
+#define OFF_GAMMA 1024
+#define OFF_BETA  2048
+#define OFF_OUT   3072
+#define OFF_ORIG  4096
 
-    /* mean=2.5, var=1.25, std=~1.118 */
-    /* expected: (x - 2.5) / sqrt(1.25 + 1e-5) */
+static int test_layernorm_basic(void) {
+    L1_INIT();
+    float* input = L1_PTR(float, OFF_IN);
+    float* gamma = L1_PTR(float, OFF_GAMMA);
+    float* beta  = L1_PTR(float, OFF_BETA);
+    float vals_in[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    float vals_g[4]  = {1.0f, 1.0f, 1.0f, 1.0f};
+    float vals_b[4]  = {0.0f, 0.0f, 0.0f, 0.0f};
+    memcpy(input, vals_in, sizeof(vals_in));
+    memcpy(gamma, vals_g, sizeof(vals_g));
+    memcpy(beta, vals_b, sizeof(vals_b));
+
+    vector_layernorm_part1(TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_GAMMA, NPU_DTYPE_FP32),
+                           TENSOR(OFF_BETA, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
+                           4, 1, 1e-5f, NPU_DTYPE_FP32);
+
+    float* out = L1_PTR(float, OFF_OUT);
     float mean = 2.5f, var = 1.25f;
     float inv_std = 1.0f / sqrtf(var + 1e-5f);
     for (int i = 0; i < 4; i++)
-        ASSERT_FLOAT_EQ(out[i], (input[i] - mean) * inv_std, 1e-5f);
+        ASSERT_FLOAT_EQ(out[i], (vals_in[i] - mean) * inv_std, 1e-5f);
     return 1;
 }
 
 static int test_layernorm_with_gamma_beta(void) {
-    float input[4] = {1.0f, 2.0f, 3.0f, 4.0f};
-    float gamma[4] = {2.0f, 2.0f, 2.0f, 2.0f};
-    float beta[4]  = {1.0f, 1.0f, 1.0f, 1.0f};
-    float out[4]   = {0};
-    npu_layernorm_part1(input, gamma, beta, out, 4, 1, 1e-5f, NPU_DTYPE_FP32);
+    L1_INIT();
+    float* input = L1_PTR(float, OFF_IN);
+    float* gamma = L1_PTR(float, OFF_GAMMA);
+    float* beta  = L1_PTR(float, OFF_BETA);
+    float vals_in[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    float vals_g[4]  = {2.0f, 2.0f, 2.0f, 2.0f};
+    float vals_b[4]  = {1.0f, 1.0f, 1.0f, 1.0f};
+    memcpy(input, vals_in, sizeof(vals_in));
+    memcpy(gamma, vals_g, sizeof(vals_g));
+    memcpy(beta, vals_b, sizeof(vals_b));
 
+    vector_layernorm_part1(TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_GAMMA, NPU_DTYPE_FP32),
+                           TENSOR(OFF_BETA, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
+                           4, 1, 1e-5f, NPU_DTYPE_FP32);
+
+    float* out = L1_PTR(float, OFF_OUT);
     float mean = 2.5f, var = 1.25f;
     float inv_std = 1.0f / sqrtf(var + 1e-5f);
     for (int i = 0; i < 4; i++) {
-        float expected = 2.0f * (input[i] - mean) * inv_std + 1.0f;
+        float expected = 2.0f * (vals_in[i] - mean) * inv_std + 1.0f;
         ASSERT_FLOAT_EQ(out[i], expected, 1e-5f);
     }
     return 1;
 }
 
 static int test_layernorm_multi_seq(void) {
-    /* seq=2, hidden=2 */
-    float input[4] = {1.0f, 3.0f, 2.0f, 4.0f};
-    float gamma[2] = {1.0f, 1.0f};
-    float beta[2]  = {0.0f, 0.0f};
-    float out[4]   = {0};
-    npu_layernorm_part1(input, gamma, beta, out, 2, 2, 1e-5f, NPU_DTYPE_FP32);
+    L1_INIT();
+    float* input = L1_PTR(float, OFF_IN);
+    float* gamma = L1_PTR(float, OFF_GAMMA);
+    float* beta  = L1_PTR(float, OFF_BETA);
+    float vals_in[4] = {1.0f, 3.0f, 2.0f, 4.0f};
+    float vals_g[2]  = {1.0f, 1.0f};
+    float vals_b[2]  = {0.0f, 0.0f};
+    memcpy(input, vals_in, sizeof(vals_in));
+    memcpy(gamma, vals_g, sizeof(vals_g));
+    memcpy(beta, vals_b, sizeof(vals_b));
 
-    /* seq0: mean=2, var=1, (1-2)/1=-1, (3-2)/1=1 */
+    vector_layernorm_part1(TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_GAMMA, NPU_DTYPE_FP32),
+                           TENSOR(OFF_BETA, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
+                           2, 2, 1e-5f, NPU_DTYPE_FP32);
+
+    float* out = L1_PTR(float, OFF_OUT);
     ASSERT_FLOAT_EQ(out[0], -1.0f, 1e-4f);
     ASSERT_FLOAT_EQ(out[1],  1.0f, 1e-4f);
-    /* seq1: mean=3, var=1, (2-3)/1=-1, (4-3)/1=1 */
     ASSERT_FLOAT_EQ(out[2], -1.0f, 1e-4f);
     ASSERT_FLOAT_EQ(out[3],  1.0f, 1e-4f);
     return 1;
 }
 
 static int test_layernorm_part2(void) {
-    float inter[8] = {1, 2, 3, 4, 5, 6, 7, 8};
-    float orig[8]  = {0};
-    float out[8]   = {0};
+    L1_INIT();
+    float* inter = L1_PTR(float, OFF_IN);
+    float vals[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    memcpy(inter, vals, sizeof(vals));
     int byte_count = 8 * (int)sizeof(float);
-    npu_layernorm_part2(inter, orig, out, byte_count, NPU_DTYPE_FP32);
+
+    vector_layernorm_part2(TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_ORIG, NPU_DTYPE_FP32),
+                           TENSOR(OFF_OUT, NPU_DTYPE_FP32), byte_count, NPU_DTYPE_FP32);
+
+    float* out = L1_PTR(float, OFF_OUT);
     for (int i = 0; i < 8; i++)
-        ASSERT_FLOAT_EQ(out[i], inter[i], 0.0f);
+        ASSERT_FLOAT_EQ(out[i], vals[i], 0.0f);
     return 1;
 }
 

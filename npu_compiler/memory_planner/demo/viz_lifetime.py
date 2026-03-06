@@ -1,0 +1,92 @@
+"""可视化 L1 / HBM 内存生命周期。
+
+核心渲染逻辑位于 npu_compiler.viz.lifetime_viz，本文件为独立运行入口。
+
+用法:
+    python -m npu_compiler.memory_planner.demo.viz_lifetime [--hbm] [--json graph.json]
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+
+from npu_compiler.common import Graph, Node, Tensor, load_config
+from npu_compiler.idma import run as run_idma
+from npu_compiler.memory_planner import run as run_memory_planner
+from npu_compiler.viz.lifetime_viz import render_ascii
+
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "hardware_config.yaml")
+
+
+def _build_demo_graph() -> tuple[Graph, list]:
+    """构建 matmul+bias(absorbed) → add → gelu → add2 示例。"""
+    shape = [1, 128, 2048]
+    g = Graph()
+    g.add_tensor(Tensor(id="t_input", shape=shape, dtype="fp16", format="nd",
+                        is_model_input=True, consumer_node_ids=["n_matmul"]))
+    g.add_tensor(Tensor(id="t_weight", shape=shape, dtype="fp16", format="nz",
+                        is_weight=True, consumer_node_ids=["n_matmul"]))
+    g.add_tensor(Tensor(id="t_bias", shape=[1, 1, shape[-1]], dtype="fp16", format="nd",
+                        is_weight=True, consumer_node_ids=["n_matmul"]))
+    g.add_tensor(Tensor(id="t_mm_out", shape=shape, dtype="fp16", format="nd",
+                        producer_node_id="n_matmul", consumer_node_ids=["n_add"]))
+    g.add_tensor(Tensor(id="t_mid", shape=shape, dtype="fp16", format="nd",
+                        producer_node_id="n_add", consumer_node_ids=["n_gelu"]))
+    g.add_tensor(Tensor(id="t_mid2", shape=shape, dtype="fp16", format="nd",
+                        producer_node_id="n_gelu", consumer_node_ids=["n_add2"]))
+    g.add_tensor(Tensor(id="t_out", shape=shape, dtype="fp16", format="nd",
+                        producer_node_id="n_add2", is_model_output=True))
+    g.add_node(Node(id="n_matmul", op_type="cube_matmul",
+                    inputs=["t_input", "t_weight"], outputs=["t_mm_out"],
+                    compute_unit="cube", npu_op="cube_matmul", is_mapped=True,
+                    absorbed_inputs={"bias": "t_bias"}))
+    g.add_node(Node(id="n_add", op_type="vector_add",
+                    inputs=["t_mm_out"], outputs=["t_mid"],
+                    compute_unit="vector", npu_op="vector_add", is_mapped=True))
+    g.add_node(Node(id="n_gelu", op_type="vector_gelu",
+                    inputs=["t_mid"], outputs=["t_mid2"],
+                    compute_unit="vector", npu_op="vector_gelu", is_mapped=True))
+    g.add_node(Node(id="n_add2", op_type="vector_add",
+                    inputs=["t_mid2"], outputs=["t_out"],
+                    compute_unit="vector", npu_op="vector_add", is_mapped=True))
+    g.execution_order = ["n_matmul", "n_add", "n_gelu", "n_add2"]
+
+    g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
+    config = load_config(CONFIG_PATH)
+    g, plans = run_memory_planner(g, config)
+    return g, plans
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="可视化内存生命周期")
+    parser.add_argument("--hbm", action="store_true", help="显示 HBM（默认显示 L1）")
+    parser.add_argument("--json", type=str, default=None, help="输入 graph JSON 文件")
+    parser.add_argument("--width", type=int, default=14, help="每列宽度")
+    args = parser.parse_args()
+
+    config = load_config(CONFIG_PATH)
+    cube_size = config["fractal"]["cube_size"]
+
+    if args.json:
+        with open(args.json) as f:
+            data = json.load(f)
+        graph = Graph.from_dict(data)
+        graph, _ = run_memory_planner(graph, config)
+    else:
+        graph, _ = _build_demo_graph()
+
+    mode = "hbm" if args.hbm else "l1"
+    print(render_ascii(graph, cube_size, mode=mode, col_width=args.width))
+
+    other = "l1" if mode == "hbm" else "hbm"
+    print("\n" + "=" * 80 + "\n")
+    print(render_ascii(graph, cube_size, mode=other, col_width=args.width))
+
+
+if __name__ == "__main__":
+    main()

@@ -28,8 +28,7 @@ def run(graph: Graph, config: dict) -> Graph:
     rules = config.get("decompositions", {})
 
     # 收集待裂解节点（不能在迭代时修改 dict）
-    targets = [n for n in graph.nodes.values()
-               if not n.is_mapped and n.op_type in rules]
+    targets = [n for n in graph.nodes.values() if not n.is_mapped and n.op_type in rules]
 
     total_new_nodes = 0
     total_new_tensors = 0
@@ -39,29 +38,36 @@ def run(graph: Graph, config: dict) -> Graph:
         total_new_nodes += nn_count
         total_new_tensors += nt_count
 
-    logger.info("裂解完成。裂解了%d个算子，新增%d个节点，新增%d个中间tensor",
-                len(targets), total_new_nodes, total_new_tensors)
+    logger.info(
+        "裂解完成。裂解了%d个算子，新增%d个节点，新增%d个中间tensor",
+        len(targets),
+        total_new_nodes,
+        total_new_tensors,
+    )
     return graph
 
 
-def _decompose_node(graph: Graph, node: Node, rule: dict) -> tuple[int, int]:
-    """裂解单个节点，返回 (新节点数, 新中间tensor数)。"""
-    steps = rule["steps"]
-
-    # §16.5：中间 tensor shape = 源算子第一个输入的 shape
+def _create_intermediates(
+    graph: Graph, node: Node, steps: list[dict],
+) -> tuple[list[str], list[int], str]:
+    """创建中间 tensor（steps 之间各一个），返回 (intermediate_tids, inter_shape, inter_dtype)。"""
     first_input_tid = node.inputs[0] if node.inputs else None
     first_input = graph.get_tensor(first_input_tid) if first_input_tid else None
     inter_shape = list(first_input.shape) if first_input else [1]
     inter_dtype = first_input.dtype if first_input else "fp16"
 
-    # 创建中间 tensor（steps 之间各一个）
     intermediates: list[str] = []
     for i in range(len(steps) - 1):
         tid = f"{node.id}_inter_{i}"
         graph.add_tensor(Tensor(id=tid, shape=list(inter_shape), dtype=inter_dtype))
         intermediates.append(tid)
+    return intermediates, inter_shape, inter_dtype
 
-    # 创建新节点
+
+def _build_step_nodes(
+    node: Node, steps: list[dict], intermediates: list[str],
+) -> list[Node]:
+    """按 steps 构建新节点列表（含 extra_inputs 解析）。"""
     new_nodes: list[Node] = []
     for i, step in enumerate(steps):
         nid = f"{node.id}_step_{i}"
@@ -70,33 +76,43 @@ def _decompose_node(graph: Graph, node: Node, rule: dict) -> tuple[int, int]:
             inputs = list(node.inputs)
         else:
             inputs = [intermediates[i - 1]]
-            # layernorm_part2 需要原始输入作为第二输入
-            if step["npu_op"] == "npu_layernorm_part2" and node.inputs:
-                inputs.append(node.inputs[0])
+            for ref in step.get("extra_inputs", []):
+                parts = ref.split(".")
+                if parts[0] == "original" and node.inputs:
+                    idx = int(parts[1])
+                    if idx < len(node.inputs):
+                        inputs.append(node.inputs[idx])
 
         if i == len(steps) - 1:
             outputs = [node.outputs[0]] if node.outputs else []
         else:
             outputs = [intermediates[i]]
 
-        new_nodes.append(Node(
-            id=nid,
-            op_type=step["npu_op"],
-            inputs=inputs,
-            outputs=outputs,
-            params=dict(node.params),
-            npu_op=step["npu_op"],
-            compute_unit=step["compute_unit"],
-            is_mapped=True,
-        ))
+        new_nodes.append(
+            Node(
+                id=nid,
+                op_type=step["npu_op"],
+                inputs=inputs,
+                outputs=outputs,
+                params=dict(node.params),
+                npu_op=step["npu_op"],
+                compute_unit=step["compute_unit"],
+                is_mapped=True,
+            )
+        )
+    return new_nodes
 
-    # 更新中间 tensor 的 producer/consumer 引用
+
+def _rewire_graph(graph: Graph, node: Node, new_nodes: list[Node], intermediates: list[str]) -> None:
+    """更新 tensor 引用、execution_order，替换节点。"""
+    # 中间 tensor 的 producer/consumer
     for i, inter_tid in enumerate(intermediates):
         t = graph.get_tensor(inter_tid)
+        assert t is not None
         t.producer_node_id = new_nodes[i].id
         t.consumer_node_ids = [new_nodes[i + 1].id]
 
-    # 更新原输入 tensor：移除旧节点，关联新 step_0
+    # 原输入 tensor：移除旧节点，关联新 step_0
     for input_tid in node.inputs:
         t = graph.get_tensor(input_tid)
         if t and node.id in t.consumer_node_ids:
@@ -104,7 +120,7 @@ def _decompose_node(graph: Graph, node: Node, rule: dict) -> tuple[int, int]:
         if t and new_nodes[0].id not in t.consumer_node_ids:
             t.consumer_node_ids.append(new_nodes[0].id)
 
-    # 为后续 step 引用的原始输入更新 consumer（如 layernorm_part2）
+    # 后续 step 引用的原始输入更新 consumer
     orig_input_set = set(node.inputs)
     for new_n in new_nodes[1:]:
         for tid in new_n.inputs:
@@ -119,13 +135,13 @@ def _decompose_node(graph: Graph, node: Node, rule: dict) -> tuple[int, int]:
         if first_out:
             first_out.producer_node_id = new_nodes[-1].id
 
-    # 其余输出 tensor 失去 producer（由 memory_planner 回收）
+    # 其余输出 tensor 失去 producer
     for out_tid in node.outputs[1:]:
         t = graph.get_tensor(out_tid)
         if t:
             t.producer_node_id = None
 
-    # 更新 execution_order：在原位置插入新节点
+    # 更新 execution_order
     if node.id in graph.execution_order:
         idx = graph.execution_order.index(node.id)
         graph.execution_order.remove(node.id)
@@ -137,4 +153,24 @@ def _decompose_node(graph: Graph, node: Node, rule: dict) -> tuple[int, int]:
     for new_n in new_nodes:
         graph.nodes[new_n.id] = new_n
 
+
+def _decompose_node(graph: Graph, node: Node, rule: dict) -> tuple[int, int]:
+    """裂解单个节点，返回 (新节点数, 新中间tensor数)。"""
+    steps = rule["steps"]
+    intermediates, _, _ = _create_intermediates(graph, node, steps)
+    new_nodes = _build_step_nodes(node, steps, intermediates)
+    _rewire_graph(graph, node, new_nodes, intermediates)
     return len(new_nodes), len(intermediates)
+
+
+def post_validate(graph: Graph) -> list[str]:
+    """op_decomposition 后的校验：所有节点必须已映射并有 npu_op/compute_unit。"""
+    errors: list[str] = []
+    for n in graph.nodes.values():
+        if not n.is_mapped:
+            errors.append(f"节点 {n.id} 未映射 (is_mapped=False)")
+        if not n.npu_op:
+            errors.append(f"节点 {n.id} 缺少 npu_op")
+        if not n.compute_unit:
+            errors.append(f"节点 {n.id} 缺少 compute_unit")
+    return errors

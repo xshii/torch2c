@@ -11,7 +11,7 @@ int parse_desc(const char* desc_path, tensor_desc_t* desc) {{
     char line[256];
     while (fgets(line, sizeof(line), f)) {{
         char key[64], val[128];
-        if (sscanf(line, "%63[^:]: %127[^\\n]", key, val) != 2) continue;
+        if (sscanf(line, "%63[^:]: %127s", key, val) != 2) continue;
 
         if (strcmp(key, "shape") == 0) {{
             desc->ndim = 0;

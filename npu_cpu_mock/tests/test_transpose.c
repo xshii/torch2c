@@ -2,12 +2,17 @@
 #include "npu_api.h"
 #include <string.h>
 
+#define OFF_IN  0
+#define OFF_OUT 4096
+
 static int test_transpose_2d_fp32(void) {
-    /* [2x3] -> [3x2] */
-    float in[6]  = {1, 2, 3, 4, 5, 6};
-    float out[6] = {0};
-    npu_transpose_2d(in, out, 2, 3, NPU_DTYPE_FP32);
-    /* expected: col-major read: [1,4], [2,5], [3,6] */
+    L1_INIT();
+    float* in = L1_PTR(float, OFF_IN);
+    float vals[6] = {1, 2, 3, 4, 5, 6};
+    memcpy(in, vals, sizeof(vals));
+    vector_transpose_2d(TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
+                        2, 3, NPU_DTYPE_FP32);
+    float* out = L1_PTR(float, OFF_OUT);
     float expected[6] = {1, 4, 2, 5, 3, 6};
     for (int i = 0; i < 6; i++)
         ASSERT_FLOAT_EQ(out[i], expected[i], 1e-6f);
@@ -15,26 +20,28 @@ static int test_transpose_2d_fp32(void) {
 }
 
 static int test_transpose_2d_fp16(void) {
-    uint16_t in[6], out[6];
+    L1_INIT();
     float vals[6] = {1, 2, 3, 4, 5, 6};
     for (int i = 0; i < 6; i++)
-        npu_write_from_float(in, i, vals[i], NPU_DTYPE_FP16);
-    npu_transpose_2d(in, out, 2, 3, NPU_DTYPE_FP16);
+        npu_write_from_float(L1_PTR(uint16_t, OFF_IN), i, vals[i], NPU_DTYPE_FP16);
+    vector_transpose_2d(TENSOR(OFF_IN, NPU_DTYPE_FP16), TENSOR(OFF_OUT, NPU_DTYPE_FP16),
+                        2, 3, NPU_DTYPE_FP16);
     float expected[6] = {1, 4, 2, 5, 3, 6};
     for (int i = 0; i < 6; i++)
-        ASSERT_FLOAT_EQ(npu_read_as_float(out, i, NPU_DTYPE_FP16), expected[i], 1e-3f);
+        ASSERT_FLOAT_EQ(npu_read_as_float(L1_PTR(uint16_t, OFF_OUT), i, NPU_DTYPE_FP16), expected[i], 1e-3f);
     return 1;
 }
 
 static int test_transpose_nd_3d(void) {
     /* [2,3,4] swap dim 0 and 2 => [4,3,2] */
+    L1_INIT();
+    float* in = L1_PTR(float, OFF_IN);
     int dims[3] = {2, 3, 4};
     int total = 24;
-    float in[24], out[24];
     for (int i = 0; i < total; i++) in[i] = (float)i;
-    npu_transpose(in, out, 3, dims, 0, 2, NPU_DTYPE_FP32);
-
-    /* verify: in[a][b][c] = out[c][b][a] */
+    vector_transpose(TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
+                     3, dims, 0, 2, NPU_DTYPE_FP32);
+    float* out = L1_PTR(float, OFF_OUT);
     for (int a = 0; a < 2; a++)
         for (int b = 0; b < 3; b++)
             for (int c = 0; c < 4; c++) {
@@ -47,13 +54,14 @@ static int test_transpose_nd_3d(void) {
 
 static int test_transpose_nd_swap_adjacent(void) {
     /* [2,3,4] swap dim 1 and 2 => [2,4,3] */
+    L1_INIT();
+    float* in = L1_PTR(float, OFF_IN);
     int dims[3] = {2, 3, 4};
     int total = 24;
-    float in[24], out[24];
     for (int i = 0; i < total; i++) in[i] = (float)(i + 1);
-    npu_transpose(in, out, 3, dims, 1, 2, NPU_DTYPE_FP32);
-
-    /* verify: in[a][b][c] = out[a][c][b] */
+    vector_transpose(TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
+                     3, dims, 1, 2, NPU_DTYPE_FP32);
+    float* out = L1_PTR(float, OFF_OUT);
     for (int a = 0; a < 2; a++)
         for (int b = 0; b < 3; b++)
             for (int c = 0; c < 4; c++) {
@@ -65,11 +73,15 @@ static int test_transpose_nd_swap_adjacent(void) {
 }
 
 static int test_reshape(void) {
-    float in[6] = {1, 2, 3, 4, 5, 6};
-    float out[6] = {0};
-    npu_reshape(in, out, 6 * (int)sizeof(float), NPU_DTYPE_FP32);
+    L1_INIT();
+    float* in = L1_PTR(float, OFF_IN);
+    float vals[6] = {1, 2, 3, 4, 5, 6};
+    memcpy(in, vals, sizeof(vals));
+    scalar_reshape(TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
+                   6 * (int)sizeof(float), NPU_DTYPE_FP32);
+    float* out = L1_PTR(float, OFF_OUT);
     for (int i = 0; i < 6; i++)
-        ASSERT_FLOAT_EQ(out[i], in[i], 0.0f);
+        ASSERT_FLOAT_EQ(out[i], vals[i], 0.0f);
     return 1;
 }
 
@@ -85,7 +97,6 @@ static int test_dma_ops(void) {
     for (int i = 0; i < 4; i++)
         ASSERT_FLOAT_EQ(dst2[i], src[i], 0.0f);
 
-    /* barrier and sync are no-ops, just verify they don't crash */
     npu_dma_barrier();
     npu_set_dependency(0, 1);
     npu_barrier();

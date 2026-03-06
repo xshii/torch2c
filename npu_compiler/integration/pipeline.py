@@ -3,64 +3,114 @@
 from __future__ import annotations
 
 import os
-from dataclasses import asdict
+from collections.abc import Callable
+from dataclasses import asdict, dataclass
 
 import numpy as np
 import torch
 import torch.nn as nn
 
-from npu_compiler.common import Graph, get_logger, load_config
 from npu_compiler.codegen import c_emitter, golden_exporter, weight_exporter
+from npu_compiler.viz import emit_graph_ascii, emit_graph_dot, emit_lifetime_ascii
 from npu_compiler.codegen.c_project import (
-    cmake_emitter, main_emitter, mock_emitter, utils_emitter,
+    cmake_emitter,
+    main_emitter,
+    mock_emitter,
+    utils_emitter,
 )
+from npu_compiler.common import CompilerError, DiagnosticCollector, Graph, dtype_numpy, get_logger, load_config
 from npu_compiler.format_annotator import format_annotator
 from npu_compiler.graph_capture import graph_capture
+from npu_compiler.reformat_inserter import reformat_inserter
 from npu_compiler.memory_planner import memory_planner
 from npu_compiler.op_absorption import op_absorption
 from npu_compiler.op_decomposition import op_decomposition
 from npu_compiler.op_mapping import op_mapping
 from npu_compiler.scheduler import scheduler
+from npu_compiler.idma import idma
 from npu_compiler.validator import validator
 
 logger = get_logger(__name__)
 
-def _propagate_input_dtypes(graph: Graph) -> None:
-    """将输入 tensor 的 dtype 设为其首个消费节点的标注 dtype。
 
-    format_annotator 只标注输出 tensor，输入 tensor（模型输入、权重）
-    保留了 graph_capture 的原始 dtype。此函数根据消费者的 format_annotation
-    来推断输入 tensor 应使用的 dtype。
-    """
-    for t in graph.tensors.values():
-        if t.producer_node_id is not None:
-            continue  # 由 format_annotator 通过输出标注处理
-        if not t.consumer_node_ids:
-            continue
-        consumer = graph.get_node(t.consumer_node_ids[0])
-        if consumer is None:
-            continue
-        ann = getattr(consumer, "format_annotation", None)
-        if ann is None:
-            continue
-        # 找到该 tensor 在 consumer.inputs 中的位置
-        idx = None
-        for i, tid in enumerate(consumer.inputs):
-            if tid == t.id:
-                idx = i
-                break
-        if idx is not None and idx < len(ann.get("inputs", [])):
-            t.dtype = ann["inputs"][idx]["dtype"]
+# ---- 声明式 Pass 描述 ----
 
 
-def _load_configs(config_dir: str) -> dict:
+@dataclass(frozen=True)
+class _PassDesc:
+    """中间 Pass 的声明式描述。"""
+
+    name: str
+    number: str
+    run_fn: Callable
+    config_key: str | None
+    validate_fn: Callable | None = None
+    # viz_hook(graph, output_dir, cube_size) — Pass 完成后生成可视化产物
+    viz_hook: Callable | None = None
+
+
+def _emit_graph_viz(graph: Graph, output_dir: str, cube_size: int) -> None:
+    """idma 后生成算子依赖图（DOT + ASCII）。"""
+    emit_graph_dot(graph, output_dir, cube_size)
+    emit_graph_ascii(graph, output_dir, cube_size)
+
+
+_MIDDLE_PASSES: list[_PassDesc] = [
+    _PassDesc("op_mapping", "②", op_mapping.run, "mapping", op_mapping.post_validate),
+    _PassDesc(
+        "op_decomposition",
+        "③",
+        op_decomposition.run,
+        "decomposition",
+        op_decomposition.post_validate,
+    ),
+    _PassDesc("op_absorption", "④", op_absorption.run, "absorption", op_absorption.post_validate),
+    _PassDesc(
+        "format_annotator",
+        "⑤",
+        format_annotator.run,
+        "format",
+        format_annotator.post_validate,
+    ),
+    _PassDesc(
+        "reformat_inserter",
+        "⑤a",
+        reformat_inserter.run,
+        "reformat",
+        reformat_inserter.post_validate,
+    ),
+    _PassDesc(
+        "idma",
+        "⑤b",
+        idma.run,
+        "storage",
+        idma.post_validate,
+        _emit_graph_viz,
+    ),
+]
+
+
+# ---- 工具函数 ----
+
+
+def _load_configs(
+    config_dir: str,
+    target_dtype: str | None = None,
+    target_format: str | None = None,
+) -> dict:
     """加载全部配置文件。"""
+    hardware = load_config(os.path.join(config_dir, "hardware_config.yaml"))
     return {
         "mapping": load_config(os.path.join(config_dir, "direct_mappings.yaml")),
         "decomposition": load_config(os.path.join(config_dir, "decompositions.yaml")),
         "absorption": load_config(os.path.join(config_dir, "absorptions.yaml")),
-        "format": load_config(os.path.join(config_dir, "type_format_config.yaml")),
-        "hardware": load_config(os.path.join(config_dir, "hardware_config.yaml")),
+        "format": {"target_dtype": target_dtype, "target_format": target_format},
+        "reformat": {},
+        "storage": {
+            "enable_local_storage": True,
+            **hardware.get("local_bypass", {}),
+        },
+        "hardware": hardware,
         "signatures": load_config(os.path.join(config_dir, "c_api_signatures.yaml")),
     }
 
@@ -72,32 +122,113 @@ def _build_validator_config(signatures_config: dict) -> dict:
 
 def _build_codegen_plan(graph: Graph, dma_plans: list) -> dict:
     """将 Graph + DMA 计划序列化为 codegen plan dict。"""
-    return {
-        "nodes": {nid: asdict(n) for nid, n in graph.nodes.items()},
-        "tensors": {tid: asdict(t) for tid, t in graph.tensors.items()},
-        "dma_plans": [asdict(dp) for dp in dma_plans],
-        "execution_order": list(graph.execution_order),
-    }
+    plan = graph.to_dict()
+    plan["dma_plans"] = [asdict(dp) for dp in dma_plans]
+    return plan
+
+
+def _infer_golden_dtype(graph: Graph) -> type:
+    """从 graph 的 model_input tensor 推断 golden 数据精度。"""
+    for t in graph.tensors.values():
+        if t.is_model_input and t.dtype:
+            return dtype_numpy(t.dtype)
+    return np.float16
 
 
 def _run_golden(
-    model: nn.Module, dummy_input: torch.Tensor,
+    model: nn.Module,
+    dummy_input: torch.Tensor,
     mask: torch.Tensor | None = None,
+    *,
+    numpy_dtype: type = np.float16,
 ) -> tuple[list[np.ndarray], list[np.ndarray]]:
     """前向推理获取 golden 输入/输出。"""
     model.eval()
     with torch.no_grad():
         out = model(dummy_input, mask) if mask is not None else model(dummy_input)
 
-    inputs = [dummy_input.cpu().float().numpy().astype(np.float16)]
+    inputs = [dummy_input.cpu().float().numpy().astype(numpy_dtype)]
     if mask is not None:
-        inputs.append(mask.cpu().float().numpy().astype(np.float16))
+        inputs.append(mask.cpu().float().numpy().astype(numpy_dtype))
 
     if isinstance(out, torch.Tensor):
-        outputs = [out.cpu().float().numpy().astype(np.float16)]
+        outputs = [out.cpu().float().numpy().astype(numpy_dtype)]
     else:
-        outputs = [o.cpu().float().numpy().astype(np.float16) for o in out]
+        outputs = [o.cpu().float().numpy().astype(numpy_dtype) for o in out]
     return inputs, outputs
+
+
+def _run_post_validation(
+    collector: DiagnosticCollector,
+    phase: str,
+    graph: Graph,
+    validate_fn=None,
+) -> None:
+    """收集阶段校验诊断。优先使用 Pass 模块的 post_validate。"""
+    errors = graph.validate()
+    if validate_fn is not None:
+        errors.extend(validate_fn(graph))
+    for msg in errors:
+        collector.error(phase, msg)
+        logger.warning("Pass %s 校验: %s", phase, msg)
+
+
+def _run_middle_passes(
+    graph: Graph,
+    configs: dict,
+    collector: DiagnosticCollector,
+    output_dir: str,
+    cube_size: int,
+) -> Graph:
+    """Pass ②-⑤：声明式中间 Pass 循环。"""
+    for p in _MIDDLE_PASSES:
+        logger.info("Pass %s %s 开始", p.number, p.name)
+        if p.config_key is None:
+            raise CompilerError(f"Pass {p.name} 缺少 config_key")
+        graph = p.run_fn(graph, configs[p.config_key])
+        if p.validate_fn:
+            _run_post_validation(collector, p.name, graph, p.validate_fn)
+        if p.viz_hook:
+            p.viz_hook(graph, output_dir, cube_size)
+        logger.info("Pass %s 完成", p.number)
+    return graph
+
+
+def _run_late_passes(
+    graph: Graph,
+    configs: dict,
+    collector: DiagnosticCollector,
+    output_dir: str,
+    cube_size: int,
+) -> tuple[Graph, list]:
+    """Pass ⑥ validator → ⑦ memory_planner → ⑧ scheduler。"""
+    # Pass ⑥ validator
+    logger.info("Pass ⑥ validator 开始")
+    validator_cfg = _build_validator_config(configs["signatures"])
+    try:
+        graph = validator.run(graph, validator_cfg)
+    except CompilerError as exc:
+        collector.error("validator", str(exc))
+        raise
+    logger.info("Pass ⑥ 完成")
+
+    # Pass ⑦ memory_planner
+    logger.info("Pass ⑦ memory_planner 开始")
+    graph, dma_plans = memory_planner.run(graph, configs["hardware"])
+    _run_post_validation(collector, "memory_planner", graph, memory_planner.post_validate)
+    emit_lifetime_ascii(graph, output_dir, cube_size)
+    logger.info("Pass ⑦ 完成")
+
+    # Pass ⑧ scheduler
+    logger.info("Pass ⑧ scheduler 开始")
+    graph = scheduler.run(graph)
+    _run_post_validation(collector, "scheduler", graph, scheduler.post_validate)
+    logger.info("Pass ⑧ 完成")
+
+    return graph, dma_plans
+
+
+# ---- 主入口 ----
 
 
 def compile(
@@ -107,6 +238,8 @@ def compile(
     output_dir: str = "output",
     mask: torch.Tensor | None = None,
     *,
+    target_dtype: str | None = None,
+    target_format: str | None = None,
     atol: float = 1e-2,
     cosine_tol: float = 0.999,
 ) -> str:
@@ -118,73 +251,61 @@ def compile(
         config_dir: 配置文件目录路径。
         output_dir: C 工程输出目录路径。
         mask: 可选 attention mask 张量。
+        target_dtype: 全局目标 dtype（如 "fp16"），None 则继承模型原始 dtype。
+        target_format: 全局目标 format（如 "nz"），None 则继承模型原始 format。
 
     Returns:
         生成的 C 工程输出目录路径。
     """
     logger.info("=== 编译管线开始 ===")
-    configs = _load_configs(config_dir)
+    configs = _load_configs(config_dir, target_dtype=target_dtype, target_format=target_format)
+    collector = DiagnosticCollector()
 
-    # Pass ① graph_capture
+    # Pass ① graph_capture（特殊：不是 run(graph, config) 模式）
     logger.info("Pass ① graph_capture 开始")
     graph = graph_capture.capture(model, dummy_input, mask=mask)
-    for w in graph.validate_phase("graph_capture"):
-        logger.warning("Pass ① 校验: %s", w)
+    _run_post_validation(collector, "graph_capture", graph, graph_capture.post_validate)
     logger.info("Pass ① 完成: %s", graph.summary())
 
-    # Pass ② op_mapping
-    logger.info("Pass ② op_mapping 开始")
-    graph = op_mapping.run(graph, configs["mapping"])
-    for w in graph.validate_phase("op_mapping"):
-        logger.warning("Pass ② 校验: %s", w)
-    logger.info("Pass ② 完成")
+    # Pass ②-⑤ 声明式循环
+    cube_size = configs["hardware"]["fractal"]["cube_size"]
+    graph = _run_middle_passes(graph, configs, collector, output_dir, cube_size)
 
-    # Pass ③ op_decomposition
-    logger.info("Pass ③ op_decomposition 开始")
-    graph = op_decomposition.run(graph, configs["decomposition"])
-    for w in graph.validate_phase("op_decomposition"):
-        logger.warning("Pass ③ 校验: %s", w)
-    logger.info("Pass ③ 完成: %s", graph.summary())
+    # Pass ⑥-⑧
+    graph, dma_plans = _run_late_passes(graph, configs, collector, output_dir, cube_size)
 
-    # Pass ④ op_absorption
-    logger.info("Pass ④ op_absorption 开始")
-    graph = op_absorption.run(graph, configs["absorption"])
-    logger.info("Pass ④ 完成: %s", graph.summary())
-
-    # Pass ⑤ format_annotator
-    logger.info("Pass ⑤ format_annotator 开始")
-    graph = format_annotator.run(graph, configs["format"])
-    _propagate_input_dtypes(graph)
-    for w in graph.validate_phase("format_annotator"):
-        logger.warning("Pass ⑤ 校验: %s", w)
-    logger.info("Pass ⑤ 完成")
-
-    # Pass ⑥ validator
-    logger.info("Pass ⑥ validator 开始")
-    validator_cfg = _build_validator_config(configs["signatures"])
-    graph = validator.run(graph, validator_cfg)
-    logger.info("Pass ⑥ 完成")
-
-    # Pass ⑦ memory_planner
-    logger.info("Pass ⑦ memory_planner 开始")
-    graph, dma_plans = memory_planner.run(graph, configs["hardware"])
-    for w in graph.validate_phase("memory_planner"):
-        logger.warning("Pass ⑦ 校验: %s", w)
-    logger.info("Pass ⑦ 完成")
-
-    # Pass ⑧ scheduler
-    logger.info("Pass ⑧ scheduler 开始")
-    graph = scheduler.run(graph)
-    logger.info("Pass ⑧ 完成")
+    logger.info(collector.summary())
+    if collector.has_errors():
+        raise CompilerError(f"编译中止：{collector.summary()}")
 
     # Pass ⑨ codegen
+    _run_codegen(
+        model, dummy_input, mask, graph, dma_plans, configs, config_dir, output_dir, atol, cosine_tol
+    )
+
+    logger.info("=== 编译管线完成，输出目录: %s ===", output_dir)
+    return output_dir
+
+
+def _run_codegen(
+    model: nn.Module,
+    dummy_input: torch.Tensor,
+    mask: torch.Tensor | None,
+    graph: Graph,
+    dma_plans: list,
+    configs: dict,
+    config_dir: str,
+    output_dir: str,
+    atol: float,
+    cosine_tol: float,
+) -> None:
+    """Pass ⑨：C 代码生成 + 权重导出 + golden 数据。"""
     logger.info("Pass ⑨ codegen 开始")
     plan = _build_codegen_plan(graph, dma_plans)
 
     c_emitter.run(plan, output_dir, config_dir=config_dir)
     mock_emitter.run(output_dir, config_dir=config_dir)
-    main_emitter.run(plan, configs["hardware"], output_dir,
-                     atol=atol, cosine_tol=cosine_tol)
+    main_emitter.run(plan, configs["hardware"], output_dir, atol=atol, cosine_tol=cosine_tol)
     cmake_emitter.run(output_dir)
     utils_emitter.run(output_dir)
 
@@ -194,14 +315,12 @@ def compile(
         for t in plan["tensors"].values()
         if t.get("is_weight") and t.get("name")
     }
-    weight_exporter.export_weights(
-        model.state_dict(), weight_path, offsets=weight_offsets,
-    )
-
     golden_dir = os.path.join(output_dir, "golden")
-    inputs, outputs = _run_golden(model, dummy_input, mask)
-    golden_exporter.export_golden(inputs, outputs, golden_dir)
-
+    golden_dtype = _infer_golden_dtype(graph)
+    dtype_str = {np.float16: "fp16", np.float32: "fp32"}.get(golden_dtype, "fp16")
+    weight_exporter.export_weights(
+        model.state_dict(), weight_path, dtype=dtype_str, offsets=weight_offsets
+    )
+    inputs, outputs = _run_golden(model, dummy_input, mask, numpy_dtype=golden_dtype)
+    golden_exporter.export_golden(inputs, outputs, golden_dir, dtype=dtype_str)
     logger.info("Pass ⑨ 完成")
-    logger.info("=== 编译管线完成，输出目录: %s ===", output_dir)
-    return output_dir

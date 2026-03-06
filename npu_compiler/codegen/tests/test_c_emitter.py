@@ -31,21 +31,30 @@ def _load_sigs() -> dict:
 
 # -- 辅助：构造最小 node/tensor 用于单算子测试 --
 
-def _make_tensor(tid, shape, dtype="fp16", fmt="nd",
-                 hbm_offset=0, l1_offset=0, hbm_size=4096):
+
+def _make_tensor(tid, shape, dtype="fp16", fmt="nd", hbm_offset=0, l1_offset=0, hbm_size=4096):
     return {
-        "id": tid, "shape": shape, "dtype": dtype, "format": fmt,
-        "hbm_offset": hbm_offset, "hbm_size": hbm_size,
+        "id": tid,
+        "shape": shape,
+        "dtype": dtype,
+        "format": fmt,
+        "hbm_offset": hbm_offset,
+        "hbm_size": hbm_size,
         "l1_offset": l1_offset,
     }
 
 
-def _make_node(nid, npu_op, inputs, outputs, params=None,
-               compute_unit="Vector", absorbed_inputs=None):
+def _make_node(
+    nid, npu_op, inputs, outputs, params=None, compute_unit="Vector", absorbed_inputs=None
+):
     return {
-        "id": nid, "op_type": npu_op, "npu_op": npu_op,
-        "inputs": inputs, "outputs": outputs,
-        "params": params or {}, "compute_unit": compute_unit,
+        "id": nid,
+        "op_type": npu_op,
+        "npu_op": npu_op,
+        "inputs": inputs,
+        "outputs": outputs,
+        "params": params or {},
+        "compute_unit": compute_unit,
         "absorbed_inputs": absorbed_inputs or {},
     }
 
@@ -64,7 +73,7 @@ class TestOpBlockGeneration:
         dp = plan["dma_plans"][0]
         block = c_emitter.gen_op_block(node, plan["tensors"], dp, sigs)
         assert "npu_dma_load" in block
-        assert "npu_matmul" in block
+        assert "cube_matmul" in block
         assert "npu_dma_store" in block
         assert "npu_dma_barrier" in block
 
@@ -74,7 +83,7 @@ class TestOpBlockGeneration:
         node = plan["nodes"]["node_1"]
         dp = plan["dma_plans"][1]
         block = c_emitter.gen_op_block(node, plan["tensors"], dp, sigs)
-        assert "npu_gelu" in block
+        assert "vector_gelu" in block
         assert "2048" in block  # elem_count = 1*32*64
 
     def test_add_block(self):
@@ -83,17 +92,16 @@ class TestOpBlockGeneration:
         node = plan["nodes"]["node_2"]
         dp = plan["dma_plans"][2]
         block = c_emitter.gen_op_block(node, plan["tensors"], dp, sigs)
-        assert "npu_add" in block
+        assert "vector_add" in block
 
     def test_no_loads_no_barrier_before_call(self):
         """无 DMA load 时，不生成 barrier。"""
         sigs = _load_sigs()
-        tensors = {"in": _make_tensor("in", [1, 32, 64]),
-                   "out": _make_tensor("out", [1, 32, 64])}
-        node = _make_node("n", "npu_gelu", ["in"], ["out"])
+        tensors = {"in": _make_tensor("in", [1, 32, 64]), "out": _make_tensor("out", [1, 32, 64])}
+        node = _make_node("n", "vector_gelu", ["in"], ["out"])
         block = c_emitter.gen_op_block(node, tensors, _empty_dma(), sigs)
         # 只有 op 调用，没有 DMA 部分
-        assert "npu_gelu" in block
+        assert "vector_gelu" in block
         assert "npu_dma_load" not in block
 
     def test_unknown_op_raises(self):
@@ -112,7 +120,7 @@ class TestParamFilling:
         node = plan["nodes"]["node_0"]
         dp = plan["dma_plans"][0]
         block = c_emitter.gen_op_block(node, plan["tensors"], dp, sigs)
-        assert "npu_matmul(" in block
+        assert "cube_matmul(" in block
         assert "NPU_DTYPE_FP16" in block
 
     def test_addr_params_use_offsets(self):
@@ -125,14 +133,15 @@ class TestParamFilling:
         assert "(void*)(l1 + 4096)" in block
 
     def test_mul_scalar_float_param(self):
-        """npu_mul_scalar 的 scalar 参数应为浮点数格式。"""
+        """vector_mul_scalar 的 scalar 参数应为浮点数格式。"""
         sigs = _load_sigs()
-        tensors = {"in": _make_tensor("in", [1, 32, 64]),
-                   "out": _make_tensor("out", [1, 32, 64], l1_offset=4096)}
-        node = _make_node("n", "npu_mul_scalar", ["in"], ["out"],
-                          params={"scalar_value": 0.25})
+        tensors = {
+            "in": _make_tensor("in", [1, 32, 64]),
+            "out": _make_tensor("out", [1, 32, 64], l1_offset=4096),
+        }
+        node = _make_node("n", "vector_mul_scalar", ["in"], ["out"], params={"scalar_value": 0.25})
         block = c_emitter.gen_op_block(node, tensors, _empty_dma(), sigs)
-        assert "npu_mul_scalar(" in block
+        assert "vector_mul_scalar(" in block
         assert "0.250000f" in block
         assert "2048" in block  # elem_count
 
@@ -145,29 +154,28 @@ class TestParamFilling:
             "beta": _make_tensor("beta", [64], l1_offset=8192),
             "out": _make_tensor("out", [1, 32, 64], l1_offset=12288),
         }
-        node = _make_node("n", "npu_layernorm_part1",
-                          ["in", "gamma", "beta"], ["out"],
-                          params={"epsilon": 1e-5})
+        node = _make_node(
+            "n", "vector_layernorm_part1", ["in", "gamma", "beta"], ["out"], params={"epsilon": 1e-5}
+        )
         block = c_emitter.gen_op_block(node, tensors, _empty_dma(), sigs)
-        assert "npu_layernorm_part1(" in block
-        assert "64" in block   # hidden = shape[-1]
-        assert "32" in block   # seq = shape[-2]
+        assert "vector_layernorm_part1(" in block
+        assert "64" in block  # hidden = shape[-1]
+        assert "32" in block  # seq = shape[-2]
 
     def test_transpose_4d_with_int_array(self):
-        """npu_transpose 4D 接口：ndim + dims(int_array) + dim0/dim1。"""
+        """vector_transpose 4D 接口：ndim + dims(int_array) + dim0/dim1。"""
         sigs = _load_sigs()
         tensors = {
             "in": _make_tensor("in", [1, 4, 32, 16]),
             "out": _make_tensor("out", [1, 4, 16, 32], l1_offset=4096),
         }
-        node = _make_node("n", "npu_transpose", ["in"], ["out"],
-                          params={"dim0": 2, "dim1": 3})
+        node = _make_node("n", "vector_transpose", ["in"], ["out"], params={"dim0": 2, "dim1": 3})
         block = c_emitter.gen_op_block(node, tensors, _empty_dma(), sigs)
-        assert "npu_transpose(" in block
-        assert "4" in block    # ndim
+        assert "vector_transpose(" in block
+        assert "4" in block  # ndim
         assert "(const int[]){1, 4, 32, 16}" in block  # dims
-        assert "2" in block    # dim0
-        assert "3" in block    # dim1
+        assert "2" in block  # dim0
+        assert "3" in block  # dim1
 
 
 class TestModelGraphGeneration:
@@ -178,17 +186,17 @@ class TestModelGraphGeneration:
         sigs = _load_sigs()
         code = c_emitter.emit_model_graph_c(plan, sigs)
         assert "void model_run(" in code
-        assert "npu_matmul" in code
-        assert "npu_gelu" in code
-        assert "npu_add" in code
+        assert "cube_matmul" in code
+        assert "vector_gelu" in code
+        assert "vector_add" in code
 
     def test_execution_order_preserved(self):
         plan = _load_plan()
         sigs = _load_sigs()
         code = c_emitter.emit_model_graph_c(plan, sigs)
-        matmul_pos = code.index("npu_matmul")
-        gelu_pos = code.index("npu_gelu")
-        add_pos = code.index("npu_add")
+        matmul_pos = code.index("cube_matmul")
+        gelu_pos = code.index("vector_gelu")
+        add_pos = code.index("vector_add")
         assert matmul_pos < gelu_pos < add_pos
 
     def test_model_graph_h(self):
@@ -217,28 +225,44 @@ class TestDmaBlock:
     def test_load_format_conversion(self):
         """DMA load 支持格式转换参数。"""
         sigs = _load_sigs()
-        tensors = {"in": _make_tensor("in", [1, 32, 64]),
-                   "out": _make_tensor("out", [1, 32, 64])}
-        node = _make_node("n", "npu_gelu", ["in"], ["out"])
-        dma = {"loads": [{
-            "op": "load", "tensor_id": "in", "hbm_offset": 0,
-            "l1_offset": 0, "size_bytes": 4096,
-            "src_format": "nd", "dst_format": "nz",
-        }], "stores": []}
+        tensors = {"in": _make_tensor("in", [1, 32, 64]), "out": _make_tensor("out", [1, 32, 64])}
+        node = _make_node("n", "vector_gelu", ["in"], ["out"])
+        dma = {
+            "loads": [
+                {
+                    "op": "load",
+                    "tensor_id": "in",
+                    "hbm_offset": 0,
+                    "l1_offset": 0,
+                    "size_bytes": 4096,
+                    "src_format": "nd",
+                    "dst_format": "nz",
+                }
+            ],
+            "stores": [],
+        }
         block = c_emitter.gen_op_block(node, tensors, dma, sigs)
         assert "NPU_FORMAT_ND" in block
         assert "NPU_FORMAT_NZ" in block
 
     def test_store_uses_correct_offsets(self):
         sigs = _load_sigs()
-        tensors = {"in": _make_tensor("in", [1, 32, 64]),
-                   "out": _make_tensor("out", [1, 32, 64])}
-        node = _make_node("n", "npu_gelu", ["in"], ["out"])
-        dma = {"loads": [], "stores": [{
-            "op": "store", "tensor_id": "out", "hbm_offset": 8192,
-            "l1_offset": 4096, "size_bytes": 4096,
-            "src_format": "nd", "dst_format": "nd",
-        }]}
+        tensors = {"in": _make_tensor("in", [1, 32, 64]), "out": _make_tensor("out", [1, 32, 64])}
+        node = _make_node("n", "vector_gelu", ["in"], ["out"])
+        dma = {
+            "loads": [],
+            "stores": [
+                {
+                    "op": "store",
+                    "tensor_id": "out",
+                    "hbm_offset": 8192,
+                    "l1_offset": 4096,
+                    "size_bytes": 4096,
+                    "src_format": "nd",
+                    "dst_format": "nd",
+                }
+            ],
+        }
         block = c_emitter.gen_op_block(node, tensors, dma, sigs)
         assert "npu_dma_store((void*)(hbm + 8192)" in block
         assert "(void*)(l1 + 4096)" in block
@@ -255,20 +279,22 @@ class TestSyntaxCheck:
 
             weights_h = os.path.join(tmpdir, "src", "model_weights.h")
             with open(weights_h, "w") as f:
-                f.write("#ifndef MODEL_WEIGHTS_H\n#define MODEL_WEIGHTS_H\n"
-                        "static inline void load_weights(unsigned char* hbm)"
-                        " { (void)hbm; }\n#endif\n")
+                f.write(
+                    "#ifndef MODEL_WEIGHTS_H\n#define MODEL_WEIGHTS_H\n"
+                    "static inline void load_weights(unsigned char* hbm)"
+                    " { (void)hbm; }\n#endif\n"
+                )
 
             model_c = os.path.join(tmpdir, "src", "model_graph.c")
             mock_h = os.path.join(tmpdir, "npu_mock.h")
             cmd = [
-                "gcc", "-fsyntax-only", "-std=c99",
+                "gcc",
+                "-fsyntax-only",
+                "-std=c99",
                 f"-include{mock_h}",
                 f"-I{os.path.join(tmpdir, 'src')}",
                 f"-I{tmpdir}",
                 model_c,
             ]
             result = subprocess.run(cmd, capture_output=True, text=True)
-            assert result.returncode == 0, (
-                f"gcc 语法检查失败:\n{result.stderr}"
-            )
+            assert result.returncode == 0, f"gcc 语法检查失败:\n{result.stderr}"

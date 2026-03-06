@@ -36,7 +36,6 @@ def compile(model: nn.Module, dummy_input: torch.Tensor, config_dir: str) -> str
 | decompositions.yaml | 裂解规则 |
 | absorptions.yaml | 吸收规则 |
 | c_api_signatures.yaml | NPU C接口函数签名 |
-| type_format_config.yaml | dtype/format枚举与算子要求 |
 | hardware_config.yaml | 硬件存储参数 |
 | model_config.yaml | 模型参数 |
 | codegen_config.yaml | 代码生成选项 |

@@ -70,9 +70,7 @@ def validate_c(output_dir: str) -> dict:
         f.write(_NPU_MOCK_SHIM)
 
     # 构建编译命令
-    mock_sources = [
-        os.path.join(mock_dir, src) for src in _MOCK_SOURCES
-    ]
+    mock_sources = [os.path.join(mock_dir, src) for src in _MOCK_SOURCES]
     project_sources = [
         "main.c",
         "src/model_graph.c",
@@ -83,11 +81,16 @@ def validate_c(output_dir: str) -> dict:
     exe_name = "npu_model_run"
 
     cmd = [
-        cc, "-std=c99", "-Wall", "-O2",
-        "-o", exe_name,
+        cc,
+        "-std=c99",
+        "-Wall",
+        "-O2",
+        "-o",
+        exe_name,
         *project_sources,
         *mock_sources,
-        "-I.", "-Isrc",
+        "-I.",
+        "-Isrc",
         f"-I{os.path.join(mock_dir, 'include')}",
         "-lm",
     ]
@@ -95,8 +98,11 @@ def validate_c(output_dir: str) -> dict:
     # 编译
     logger.info("编译 C 工程: %s", " ".join(cmd[:6]) + " ...")
     comp = subprocess.run(
-        cmd, cwd=output_dir,
-        capture_output=True, text=True, timeout=120,
+        cmd,
+        cwd=output_dir,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     if comp.returncode != 0:
         logger.error("编译失败:\n%s", comp.stderr)
@@ -108,8 +114,11 @@ def validate_c(output_dir: str) -> dict:
     exe_path = os.path.join(output_dir, exe_name)
     logger.info("运行 C 工程: %s", exe_path)
     run = subprocess.run(
-        [f"./{exe_name}"], cwd=output_dir,
-        capture_output=True, text=True, timeout=60,
+        [f"./{exe_name}"],
+        cwd=output_dir,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
 
     passed = run.returncode == 0
@@ -123,7 +132,6 @@ def validate_c(output_dir: str) -> dict:
     if passed:
         logger.info("C golden 比对通过!\n%s", run.stdout)
     else:
-        logger.error("C golden 比对失败 (exit %d):\n%s\n%s",
-                      run.returncode, run.stdout, run.stderr)
+        logger.error("C golden 比对失败 (exit %d):\n%s\n%s", run.returncode, run.stdout, run.stderr)
 
     return result

@@ -1,3 +1,4 @@
+# TEST FIXTURE — 生产配置在 integration/config/
 memory:
   hbm:
     total_size_bytes: 4294967296
@@ -19,3 +20,14 @@ dma:
   supports_format_convert: true
   supports_dtype_cast: false
   max_transfer_size_bytes: 1048576
+
+local_bypass:
+  allowed_pairs:
+    - ["cube", "vector"]
+    - ["cube", "idma"]
+    - ["idma", "vector"]
+    - ["vector", "vector"]
+
+pipe_bypass:
+  pipe_pairs:
+    - ["cube", "vector"]

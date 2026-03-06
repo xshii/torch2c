@@ -6,14 +6,14 @@ from npu_compiler.common.config_loader import load_config
 from npu_compiler.common.errors import ConfigError
 
 
-@pytest.fixture()
+@pytest.fixture
 def valid_yaml(tmp_path):
     p = tmp_path / "cfg.yaml"
     p.write_text("target: npu\nbatch_size: 4\n", encoding="utf-8")
     return str(p)
 
 
-@pytest.fixture()
+@pytest.fixture
 def empty_yaml(tmp_path):
     p = tmp_path / "empty.yaml"
     p.write_text("", encoding="utf-8")
