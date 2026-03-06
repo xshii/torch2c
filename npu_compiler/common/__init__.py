@@ -1,7 +1,7 @@
 """common — 基础设施模块。"""
 
 from .config_loader import load_config
-from .dtypes import DTYPE_INFO, DtypeInfo, dtype_bytes, dtype_c_enum
+from .dtypes import DTYPE_INFO, DTYPE_NUMPY, DtypeInfo, dtype_bytes, dtype_c_enum, dtype_numpy
 from .errors import (
     AbsorptionError,
     CodegenError,
@@ -21,6 +21,7 @@ from .pass_protocol import CompilerPass
 
 __all__ = [
     "DTYPE_INFO",
+    "DTYPE_NUMPY",
     "AbsorptionError",
     "CodegenError",
     "CompileDiagnostic",
@@ -39,6 +40,7 @@ __all__ = [
     "ValidationError",
     "dtype_bytes",
     "dtype_c_enum",
+    "dtype_numpy",
     "get_logger",
     "load_config",
     "setup_logging",

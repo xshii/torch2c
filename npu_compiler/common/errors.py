@@ -44,7 +44,11 @@ class DiagnosticCollector:
     def summary(self) -> str:
         warnings = sum(1 for d in self._items if d.severity == Severity.WARNING)
         errors = sum(1 for d in self._items if d.severity == Severity.ERROR)
-        return f"诊断汇总: {errors} error(s), {warnings} warning(s)"
+        parts = [f"诊断汇总: {errors} error(s), {warnings} warning(s)"]
+        for d in self._items:
+            if d.severity == Severity.ERROR:
+                parts.append(f"  [{d.phase}] {d.message}")
+        return "\n".join(parts)
 
 
 class CompilerError(Exception):

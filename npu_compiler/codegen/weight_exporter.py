@@ -6,11 +6,9 @@ import os
 
 import numpy as np
 
-from npu_compiler.common import CodegenError, get_logger
+from npu_compiler.common import DTYPE_NUMPY, CodegenError, get_logger
 
 logger = get_logger("codegen.weight_exporter")
-
-_DTYPE_NP = {"fp16": np.float16, "fp32": np.float32, "int8": np.int8}
 
 _HEX_BYTES_PER_LINE = 16
 
@@ -81,7 +79,7 @@ def export_weights(
 ) -> None:
     """将 PyTorch state_dict 导出为 model_weights.h。"""
     logger.info("weight_exporter: 导出权重到 %s", output_path)
-    np_dtype = _DTYPE_NP.get(dtype)
+    np_dtype = DTYPE_NUMPY.get(dtype)
     if np_dtype is None:
         raise CodegenError(f"不支持的 dtype: {dtype}")
 

@@ -18,7 +18,7 @@ from npu_compiler.codegen.c_project import (
     mock_emitter,
     utils_emitter,
 )
-from npu_compiler.common import CompilerError, DiagnosticCollector, Graph, get_logger, load_config
+from npu_compiler.common import CompilerError, DiagnosticCollector, Graph, dtype_numpy, get_logger, load_config
 from npu_compiler.format_annotator import format_annotator
 from npu_compiler.graph_capture import graph_capture
 from npu_compiler.reformat_inserter import reformat_inserter
@@ -99,6 +99,7 @@ def _load_configs(
     target_format: str | None = None,
 ) -> dict:
     """加载全部配置文件。"""
+    hardware = load_config(os.path.join(config_dir, "hardware_config.yaml"))
     return {
         "mapping": load_config(os.path.join(config_dir, "direct_mappings.yaml")),
         "decomposition": load_config(os.path.join(config_dir, "decompositions.yaml")),
@@ -107,9 +108,9 @@ def _load_configs(
         "reformat": {},
         "storage": {
             "enable_local_storage": True,
-            **load_config(os.path.join(config_dir, "hardware_config.yaml")).get("local_bypass", {}),
+            **hardware.get("local_bypass", {}),
         },
-        "hardware": load_config(os.path.join(config_dir, "hardware_config.yaml")),
+        "hardware": hardware,
         "signatures": load_config(os.path.join(config_dir, "c_api_signatures.yaml")),
     }
 
@@ -121,26 +122,16 @@ def _build_validator_config(signatures_config: dict) -> dict:
 
 def _build_codegen_plan(graph: Graph, dma_plans: list) -> dict:
     """将 Graph + DMA 计划序列化为 codegen plan dict。"""
-    return {
-        "nodes": {nid: asdict(n) for nid, n in graph.nodes.items()},
-        "tensors": {tid: asdict(t) for tid, t in graph.tensors.items()},
-        "dma_plans": [asdict(dp) for dp in dma_plans],
-        "execution_order": list(graph.execution_order),
-    }
-
-
-_NUMPY_DTYPE_MAP: dict[str, type] = {
-    "fp16": np.float16,
-    "fp32": np.float32,
-    "bf16": np.float32,  # numpy 不支持 bf16，用 fp32 近似
-}
+    plan = graph.to_dict()
+    plan["dma_plans"] = [asdict(dp) for dp in dma_plans]
+    return plan
 
 
 def _infer_golden_dtype(graph: Graph) -> type:
     """从 graph 的 model_input tensor 推断 golden 数据精度。"""
     for t in graph.tensors.values():
         if t.is_model_input and t.dtype:
-            return _NUMPY_DTYPE_MAP.get(t.dtype, np.float16)
+            return dtype_numpy(t.dtype)
     return np.float16
 
 
@@ -180,6 +171,61 @@ def _run_post_validation(
     for msg in errors:
         collector.error(phase, msg)
         logger.warning("Pass %s 校验: %s", phase, msg)
+
+
+def _run_middle_passes(
+    graph: Graph,
+    configs: dict,
+    collector: DiagnosticCollector,
+    output_dir: str,
+    cube_size: int,
+) -> Graph:
+    """Pass ②-⑤：声明式中间 Pass 循环。"""
+    for p in _MIDDLE_PASSES:
+        logger.info("Pass %s %s 开始", p.number, p.name)
+        if p.config_key is None:
+            raise CompilerError(f"Pass {p.name} 缺少 config_key")
+        graph = p.run_fn(graph, configs[p.config_key])
+        if p.validate_fn:
+            _run_post_validation(collector, p.name, graph, p.validate_fn)
+        if p.viz_hook:
+            p.viz_hook(graph, output_dir, cube_size)
+        logger.info("Pass %s 完成", p.number)
+    return graph
+
+
+def _run_late_passes(
+    graph: Graph,
+    configs: dict,
+    collector: DiagnosticCollector,
+    output_dir: str,
+    cube_size: int,
+) -> tuple[Graph, list]:
+    """Pass ⑥ validator → ⑦ memory_planner → ⑧ scheduler。"""
+    # Pass ⑥ validator
+    logger.info("Pass ⑥ validator 开始")
+    validator_cfg = _build_validator_config(configs["signatures"])
+    try:
+        graph = validator.run(graph, validator_cfg)
+    except CompilerError as exc:
+        collector.error("validator", str(exc))
+        raise
+    logger.info("Pass ⑥ 完成")
+
+    # Pass ⑦ memory_planner
+    logger.info("Pass ⑦ memory_planner 开始")
+    graph, dma_plans = memory_planner.run(graph, configs["hardware"])
+    _run_post_validation(collector, "memory_planner", graph, memory_planner.post_validate)
+    emit_lifetime_ascii(graph, output_dir, cube_size)
+    logger.info("Pass ⑦ 完成")
+
+    # Pass ⑧ scheduler
+    logger.info("Pass ⑧ scheduler 开始")
+    graph = scheduler.run(graph)
+    _run_post_validation(collector, "scheduler", graph, scheduler.post_validate)
+    logger.info("Pass ⑧ 完成")
+
+    return graph, dma_plans
 
 
 # ---- 主入口 ----
@@ -223,37 +269,10 @@ def compile(
 
     # Pass ②-⑤ 声明式循环
     cube_size = configs["hardware"]["fractal"]["cube_size"]
-    for p in _MIDDLE_PASSES:
-        logger.info("Pass %s %s 开始", p.number, p.name)
-        graph = p.run_fn(graph, configs[p.config_key])
-        if p.validate_fn:
-            _run_post_validation(collector, p.name, graph, p.validate_fn)
-        if p.viz_hook:
-            p.viz_hook(graph, output_dir, cube_size)
-        logger.info("Pass %s 完成", p.number)
+    graph = _run_middle_passes(graph, configs, collector, output_dir, cube_size)
 
-    # Pass ⑥ validator（特殊：config 从 signatures 派生）
-    logger.info("Pass ⑥ validator 开始")
-    validator_cfg = _build_validator_config(configs["signatures"])
-    try:
-        graph = validator.run(graph, validator_cfg)
-    except Exception as exc:
-        collector.error("validator", str(exc))
-        raise
-    logger.info("Pass ⑥ 完成")
-
-    # Pass ⑦ memory_planner（特殊：返回 tuple）
-    logger.info("Pass ⑦ memory_planner 开始")
-    graph, dma_plans = memory_planner.run(graph, configs["hardware"])
-    _run_post_validation(collector, "memory_planner", graph, memory_planner.post_validate)
-    emit_lifetime_ascii(graph, output_dir, cube_size)
-    logger.info("Pass ⑦ 完成")
-
-    # Pass ⑧ scheduler（特殊：无 config）
-    logger.info("Pass ⑧ scheduler 开始")
-    graph = scheduler.run(graph)
-    _run_post_validation(collector, "scheduler", graph, scheduler.post_validate)
-    logger.info("Pass ⑧ 完成")
+    # Pass ⑥-⑧
+    graph, dma_plans = _run_late_passes(graph, configs, collector, output_dir, cube_size)
 
     logger.info(collector.summary())
     if collector.has_errors():

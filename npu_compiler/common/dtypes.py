@@ -1,8 +1,10 @@
-"""统一 dtype 元信息：字节数 + C 枚举名。"""
+"""统一 dtype 元信息：字节数 + C 枚举名 + numpy 映射。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+import numpy as np
 
 
 @dataclass(frozen=True)
@@ -32,3 +34,16 @@ def dtype_c_enum(dtype: str) -> str:
     """返回 dtype 对应的 C 枚举名。"""
     info = DTYPE_INFO.get(dtype)
     return info.c_enum if info else "NPU_DTYPE_FP16"
+
+
+DTYPE_NUMPY: dict[str, type] = {
+    "fp16": np.float16,
+    "fp32": np.float32,
+    "bf16": np.float32,  # numpy 不支持 bf16，用 fp32 近似
+    "int8": np.int8,
+}
+
+
+def dtype_numpy(dtype: str) -> type:
+    """返回 dtype 对应的 numpy dtype，默认 np.float16。"""
+    return DTYPE_NUMPY.get(dtype, np.float16)

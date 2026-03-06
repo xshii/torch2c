@@ -36,16 +36,17 @@ class SourceResolver:
 
         # tensor_desc: 整个 tensor 展开为结构体
         if ptype == "tensor_desc":
+            if len(parts) < 2:
+                raise CodegenError(f"tensor_desc source 格式错误（需要至少 2 段）: {source}")
             return self._resolve_tensor_desc(parts[1], addr_shift)
-        # dtype_enum / format_enum: 从 tensor 取枚举
-        if ptype == "dtype_enum":
-            return self._resolve_tensor_ref(parts[1], parts[2], parts[3:], param)
-        if ptype == "format_enum":
-            return self._resolve_tensor_ref(parts[1], parts[2], parts[3:], param)
-
-        if parts[0] == "tensor":
+        # dtype_enum / format_enum / tensor ref: 从 tensor 取字段
+        if ptype in ("dtype_enum", "format_enum") or parts[0] == "tensor":
+            if len(parts) < 3:
+                raise CodegenError(f"tensor ref source 格式错误（需要至少 3 段）: {source}")
             return self._resolve_tensor_ref(parts[1], parts[2], parts[3:], param)
         if parts[0] == "param":
+            if len(parts) < 2:
+                raise CodegenError(f"param source 格式错误（需要至少 2 段）: {source}")
             return self._resolve_param_ref(parts[1], param)
         raise CodegenError(f"未知 source 格式: {source}")
 
@@ -63,13 +64,19 @@ class SourceResolver:
     def find_tensor(self, key: str):
         """根据 key (input_0, output_0, mask 等) 查找 tensor。"""
         if key.startswith("input_"):
-            idx = int(key.split("_")[1])
+            try:
+                idx = int(key.split("_")[1])
+            except (IndexError, ValueError) as exc:
+                raise CodegenError(f"无效的 tensor key: {key}") from exc
             inputs = self._node.get("inputs", [])
             absorbed_tids = set(self._node.get("absorbed_inputs", {}).values())
             regular = [tid for tid in inputs if tid not in absorbed_tids]
             return self._tensors.get(regular[idx]) if idx < len(regular) else None
         if key.startswith("output_"):
-            idx = int(key.split("_")[1])
+            try:
+                idx = int(key.split("_")[1])
+            except (IndexError, ValueError) as exc:
+                raise CodegenError(f"无效的 tensor key: {key}") from exc
             outputs = self._node.get("outputs", [])
             return self._tensors.get(outputs[idx]) if idx < len(outputs) else None
         if key == "mask":
@@ -113,7 +120,9 @@ class SourceResolver:
             return str(len(t.get("shape", [])))
         if field == "elem_count":
             return str(math.prod(t.get("shape", [1])))
-        return str(t.get(field, 0))
+        if field not in t:
+            raise CodegenError(f"未知的 tensor 字段: {field}")
+        return str(t[field])
 
 
 def _format_value(val, ptype: str) -> str:
@@ -134,6 +143,8 @@ def _gen_op_call(
     for p in sig.get("params", []):
         if p["type"] == "int_array":
             parts = p["source"].split(".")
+            if len(parts) < 2:
+                raise CodegenError(f"int_array source 格式错误: {p['source']}")
             t = resolver.find_tensor(parts[1])
             shape = t.get("shape", []) if t else []
             args.append(f"(const int[]){{{', '.join(str(s) for s in shape)}}}")

@@ -12,7 +12,8 @@ import re
 
 from npu_compiler.common import Graph, get_logger
 from npu_compiler.memory_planner._utils import align_up, calc_padded_size
-from npu_compiler.memory_planner.memory_planner import _analyze_l1_lifetimes, _analyze_lifetimes
+from npu_compiler.memory_planner._hbm_alloc import analyze_lifetimes
+from npu_compiler.memory_planner._l1_alloc import _analyze_l1_lifetimes
 from npu_compiler.viz._utils import (
     BG_COLORS, BOLD, CYAN, DIM, RESET, STORAGE_SYMBOL,
     human_size,
@@ -37,7 +38,7 @@ def render_ascii(
     order = graph.execution_order
     n_ops = len(order)
 
-    lifetimes = _analyze_l1_lifetimes(graph) if mode == "l1" else _analyze_lifetimes(graph)
+    lifetimes = _analyze_l1_lifetimes(graph) if mode == "l1" else analyze_lifetimes(graph)
 
     blocks: list[dict] = []
     for tid, (first, last) in lifetimes.items():

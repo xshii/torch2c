@@ -7,11 +7,8 @@ import pytest
 from npu_compiler.common import Graph, Node, Tensor, load_config
 from npu_compiler.common.errors import MemoryPlanError
 from npu_compiler.memory_planner import run
-from npu_compiler.memory_planner.memory_planner import (
-    align_up,
-    calc_padded_size,
-    post_validate,
-)
+from npu_compiler.memory_planner._utils import align_up, calc_padded_size
+from npu_compiler.memory_planner.memory_planner import post_validate
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "hardware_config.yaml")
 
