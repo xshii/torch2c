@@ -18,6 +18,15 @@ from .errors import (
 from .graph_ir import Graph, Node, Tensor
 from .logger import get_logger, setup_logging
 from .compile_config import get_model_config, torch2c_config
+from .npu_annotate import (
+    NpuSpec,
+    format_annotation,
+    format_model_annotations,
+    get_input_annotation,
+    get_npu_annotations,
+    npu,
+    npu_input,
+)
 from .pass_protocol import CompilerPass
 from .paths import (
     DEFAULT_OUTPUT_DIR,
@@ -48,13 +57,20 @@ __all__ = [
     "MemoryPlanError",
     "NPU_CPU_MOCK_DIR",
     "Node",
+    "NpuSpec",
     "PACKAGE_ROOT",
     "PROJECT_ROOT",
     "Severity",
     "Tensor",
     "ValidationError",
+    "get_input_annotation",
     "get_model_config",
+    "get_npu_annotations",
+    "npu",
+    "npu_input",
     "torch2c_config",
+    "format_annotation",
+    "format_model_annotations",
     "dtype_bytes",
     "dtype_c_enum",
     "dtype_numpy",

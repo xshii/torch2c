@@ -63,23 +63,28 @@ def run(graph: Graph, config: dict) -> Graph:
         if node.npu_op is None:
             continue
 
-        # 为每个输入构建标注，dtype/format 来自 tensor 自身或用户覆盖
+        # per-node npu() 标注（优先级最高）：NpuSpec 对象
+        npu_ann = node.params.get("_npu", {})
+        npu_in = npu_ann.get("input")    # NpuSpec | None
+        npu_out = npu_ann.get("output")  # NpuSpec | None
+
+        # 为每个输入构建标注
+        # 优先级：per-node NpuSpec > global target > tensor 原始值 > 默认
         input_annotations = []
         for tid in node.inputs:
             t = graph.get_tensor(tid)
             if t is not None:
-                input_annotations.append({
-                    "format": target_format or t.format or "nd",
-                    "dtype": target_dtype or t.dtype or "fp16",
-                })
+                fmt = (npu_in.format if npu_in else None) or target_format or t.format or "nd"
+                dt = (npu_in.dtype if npu_in else None) or target_dtype or t.dtype or "fp16"
+                input_annotations.append({"format": fmt, "dtype": dt})
 
         # 为每个输出构建标注并同步更新 tensor
         output_annotations = []
         for tid in node.outputs:
             t = graph.get_tensor(tid)
             if t is not None:
-                fmt = target_format or t.format or "nd"
-                dt = target_dtype or t.dtype or "fp16"
+                fmt = (npu_out.format if npu_out else None) or target_format or t.format or "nd"
+                dt = (npu_out.dtype if npu_out else None) or target_dtype or t.dtype or "fp16"
                 output_annotations.append({"format": fmt, "dtype": dt})
                 t.format = fmt
                 t.dtype = dt

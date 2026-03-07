@@ -7,8 +7,6 @@
 #   - addr_shift 由 l1 alignment 决定（32B → 5位）
 #   - compute_dtype 指定算子计算精度
 
-addr_shift: 5  # log2(32), 来自 l1 alignment
-
 compute_ops:
 
   cube_matmul:

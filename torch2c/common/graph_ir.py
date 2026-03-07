@@ -43,12 +43,19 @@ from dataclasses import asdict, dataclass, field
 
 @dataclass
 class Tensor:
-    """张量描述。"""
+    """张量描述。
+
+    dtype/format 表示 NPU 目标精度/格式（经 npu() 标注或 format_annotator 设置）。
+    src_dtype 保留原始精度（来自 .pth 文件 / torch.export），
+    用于 codegen 生成加载时的 dtype 转换代码。
+    format 是纯 NPU 概念，PyTorch 侧始终为 nd，无需保留源值。
+    """
 
     id: str
     shape: list[int]
     dtype: str
     format: str = "nd"
+    src_dtype: str | None = None  # 原始精度（来自 .pth / torch.export）
     hbm_offset: int | None = None
     hbm_size: int | None = None
     l1_offset: int | None = None
@@ -77,6 +84,7 @@ class Node:
     schedule_order: int | None = None
     dependencies: list[str] = field(default_factory=list)
     absorbed_inputs: dict = field(default_factory=dict)
+    module_path: str | None = None
 
 
 @dataclass
@@ -201,3 +209,63 @@ class Graph:
         for op, cnt in sorted(op_counts.items()):
             lines.append(f"  {op}: {cnt}")
         return "\n".join(lines)
+
+    def format_npu_annotations(self) -> str:
+        """格式化 graph 中所有 npu 标注，按 pattern 分组汇总。"""
+        from .npu_annotate import format_annotation
+
+        sections: list[str] = []
+
+        # ---- 节点标注：按 annotation pattern 分组 ----
+        annotated = 0
+        pattern_groups: dict[str, list[str]] = {}  # pattern → [op_types]
+        for nid in self.execution_order:
+            node = self.nodes[nid]
+            npu_ann = node.params.get("_npu")
+            if not npu_ann:
+                continue
+            annotated += 1
+            key = format_annotation(npu_ann)
+            pattern_groups.setdefault(key, []).append(node.op_type)
+
+        if pattern_groups:
+            lines = [f"[Node annotations] ({annotated}/{len(self.nodes)} nodes)"]
+            for pattern, ops in pattern_groups.items():
+                # 统计各 op 出现次数
+                op_counts: dict[str, int] = {}
+                for op in ops:
+                    short = op.rsplit(".", 1)[0] if "." in op else op
+                    op_counts[short] = op_counts.get(short, 0) + 1
+                op_summary = ", ".join(f"{op}×{c}" if c > 1 else op for op, c in op_counts.items())
+                lines.append(f"  {len(ops):3d} nodes  {pattern}")
+                lines.append(f"           ({op_summary})")
+            sections.append("\n".join(lines))
+
+        # ---- 权重标注：按 src → target 转换分组 ----
+        weight_groups: dict[str, list[str]] = {}
+        for t in self.tensors.values():
+            if t.is_weight and t.name:
+                tgt = f"{t.dtype}/{t.format}"
+                key = f"{t.src_dtype} → {tgt}" if t.src_dtype and t.src_dtype != t.dtype else tgt
+                weight_groups.setdefault(key, []).append(t.name)
+
+        if weight_groups:
+            total = sum(len(v) for v in weight_groups.values())
+            lines = [f"[Weight tensors] ({total} total)"]
+            for spec, names in weight_groups.items():
+                short_names = [n.rsplit(".", 1)[-1] for n in names]
+                unique = sorted(set(short_names))
+                lines.append(f"  {len(names):3d} weights  {spec:20s} ({', '.join(unique)})")
+            sections.append("\n".join(lines))
+
+        # ---- 输入标注 ----
+        input_lines = ["[Input tensors]"]
+        for t in self.tensors.values():
+            if t.is_model_input:
+                tgt = f"{t.dtype}/{t.format}"
+                conv = f"{t.src_dtype} → {tgt}" if t.src_dtype and t.src_dtype != t.dtype else tgt
+                input_lines.append(f"  {t.id:10s} {conv}")
+        if len(input_lines) > 1:
+            sections.append("\n".join(input_lines))
+
+        return "\n\n".join(sections)

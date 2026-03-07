@@ -32,11 +32,10 @@ def emit_mock_h(signatures: dict) -> str:
         "NPU_DTYPE_INT8, NPU_DTYPE_INT32, NPU_DTYPE_INT16 } npu_dtype_t;",
         "typedef enum { NPU_FORMAT_ND=0, NPU_FORMAT_NZ, NPU_FORMAT_NC1HWC0 } npu_format_t;",
         "",
-        "typedef struct { uint32_t addr; npu_dtype_t dtype; npu_format_t format; } npu_tensor_t;",
+        "typedef struct { void* ptr; npu_dtype_t dtype; npu_format_t format; } npu_tensor_t;",
         "",
-        "extern unsigned char* npu_l1_base;",
         "static inline void* npu_t_ptr(npu_tensor_t t) {",
-        "    return (void*)(npu_l1_base + ((size_t)t.addr));",
+        "    return t.ptr;",
         "}",
         "",
     ]

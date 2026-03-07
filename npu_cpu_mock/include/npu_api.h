@@ -21,22 +21,15 @@ typedef enum {
 } npu_format_t;
 
 /* ---- tensor descriptor ---- */
-#ifndef NPU_ADDR_SHIFT
-#define NPU_ADDR_SHIFT 5  /* log2(32): L1 32-byte alignment */
-#endif
-
 typedef struct {
-    uint32_t      addr;    /* L1 address >> NPU_ADDR_SHIFT */
+    void*         ptr;     /* direct pointer to L1 memory */
     npu_dtype_t   dtype;
     npu_format_t  format;
 } npu_tensor_t;
 
-/* Global L1 base pointer — set by model_run before first op call */
-extern unsigned char* npu_l1_base;
-
-/* Reconstruct actual memory pointer from tensor descriptor */
+/* Extract pointer from tensor descriptor */
 static inline void* npu_t_ptr(npu_tensor_t t) {
-    return (void*)(npu_l1_base + ((size_t)t.addr << NPU_ADDR_SHIFT));
+    return t.ptr;
 }
 
 /* ---- dtype helpers ---- */

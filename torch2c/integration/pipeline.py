@@ -356,3 +356,26 @@ def _run_codegen(
     inputs, outputs = _run_golden(model, dummy_input, mask, numpy_dtype=golden_dtype)
     golden_exporter.export_golden(inputs, outputs, golden_dir, dtype=dtype_str)
     logger.info("Pass ⑨ 完成")
+
+
+# ---- 诊断入口 ----
+
+
+def inspect(
+    model: nn.Module,
+    dummy_input: torch.Tensor,
+    mask: torch.Tensor | None = None,
+) -> Graph:
+    """graph_capture + 标注诊断打印，返回 Graph。
+
+    用于快速查看模型标注是否正确传播，不执行编译。
+    """
+    from torch2c.common import format_model_annotations
+
+    inputs = [dummy_input] + ([mask] if mask is not None else [])
+    print(format_model_annotations(model, inputs=inputs))
+
+    graph = graph_capture.capture(model, dummy_input, mask=mask)
+    print("\n" + graph.summary())
+    print("\n" + graph.format_npu_annotations())
+    return graph

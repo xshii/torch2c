@@ -46,12 +46,11 @@ _C_PREAMBLE = """
 static unsigned char l1[L1_SIZE];
 
 static void l1_init(void) {
-    npu_l1_base = l1;
     memset(l1, 0, L1_SIZE);
 }
 
-static npu_tensor_t T(uint32_t byte_offset, npu_dtype_t dt) {
-    npu_tensor_t t = {byte_offset >> NPU_ADDR_SHIFT, dt, NPU_FORMAT_ND};
+static npu_tensor_t T(void* base, uint32_t byte_offset, npu_dtype_t dt) {
+    npu_tensor_t t = {base + byte_offset, dt, NPU_FORMAT_ND};
     return t;
 }
 
@@ -163,8 +162,8 @@ int main(void) {{
     load_file("a.bin", l1 + {off_a}, {M * K * 2});
     load_file("b.bin", l1 + {off_b}, {K * N * 2});
 
-    cube_matmul(T({off_a}, NPU_DTYPE_FP16), T({off_b}, NPU_DTYPE_FP16),
-                T({off_out}, NPU_DTYPE_FP16), 1, {M}, {N}, {K}, NPU_DTYPE_FP16);
+    cube_matmul(T(l1, {off_a}, NPU_DTYPE_FP16), T(l1, {off_b}, NPU_DTYPE_FP16),
+                T(l1, {off_out}, NPU_DTYPE_FP16), 1, {M}, {N}, {K}, NPU_DTYPE_FP16);
 
     save_file("out.bin", l1 + {off_out}, {M * N * 2});
     return 0;
@@ -202,8 +201,8 @@ int main(void) {{
     load_file("b.bin", l1 + {off_b}, {K * N * 2});
     load_file("bias.bin", l1 + {off_bias}, {N * 2});
 
-    cube_matmul_bias(T({off_a}, NPU_DTYPE_FP16), T({off_b}, NPU_DTYPE_FP16),
-                     T({off_bias}, NPU_DTYPE_FP16), T({off_out}, NPU_DTYPE_FP16),
+    cube_matmul_bias(T(l1, {off_a}, NPU_DTYPE_FP16), T(l1, {off_b}, NPU_DTYPE_FP16),
+                     T(l1, {off_bias}, NPU_DTYPE_FP16), T(l1, {off_out}, NPU_DTYPE_FP16),
                      1, {M}, {N}, {K}, NPU_DTYPE_FP16);
 
     save_file("out.bin", l1 + {off_out}, {M * N * 2});
@@ -240,8 +239,8 @@ int main(void) {{
     load_file("a.bin", l1 + {off_a}, {n * 2});
     load_file("b.bin", l1 + {off_b}, {n * 2});
 
-    vector_add(T({off_a}, NPU_DTYPE_FP16), T({off_b}, NPU_DTYPE_FP16),
-               T({off_out}, NPU_DTYPE_FP16), {n}, NPU_DTYPE_FP16);
+    vector_add(T(l1, {off_a}, NPU_DTYPE_FP16), T(l1, {off_b}, NPU_DTYPE_FP16),
+               T(l1, {off_out}, NPU_DTYPE_FP16), {n}, NPU_DTYPE_FP16);
 
     save_file("out.bin", l1 + {off_out}, {n * 2});
     return 0;
@@ -273,7 +272,7 @@ int main(void) {{
     l1_init();
     load_file("x.bin", l1 + {off_in}, {n * 2});
 
-    vector_gelu(T({off_in}, NPU_DTYPE_FP16), T({off_out}, NPU_DTYPE_FP16),
+    vector_gelu(T(l1, {off_in}, NPU_DTYPE_FP16), T(l1, {off_out}, NPU_DTYPE_FP16),
                 {n}, NPU_DTYPE_FP16);
 
     save_file("out.bin", l1 + {off_out}, {n * 2});
@@ -307,8 +306,8 @@ int main(void) {{
     load_file("a.bin", l1 + {off_a}, {n * 2});
     load_file("b.bin", l1 + {off_b}, {n * 2});
 
-    vector_mul(T({off_a}, NPU_DTYPE_FP16), T({off_b}, NPU_DTYPE_FP16),
-               T({off_out}, NPU_DTYPE_FP16), {n}, NPU_DTYPE_FP16);
+    vector_mul(T(l1, {off_a}, NPU_DTYPE_FP16), T(l1, {off_b}, NPU_DTYPE_FP16),
+               T(l1, {off_out}, NPU_DTYPE_FP16), {n}, NPU_DTYPE_FP16);
 
     save_file("out.bin", l1 + {off_out}, {n * 2});
     return 0;
@@ -339,7 +338,7 @@ int main(void) {{
     l1_init();
     load_file("x.bin", l1 + {off_in}, {n * 2});
 
-    vector_mul_scalar(T({off_in}, NPU_DTYPE_FP16), T({off_out}, NPU_DTYPE_FP16),
+    vector_mul_scalar(T(l1, {off_in}, NPU_DTYPE_FP16), T(l1, {off_out}, NPU_DTYPE_FP16),
                       {scalar}f, {n}, NPU_DTYPE_FP16);
 
     save_file("out.bin", l1 + {off_out}, {n * 2});
@@ -373,7 +372,7 @@ int main(void) {{
     l1_init();
     load_file("a.bin", l1 + {off_in}, {rows * cols * 2});
 
-    vector_transpose_2d(T({off_in}, NPU_DTYPE_FP16), T({off_out}, NPU_DTYPE_FP16),
+    vector_transpose_2d(T(l1, {off_in}, NPU_DTYPE_FP16), T(l1, {off_out}, NPU_DTYPE_FP16),
                         {rows}, {cols}, NPU_DTYPE_FP16);
 
     save_file("out.bin", l1 + {off_out}, {rows * cols * 2});
@@ -443,7 +442,7 @@ int main(void) {{
     l1_init();
     load_file("x.bin", l1 + {off_in}, {n * 2});
 
-    scalar_reshape(T({off_in}, NPU_DTYPE_FP16), T({off_out}, NPU_DTYPE_FP16),
+    scalar_reshape(T(l1, {off_in}, NPU_DTYPE_FP16), T(l1, {off_out}, NPU_DTYPE_FP16),
                    {n * 2}, NPU_DTYPE_FP16);
 
     save_file("out.bin", l1 + {off_out}, {n * 2});
@@ -479,9 +478,9 @@ int main(void) {{
     l1_init();
     load_file("x.bin", l1 + {off_in}, {count * 2});
 
-    vector_softmax_part1(T({off_in}, NPU_DTYPE_FP16), T({off_inter}, NPU_DTYPE_FP16),
+    vector_softmax_part1(T(l1, {off_in}, NPU_DTYPE_FP16), T(l1, {off_inter}, NPU_DTYPE_FP16),
                          {dim}, {count}, NPU_DTYPE_FP16);
-    vector_softmax_part2(T({off_inter}, NPU_DTYPE_FP16), T({off_out}, NPU_DTYPE_FP16),
+    vector_softmax_part2(T(l1, {off_inter}, NPU_DTYPE_FP16), T(l1, {off_out}, NPU_DTYPE_FP16),
                          {count * 2}, NPU_DTYPE_FP16);
 
     save_file("out.bin", l1 + {off_out}, {count * 2});
@@ -526,11 +525,11 @@ int main(void) {{
     load_file("gamma.bin", l1 + {off_gamma}, {hidden * 2});
     load_file("beta.bin", l1 + {off_beta}, {hidden * 2});
 
-    vector_layernorm_part1(T({off_x}, NPU_DTYPE_FP16), T({off_gamma}, NPU_DTYPE_FP16),
-                           T({off_beta}, NPU_DTYPE_FP16), T({off_inter}, NPU_DTYPE_FP16),
+    vector_layernorm_part1(T(l1, {off_x}, NPU_DTYPE_FP16), T(l1, {off_gamma}, NPU_DTYPE_FP16),
+                           T(l1, {off_beta}, NPU_DTYPE_FP16), T(l1, {off_inter}, NPU_DTYPE_FP16),
                            {hidden}, {seq}, {eps}f, NPU_DTYPE_FP16);
-    vector_layernorm_part2(T({off_inter}, NPU_DTYPE_FP16), T({off_x}, NPU_DTYPE_FP16),
-                           T({off_out}, NPU_DTYPE_FP16), {count * 2}, NPU_DTYPE_FP16);
+    vector_layernorm_part2(T(l1, {off_inter}, NPU_DTYPE_FP16), T(l1, {off_x}, NPU_DTYPE_FP16),
+                           T(l1, {off_out}, NPU_DTYPE_FP16), {count * 2}, NPU_DTYPE_FP16);
 
     save_file("out.bin", l1 + {off_out}, {count * 2});
     return 0;
@@ -572,8 +571,8 @@ int main(void) {{
     load_file("b.bin", l1 + {off_b}, {K * N * 2});
     load_file("bias.bin", l1 + {off_bias}, {N * 2});
 
-    cube_matmul_bias(T({off_a}, NPU_DTYPE_FP16), T({off_b}, NPU_DTYPE_FP16),
-                     T({off_bias}, NPU_DTYPE_FP16), T({off_out}, NPU_DTYPE_FP16),
+    cube_matmul_bias(T(l1, {off_a}, NPU_DTYPE_FP16), T(l1, {off_b}, NPU_DTYPE_FP16),
+                     T(l1, {off_bias}, NPU_DTYPE_FP16), T(l1, {off_out}, NPU_DTYPE_FP16),
                      1, {M}, {N}, {K}, NPU_DTYPE_FP16);
 
     save_file("out.bin", l1 + {off_out}, {M * N * 2});
@@ -618,19 +617,19 @@ int main(void) {{
     load_file("v.bin", l1 + {off_v}, {seq * d * 2});
 
     /* K^T */
-    vector_transpose_2d(T({off_k}, NPU_DTYPE_FP16), T({off_kt}, NPU_DTYPE_FP16),
+    vector_transpose_2d(T(l1, {off_k}, NPU_DTYPE_FP16), T(l1, {off_kt}, NPU_DTYPE_FP16),
                         {seq}, {d}, NPU_DTYPE_FP16);
     /* scores = Q @ K^T */
-    cube_matmul(T({off_q}, NPU_DTYPE_FP16), T({off_kt}, NPU_DTYPE_FP16),
-                T({off_scores}, NPU_DTYPE_FP16), 1, {seq}, {seq}, {d}, NPU_DTYPE_FP16);
+    cube_matmul(T(l1, {off_q}, NPU_DTYPE_FP16), T(l1, {off_kt}, NPU_DTYPE_FP16),
+                T(l1, {off_scores}, NPU_DTYPE_FP16), 1, {seq}, {seq}, {d}, NPU_DTYPE_FP16);
     /* softmax */
-    vector_softmax_part1(T({off_scores}, NPU_DTYPE_FP16), T({off_sm}, NPU_DTYPE_FP16),
+    vector_softmax_part1(T(l1, {off_scores}, NPU_DTYPE_FP16), T(l1, {off_sm}, NPU_DTYPE_FP16),
                          {seq}, {seq * seq}, NPU_DTYPE_FP16);
-    vector_softmax_part2(T({off_sm}, NPU_DTYPE_FP16), T({off_attn}, NPU_DTYPE_FP16),
+    vector_softmax_part2(T(l1, {off_sm}, NPU_DTYPE_FP16), T(l1, {off_attn}, NPU_DTYPE_FP16),
                          {seq * seq * 2}, NPU_DTYPE_FP16);
     /* out = attn @ V */
-    cube_matmul(T({off_attn}, NPU_DTYPE_FP16), T({off_v}, NPU_DTYPE_FP16),
-                T({off_out}, NPU_DTYPE_FP16), 1, {seq}, {d}, {seq}, NPU_DTYPE_FP16);
+    cube_matmul(T(l1, {off_attn}, NPU_DTYPE_FP16), T(l1, {off_v}, NPU_DTYPE_FP16),
+                T(l1, {off_out}, NPU_DTYPE_FP16), 1, {seq}, {d}, {seq}, NPU_DTYPE_FP16);
 
     save_file("out.bin", l1 + {off_out}, {seq * d * 2});
     return 0;
@@ -735,24 +734,24 @@ int main(void) {{
     load_file("wo.bin", l1 + {off_wo}, {d_model * d_model * 2});
 
     /* Q = x @ Wq  (mixed precision: storage fp16, compute fp32) */
-    cube_matmul(T({off_x}, NPU_DTYPE_FP16), T({off_wq}, NPU_DTYPE_FP16),
-                T({off_q}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP32);
+    cube_matmul(T(l1, {off_x}, NPU_DTYPE_FP16), T(l1, {off_wq}, NPU_DTYPE_FP16),
+                T(l1, {off_q}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP32);
     /* K = x @ Wk */
-    cube_matmul(T({off_x}, NPU_DTYPE_FP16), T({off_wk}, NPU_DTYPE_FP16),
-                T({off_k}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP32);
+    cube_matmul(T(l1, {off_x}, NPU_DTYPE_FP16), T(l1, {off_wk}, NPU_DTYPE_FP16),
+                T(l1, {off_k}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP32);
     /* V = x @ Wv */
-    cube_matmul(T({off_x}, NPU_DTYPE_FP16), T({off_wv}, NPU_DTYPE_FP16),
-                T({off_v}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP32);
+    cube_matmul(T(l1, {off_x}, NPU_DTYPE_FP16), T(l1, {off_wv}, NPU_DTYPE_FP16),
+                T(l1, {off_v}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP32);
 
     /* deinterleave Q/K/V: (seq, num_heads, head_dim) -> transpose(0,1) -> (num_heads, seq, head_dim)
        uses vector_transpose instead of manual C loops — mirrors DMA随路格式转换 */
     {{
         const int deinterleave_dims[] = {{{seq}, {num_heads}, {head_dim}}};
-        vector_transpose(T({off_q}, NPU_DTYPE_FP16), T({off_qh}, NPU_DTYPE_FP16),
+        vector_transpose(T(l1, {off_q}, NPU_DTYPE_FP16), T(l1, {off_qh}, NPU_DTYPE_FP16),
                          3, deinterleave_dims, 0, 1, NPU_DTYPE_FP32);
-        vector_transpose(T({off_k}, NPU_DTYPE_FP16), T({off_kh}, NPU_DTYPE_FP16),
+        vector_transpose(T(l1, {off_k}, NPU_DTYPE_FP16), T(l1, {off_kh}, NPU_DTYPE_FP16),
                          3, deinterleave_dims, 0, 1, NPU_DTYPE_FP32);
-        vector_transpose(T({off_v}, NPU_DTYPE_FP16), T({off_vh}, NPU_DTYPE_FP16),
+        vector_transpose(T(l1, {off_v}, NPU_DTYPE_FP16), T(l1, {off_vh}, NPU_DTYPE_FP16),
                          3, deinterleave_dims, 0, 1, NPU_DTYPE_FP32);
     }}
 
@@ -760,38 +759,38 @@ int main(void) {{
     for (int h = 0; h < {num_heads}; h++) {{
         int kh_off = {off_kh} + h * {seq * head_dim * 2};
         int kht_off = {off_kht} + h * {seq * head_dim * 2};
-        vector_transpose_2d(T(kh_off, NPU_DTYPE_FP16), T(kht_off, NPU_DTYPE_FP16),
+        vector_transpose_2d(T(l1, kh_off, NPU_DTYPE_FP16), T(l1, kht_off, NPU_DTYPE_FP16),
                             {seq}, {head_dim}, NPU_DTYPE_FP32);
     }}
 
     /* batched scores = Q_heads @ K_heads^T, using loop={num_heads} */
-    cube_matmul(T({off_qh}, NPU_DTYPE_FP16), T({off_kht}, NPU_DTYPE_FP16),
-                T({off_scores}, NPU_DTYPE_FP16), {num_heads}, {seq}, {seq}, {head_dim}, NPU_DTYPE_FP32);
+    cube_matmul(T(l1, {off_qh}, NPU_DTYPE_FP16), T(l1, {off_kht}, NPU_DTYPE_FP16),
+                T(l1, {off_scores}, NPU_DTYPE_FP16), {num_heads}, {seq}, {seq}, {head_dim}, NPU_DTYPE_FP32);
 
     /* scale scores by 1/sqrt(head_dim) */
-    vector_mul_scalar(T({off_scores}, NPU_DTYPE_FP16), T({off_scaled}, NPU_DTYPE_FP16),
+    vector_mul_scalar(T(l1, {off_scores}, NPU_DTYPE_FP16), T(l1, {off_scaled}, NPU_DTYPE_FP16),
                       {scale}f, {num_heads * seq * seq}, NPU_DTYPE_FP32);
 
     /* softmax over last dim (seq) for each row across all heads */
-    vector_softmax_part1(T({off_scaled}, NPU_DTYPE_FP16), T({off_sm}, NPU_DTYPE_FP16),
+    vector_softmax_part1(T(l1, {off_scaled}, NPU_DTYPE_FP16), T(l1, {off_sm}, NPU_DTYPE_FP16),
                          {seq}, {num_heads * seq * seq}, NPU_DTYPE_FP32);
-    vector_softmax_part2(T({off_sm}, NPU_DTYPE_FP16), T({off_attn}, NPU_DTYPE_FP16),
+    vector_softmax_part2(T(l1, {off_sm}, NPU_DTYPE_FP16), T(l1, {off_attn}, NPU_DTYPE_FP16),
                          {num_heads * seq * seq * 2}, NPU_DTYPE_FP32);
 
     /* batched out = attn @ V_heads, loop={num_heads} */
-    cube_matmul(T({off_attn}, NPU_DTYPE_FP16), T({off_vh}, NPU_DTYPE_FP16),
-                T({off_head_out}, NPU_DTYPE_FP16), {num_heads}, {seq}, {head_dim}, {seq}, NPU_DTYPE_FP32);
+    cube_matmul(T(l1, {off_attn}, NPU_DTYPE_FP16), T(l1, {off_vh}, NPU_DTYPE_FP16),
+                T(l1, {off_head_out}, NPU_DTYPE_FP16), {num_heads}, {seq}, {head_dim}, {seq}, NPU_DTYPE_FP32);
 
     /* reinterleave heads: (num_heads, seq, head_dim) -> transpose(0,1) -> (seq, num_heads, head_dim) = (seq, d_model) */
     {{
         const int reinterleave_dims[] = {{{num_heads}, {seq}, {head_dim}}};
-        vector_transpose(T({off_head_out}, NPU_DTYPE_FP16), T({off_concat}, NPU_DTYPE_FP16),
+        vector_transpose(T(l1, {off_head_out}, NPU_DTYPE_FP16), T(l1, {off_concat}, NPU_DTYPE_FP16),
                          3, reinterleave_dims, 0, 1, NPU_DTYPE_FP32);
     }}
 
     /* output projection: out = concat @ Wo */
-    cube_matmul(T({off_concat}, NPU_DTYPE_FP16), T({off_wo}, NPU_DTYPE_FP16),
-                T({off_out}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP32);
+    cube_matmul(T(l1, {off_concat}, NPU_DTYPE_FP16), T(l1, {off_wo}, NPU_DTYPE_FP16),
+                T(l1, {off_out}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, NPU_DTYPE_FP32);
 
     save_file("out.bin", l1 + {off_out}, {seq * d_model * 2});
     return 0;
