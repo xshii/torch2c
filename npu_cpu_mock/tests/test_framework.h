@@ -52,4 +52,7 @@ static unsigned char g_l1_buf[L1_BUF_SIZE];
 /* Get a typed pointer into L1 buffer at byte offset */
 #define L1_PTR(type, offset) ((type*)(g_l1_buf + (offset)))
 
+/* Default TidInfo for tests (no scheduling, no dependencies) */
+#define TID0 ((TidInfo){0, 0, 0, 0, 0})
+
 #endif /* TEST_FRAMEWORK_H */

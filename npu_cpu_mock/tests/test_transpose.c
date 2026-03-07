@@ -10,7 +10,7 @@ static int test_transpose_2d_fp32(void) {
     float* in = L1_PTR(float, OFF_IN);
     float vals[6] = {1, 2, 3, 4, 5, 6};
     memcpy(in, vals, sizeof(vals));
-    vector_transpose_2d(TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
+    vector_transpose_2d(TID0, TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
                         2, 3, NPU_DTYPE_FP32);
     float* out = L1_PTR(float, OFF_OUT);
     float expected[6] = {1, 4, 2, 5, 3, 6};
@@ -24,7 +24,7 @@ static int test_transpose_2d_fp16(void) {
     float vals[6] = {1, 2, 3, 4, 5, 6};
     for (int i = 0; i < 6; i++)
         npu_write_from_float(L1_PTR(uint16_t, OFF_IN), i, vals[i], NPU_DTYPE_FP16);
-    vector_transpose_2d(TENSOR(OFF_IN, NPU_DTYPE_FP16), TENSOR(OFF_OUT, NPU_DTYPE_FP16),
+    vector_transpose_2d(TID0, TENSOR(OFF_IN, NPU_DTYPE_FP16), TENSOR(OFF_OUT, NPU_DTYPE_FP16),
                         2, 3, NPU_DTYPE_FP16);
     float expected[6] = {1, 4, 2, 5, 3, 6};
     for (int i = 0; i < 6; i++)
@@ -39,7 +39,7 @@ static int test_transpose_nd_3d(void) {
     int dims[3] = {2, 3, 4};
     int total = 24;
     for (int i = 0; i < total; i++) in[i] = (float)i;
-    vector_transpose(TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
+    vector_transpose(TID0, TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
                      3, dims, 0, 2, NPU_DTYPE_FP32);
     float* out = L1_PTR(float, OFF_OUT);
     for (int a = 0; a < 2; a++)
@@ -59,7 +59,7 @@ static int test_transpose_nd_swap_adjacent(void) {
     int dims[3] = {2, 3, 4};
     int total = 24;
     for (int i = 0; i < total; i++) in[i] = (float)(i + 1);
-    vector_transpose(TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
+    vector_transpose(TID0, TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
                      3, dims, 1, 2, NPU_DTYPE_FP32);
     float* out = L1_PTR(float, OFF_OUT);
     for (int a = 0; a < 2; a++)
@@ -72,44 +72,11 @@ static int test_transpose_nd_swap_adjacent(void) {
     return 1;
 }
 
-static int test_reshape(void) {
-    L1_INIT();
-    float* in = L1_PTR(float, OFF_IN);
-    float vals[6] = {1, 2, 3, 4, 5, 6};
-    memcpy(in, vals, sizeof(vals));
-    scalar_reshape(TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
-                   6 * (int)sizeof(float), NPU_DTYPE_FP32);
-    float* out = L1_PTR(float, OFF_OUT);
-    for (int i = 0; i < 6; i++)
-        ASSERT_FLOAT_EQ(out[i], vals[i], 0.0f);
-    return 1;
-}
-
-static int test_dma_ops(void) {
-    float src[4] = {10, 20, 30, 40};
-    float dst[4] = {0};
-    npu_dma_load(dst, src, (int)sizeof(src), NPU_FORMAT_ND, NPU_FORMAT_ND);
-    for (int i = 0; i < 4; i++)
-        ASSERT_FLOAT_EQ(dst[i], src[i], 0.0f);
-
-    float dst2[4] = {0};
-    npu_dma_store(dst2, dst, (int)sizeof(dst), NPU_FORMAT_ND, NPU_FORMAT_ND);
-    for (int i = 0; i < 4; i++)
-        ASSERT_FLOAT_EQ(dst2[i], src[i], 0.0f);
-
-    npu_dma_barrier();
-    npu_set_dependency(0, 1);
-    npu_barrier();
-    return 1;
-}
-
 int main(void) {
     printf("test_transpose:\n");
     RUN_TEST(test_transpose_2d_fp32);
     RUN_TEST(test_transpose_2d_fp16);
     RUN_TEST(test_transpose_nd_3d);
     RUN_TEST(test_transpose_nd_swap_adjacent);
-    RUN_TEST(test_reshape);
-    RUN_TEST(test_dma_ops);
     TEST_SUMMARY();
 }

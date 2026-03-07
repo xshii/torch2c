@@ -3,6 +3,9 @@
 #include <string.h>
 #include <stdint.h>
 
+/* Global L1 base pointer — set by model_run before first op call */
+unsigned char* npu_l1_base = NULL;
+
 size_t npu_dtype_size(npu_dtype_t dtype) {
     switch (dtype) {
         case NPU_DTYPE_FP16:  return 2;

@@ -20,6 +20,26 @@ typedef enum {
     NPU_FORMAT_NC1HWC0
 } npu_format_t;
 
+typedef enum {
+    NPU_UNIT_CUBE   = 0,
+    NPU_UNIT_VECTOR,
+    NPU_UNIT_DMA,
+    NPU_UNIT_IDMA
+} npu_compute_unit_t;
+
+/* ---- pipeline task descriptor ---- */
+/* dep_*_tid = 0 means no dependency on that unit. */
+typedef struct {
+    int task_id;        /* current task id (software-assigned) */
+    int dep_cube_tid;   /* dependency on cube unit */
+    int dep_vector_tid; /* dependency on vector unit */
+    int dep_dma_tid;    /* dependency on dma unit */
+    int dep_idma_tid;   /* dependency on idma unit */
+} TidInfo;
+
+/* ---- constants ---- */
+#define NPU_MAX_NDIM 16   /* max supported tensor dimensions */
+
 /* ---- tensor descriptor ---- */
 #ifndef NPU_ADDR_SHIFT
 #define NPU_ADDR_SHIFT 5  /* log2(32): L1 32-byte alignment */
@@ -45,46 +65,61 @@ float  npu_read_as_float(const void* buf, int index, npu_dtype_t dtype);
 void   npu_write_from_float(void* buf, int index, float value, npu_dtype_t dtype);
 float  npu_round_to_dtype(float value, npu_dtype_t dtype);
 
-/* BEGIN AUTO-GENERATED COMPUTE OPS — do not edit manually.
-   Source: npu_compiler/integration/config/c_api_signatures.yaml
-   Sync:   python -m npu_compiler.codegen.sync_api_header */
+/* ---- compute-precision helpers ---- */
+/* Read from storage dtype, then round to compute precision */
+static inline float npu_read_compute(const void* buf, int index,
+                                     npu_dtype_t storage_dtype,
+                                     npu_dtype_t compute_dtype) {
+    float v = npu_read_as_float(buf, index, storage_dtype);
+    return npu_round_to_dtype(v, compute_dtype);
+}
+
+/* Round to compute precision, then write to storage dtype */
+static inline void npu_write_compute(void* buf, int index, float value,
+                                     npu_dtype_t storage_dtype,
+                                     npu_dtype_t compute_dtype) {
+    float rounded = npu_round_to_dtype(value, compute_dtype);
+    npu_write_from_float(buf, index, rounded, storage_dtype);
+}
+
 /* ---- cube compute ops ---- */
-void cube_matmul(npu_tensor_t a, npu_tensor_t b, npu_tensor_t out, int loop, int m, int n, int k, npu_dtype_t compute_dtype);
-void cube_matmul_bias(npu_tensor_t a, npu_tensor_t b, npu_tensor_t bias, npu_tensor_t out, int loop, int m, int n, int k, npu_dtype_t compute_dtype);
+void cube_matmul(TidInfo tid, npu_tensor_t a, npu_tensor_t b, npu_tensor_t out, int loop, int m, int n, int k, npu_dtype_t compute_dtype);
+void cube_matmul_bias(TidInfo tid, npu_tensor_t a, npu_tensor_t b, npu_tensor_t bias, npu_tensor_t out, int loop, int m, int n, int k, npu_dtype_t compute_dtype);
 
-/* ---- vector compute ops ---- */
-void vector_add(npu_tensor_t a, npu_tensor_t b, npu_tensor_t out, int count, npu_dtype_t compute_dtype);
-void vector_mul(npu_tensor_t a, npu_tensor_t b, npu_tensor_t out, int count, npu_dtype_t compute_dtype);
-void vector_mul_scalar(npu_tensor_t input, npu_tensor_t out, float scalar, int count, npu_dtype_t compute_dtype);
-void vector_gelu(npu_tensor_t input, npu_tensor_t out, int count, npu_dtype_t compute_dtype);
-void vector_softmax(npu_tensor_t input, npu_tensor_t out, int dim, int count, npu_dtype_t compute_dtype);
-void vector_layernorm(npu_tensor_t input, npu_tensor_t gamma, npu_tensor_t beta, npu_tensor_t out, int hidden, int seq, float eps, npu_dtype_t compute_dtype);
-void vector_layernorm_part1(npu_tensor_t input, npu_tensor_t gamma, npu_tensor_t beta, npu_tensor_t out, int hidden, int seq, float eps, npu_dtype_t compute_dtype);
-void vector_layernorm_part2(npu_tensor_t inter, npu_tensor_t orig, npu_tensor_t out, int size, npu_dtype_t compute_dtype);
-void vector_softmax_part1(npu_tensor_t input, npu_tensor_t out, int dim, int count, npu_dtype_t compute_dtype);
-void vector_softmax_part2(npu_tensor_t inter, npu_tensor_t out, int size, npu_dtype_t compute_dtype);
-void vector_transpose(npu_tensor_t input, npu_tensor_t out, int ndim, const int* dims, int dim0, int dim1, npu_dtype_t compute_dtype);
-void vector_transpose_2d(npu_tensor_t input, npu_tensor_t out, int rows, int cols, npu_dtype_t compute_dtype);
+/* ---- vector: arithmetic ---- */
+void vector_add(TidInfo tid, npu_tensor_t a, npu_tensor_t b, npu_tensor_t out, int count, npu_dtype_t compute_dtype);
+void vector_sub(TidInfo tid, npu_tensor_t a, npu_tensor_t b, npu_tensor_t out, int count, npu_dtype_t compute_dtype);
+void vector_mul(TidInfo tid, npu_tensor_t a, npu_tensor_t b, npu_tensor_t out, int count, npu_dtype_t compute_dtype);
+void vector_div(TidInfo tid, npu_tensor_t a, npu_tensor_t b, npu_tensor_t out, int count, npu_dtype_t compute_dtype);
+void vector_mul_scalar(TidInfo tid, npu_tensor_t input, npu_tensor_t out, float scalar, int count, npu_dtype_t compute_dtype);
+void vector_fill(TidInfo tid, npu_tensor_t out, float value, int count, npu_dtype_t compute_dtype);
 
-/* ---- scalar compute ops ---- */
-void scalar_reshape(npu_tensor_t input, npu_tensor_t out, int size, npu_dtype_t compute_dtype);
-void scalar_broadcast(npu_tensor_t input, npu_tensor_t out, int size, npu_dtype_t compute_dtype);
-void scalar_copy(npu_tensor_t input, npu_tensor_t out, int size, npu_dtype_t compute_dtype);
+/* ---- vector: activation & regularization ---- */
+void vector_gelu(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int count, npu_dtype_t compute_dtype);
+void vector_dropout(TidInfo tid, npu_tensor_t input, npu_tensor_t out, npu_tensor_t mask, int count, float scale, npu_dtype_t compute_dtype);
 
-/* ---- idma compute ops ---- */
-void dma_reformat(npu_tensor_t input, npu_tensor_t out, int count);
+/* ---- vector: normalization ---- */
+void vector_softmax(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int dim, int count, npu_dtype_t compute_dtype);
+void vector_softmax_part1(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int dim, int count, npu_dtype_t compute_dtype);
+void vector_softmax_part2(TidInfo tid, npu_tensor_t inter, npu_tensor_t out, int size, npu_dtype_t compute_dtype);
+void vector_layernorm(TidInfo tid, npu_tensor_t input, npu_tensor_t gamma, npu_tensor_t beta, npu_tensor_t out, int hidden, int seq, float eps, npu_dtype_t compute_dtype);
+void vector_layernorm_part1(TidInfo tid, npu_tensor_t input, npu_tensor_t gamma, npu_tensor_t beta, npu_tensor_t out, int hidden, int seq, float eps, npu_dtype_t compute_dtype);
+void vector_layernorm_part2(TidInfo tid, npu_tensor_t inter, npu_tensor_t orig, npu_tensor_t out, int size, npu_dtype_t compute_dtype);
+void vector_rmsnorm(TidInfo tid, npu_tensor_t input, npu_tensor_t gamma, npu_tensor_t out, int hidden, int seq, float eps, npu_dtype_t compute_dtype);
+void vector_rmsnorm_part1(TidInfo tid, npu_tensor_t input, npu_tensor_t gamma, npu_tensor_t out, int hidden, int seq, float eps, npu_dtype_t compute_dtype);
+void vector_rmsnorm_part2(TidInfo tid, npu_tensor_t inter, npu_tensor_t orig, npu_tensor_t out, int size, npu_dtype_t compute_dtype);
 
-/* END AUTO-GENERATED COMPUTE OPS */
+/* ---- vector: shape ---- */
+void vector_transpose(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int ndim, const int* dims, int dim0, int dim1, npu_dtype_t compute_dtype);
+void vector_transpose_2d(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int rows, int cols, npu_dtype_t compute_dtype);
 
-/* ---- DMA ops ---- */
-void npu_dma_load(void* l1_dst, void* hbm_src, int size,
-                  npu_format_t src_fmt, npu_format_t dst_fmt);
-void npu_dma_store(void* hbm_dst, void* l1_src, int size,
-                   npu_format_t src_fmt, npu_format_t dst_fmt);
-void npu_dma_barrier(void);
+/* ---- dma (HBM ↔ L1) ---- */
+void dma_move(TidInfo tid, npu_tensor_t dst, npu_tensor_t src, int count);
 
-/* ---- sync ops ---- */
-void npu_set_dependency(int src_id, int dst_id);
-void npu_barrier(void);
+/* ---- idma (L1 → pipe) ---- */
+void idma_move(TidInfo tid, npu_tensor_t dst, npu_tensor_t src, int count);
+void idma_reshape(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int size);
+void idma_broadcast(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int count);
+void idma_concat(TidInfo tid, const npu_tensor_t* inputs, const int* counts, int num_inputs, npu_tensor_t out);
 
 #endif /* NPU_API_H */

@@ -10,7 +10,7 @@ static int test_softmax_uniform(void) {
     float* in = L1_PTR(float, OFF_IN);
     float vals[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     memcpy(in, vals, sizeof(vals));
-    vector_softmax_part1(TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
+    vector_softmax_part1(TID0, TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
                          4, 4, NPU_DTYPE_FP32);
     float* out = L1_PTR(float, OFF_OUT);
     for (int i = 0; i < 4; i++)
@@ -23,7 +23,7 @@ static int test_softmax_sum_one(void) {
     float* in = L1_PTR(float, OFF_IN);
     float vals[4] = {1.0f, 2.0f, 3.0f, 4.0f};
     memcpy(in, vals, sizeof(vals));
-    vector_softmax_part1(TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
+    vector_softmax_part1(TID0, TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
                          4, 4, NPU_DTYPE_FP32);
     float* out = L1_PTR(float, OFF_OUT);
     float sum = 0;
@@ -42,7 +42,7 @@ static int test_softmax_multi_row(void) {
     float* in = L1_PTR(float, OFF_IN);
     float vals[6] = {1.0f, 2.0f, 3.0f, 1.0f, 1.0f, 1.0f};
     memcpy(in, vals, sizeof(vals));
-    vector_softmax_part1(TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
+    vector_softmax_part1(TID0, TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
                          3, 6, NPU_DTYPE_FP32);
     float* out = L1_PTR(float, OFF_OUT);
     float s0 = out[0] + out[1] + out[2];
@@ -60,11 +60,28 @@ static int test_softmax_part2(void) {
     float vals[4] = {0.1f, 0.2f, 0.3f, 0.4f};
     memcpy(inter, vals, sizeof(vals));
     int byte_count = 4 * (int)sizeof(float);
-    vector_softmax_part2(TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
+    vector_softmax_part2(TID0, TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
                          byte_count, NPU_DTYPE_FP32);
     float* out = L1_PTR(float, OFF_OUT);
     for (int i = 0; i < 4; i++)
         ASSERT_FLOAT_EQ(out[i], vals[i], 0.0f);
+    return 1;
+}
+
+static int test_softmax_wrapper(void) {
+    L1_INIT();
+    float* in = L1_PTR(float, OFF_IN);
+    float vals[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    memcpy(in, vals, sizeof(vals));
+    vector_softmax(TID0, TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
+                   4, 4, NPU_DTYPE_FP32);
+    float* out = L1_PTR(float, OFF_OUT);
+    float sum = 0;
+    for (int i = 0; i < 4; i++) {
+        ASSERT_TRUE(out[i] > 0.0f);
+        sum += out[i];
+    }
+    ASSERT_FLOAT_EQ(sum, 1.0f, 1e-5f);
     return 1;
 }
 
@@ -73,7 +90,7 @@ static int test_softmax_large_values(void) {
     float* in = L1_PTR(float, OFF_IN);
     float vals[3] = {1000.0f, 1001.0f, 1002.0f};
     memcpy(in, vals, sizeof(vals));
-    vector_softmax_part1(TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
+    vector_softmax_part1(TID0, TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_FP32),
                          3, 3, NPU_DTYPE_FP32);
     float* out = L1_PTR(float, OFF_OUT);
     float sum = out[0] + out[1] + out[2];
@@ -89,6 +106,7 @@ int main(void) {
     RUN_TEST(test_softmax_sum_one);
     RUN_TEST(test_softmax_multi_row);
     RUN_TEST(test_softmax_part2);
+    RUN_TEST(test_softmax_wrapper);
     RUN_TEST(test_softmax_large_values);
     TEST_SUMMARY();
 }
