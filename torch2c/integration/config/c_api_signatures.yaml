@@ -1,15 +1,21 @@
 # NPU C API 函数签名
 #
 # 约定：
-#   - 函数名以计算单元为前缀: cube_ / vector_ / scalar_
+#   - 函数名以计算单元为前缀: cube_ / vector_ / dma_ / idma_
 #   - type: tensor_desc  → 生成 (npu_tensor_t){addr >> addr_shift, dtype_enum, format_enum}
 #     source 引用的 tensor 自动展开三个字段
 #   - addr_shift 由 l1 alignment 决定（32B → 5位）
 #   - compute_dtype 指定算子计算精度
+#   - 所有 compute_ops 第一个参数隐含 TidInfo tid（codegen 自动注入）
+#   - 依赖关系通过 TidInfo 的 dep_cube_tid/dep_vector_tid/dep_dma_tid/dep_idma_tid 表达
+#     dep=0 表示无依赖，不再需要独立的 sync_ops
 
 compute_ops:
 
+  # ---- cube ----
+
   cube_matmul:
+    unit: cube
     params:
       - { name: "a",   type: "tensor_desc", source: "tensor.input_0" }
       - { name: "b",   type: "tensor_desc", source: "tensor.input_1" }
@@ -21,6 +27,7 @@ compute_ops:
       - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   cube_matmul_bias:
+    unit: cube
     params:
       - { name: "a",    type: "tensor_desc", source: "tensor.input_0" }
       - { name: "b",    type: "tensor_desc", source: "tensor.input_1" }
@@ -32,7 +39,19 @@ compute_ops:
       - { name: "k",    type: "int",         source: "tensor.input_0.shape.-1" }
       - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
+  # ---- vector: arithmetic ----
+
   vector_add:
+    unit: vector
+    params:
+      - { name: "a",   type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "b",   type: "tensor_desc", source: "tensor.input_1" }
+      - { name: "out", type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "count", type: "int",       source: "tensor.input_0.elem_count" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
+
+  vector_sub:
+    unit: vector
     params:
       - { name: "a",   type: "tensor_desc", source: "tensor.input_0" }
       - { name: "b",   type: "tensor_desc", source: "tensor.input_1" }
@@ -41,6 +60,16 @@ compute_ops:
       - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   vector_mul:
+    unit: vector
+    params:
+      - { name: "a",   type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "b",   type: "tensor_desc", source: "tensor.input_1" }
+      - { name: "out", type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "count", type: "int",       source: "tensor.input_0.elem_count" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
+
+  vector_div:
+    unit: vector
     params:
       - { name: "a",   type: "tensor_desc", source: "tensor.input_0" }
       - { name: "b",   type: "tensor_desc", source: "tensor.input_1" }
@@ -49,6 +78,7 @@ compute_ops:
       - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   vector_mul_scalar:
+    unit: vector
     params:
       - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
       - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
@@ -56,14 +86,38 @@ compute_ops:
       - { name: "count",  type: "int",        source: "tensor.input_0.elem_count" }
       - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
+  vector_fill:
+    unit: vector
+    params:
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "value", type: "float",       source: "param.fill_value" }
+      - { name: "count", type: "int",         source: "tensor.output_0.elem_count" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
+
+  # ---- vector: activation & regularization ----
+
   vector_gelu:
+    unit: vector
     params:
       - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
       - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
       - { name: "count", type: "int",         source: "tensor.input_0.elem_count" }
       - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
+  vector_dropout:
+    unit: vector
+    params:
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "mask",  type: "tensor_desc", source: "tensor.input_1" }
+      - { name: "count", type: "int",         source: "tensor.input_0.elem_count" }
+      - { name: "scale", type: "float",       source: "param.dropout_scale" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
+
+  # ---- vector: normalization ----
+
   vector_softmax:
+    unit: vector
     params:
       - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
       - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
@@ -71,7 +125,25 @@ compute_ops:
       - { name: "count", type: "int",         source: "tensor.input_0.elem_count" }
       - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
+  vector_softmax_part1:
+    unit: vector
+    params:
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "dim",   type: "int",         source: "param.dim" }
+      - { name: "count", type: "int",         source: "tensor.input_0.elem_count" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
+
+  vector_softmax_part2:
+    unit: vector
+    params:
+      - { name: "inter", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "size",  type: "int",         source: "tensor.input_0.hbm_size" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
+
   vector_layernorm:
+    unit: vector
     params:
       - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
       - { name: "gamma", type: "tensor_desc", source: "tensor.input_1" }
@@ -83,6 +155,7 @@ compute_ops:
       - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   vector_layernorm_part1:
+    unit: vector
     params:
       - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
       - { name: "gamma", type: "tensor_desc", source: "tensor.input_1" }
@@ -94,6 +167,7 @@ compute_ops:
       - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   vector_layernorm_part2:
+    unit: vector
     params:
       - { name: "inter", type: "tensor_desc", source: "tensor.input_0" }
       - { name: "orig",  type: "tensor_desc", source: "tensor.input_1" }
@@ -101,22 +175,41 @@ compute_ops:
       - { name: "size",  type: "int",         source: "tensor.input_0.hbm_size" }
       - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
-  vector_softmax_part1:
+  vector_rmsnorm:
+    unit: vector
     params:
       - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "gamma", type: "tensor_desc", source: "tensor.input_1" }
       - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
-      - { name: "dim",   type: "int",         source: "param.dim" }
-      - { name: "count", type: "int",         source: "tensor.input_0.elem_count" }
+      - { name: "hidden", type: "int",        source: "tensor.input_0.shape.-1" }
+      - { name: "seq",    type: "int",        source: "tensor.input_0.shape.-2" }
+      - { name: "eps",    type: "float",      source: "param.epsilon" }
       - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
-  vector_softmax_part2:
+  vector_rmsnorm_part1:
+    unit: vector
+    params:
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "gamma", type: "tensor_desc", source: "tensor.input_1" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "hidden", type: "int",        source: "tensor.input_0.shape.-1" }
+      - { name: "seq",    type: "int",        source: "tensor.input_0.shape.-2" }
+      - { name: "eps",    type: "float",      source: "param.epsilon" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
+
+  vector_rmsnorm_part2:
+    unit: vector
     params:
       - { name: "inter", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "orig",  type: "tensor_desc", source: "tensor.input_1" }
       - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
       - { name: "size",  type: "int",         source: "tensor.input_0.hbm_size" }
       - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
+  # ---- vector: shape ----
+
   vector_transpose:
+    unit: vector
     params:
       - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
       - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
@@ -127,6 +220,7 @@ compute_ops:
       - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   vector_transpose_2d:
+    unit: vector
     params:
       - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
       - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
@@ -134,55 +228,44 @@ compute_ops:
       - { name: "cols",  type: "int",         source: "tensor.input_0.shape.1" }
       - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
-  scalar_reshape:
-    params:
-      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
-      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
-      - { name: "size",  type: "int",         source: "tensor.input_0.hbm_size" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
+dma_ops:
 
-  scalar_broadcast:
+  # 统一的 DMA 传输接口（HBM ↔ L1），支持随路 dtype 转换
+  dma_move:
+    unit: dma
     params:
-      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
-      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
-      - { name: "size",  type: "int",         source: "tensor.input_0.hbm_size" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
-
-  scalar_copy:
-    params:
-      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
-      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
-      - { name: "size",  type: "int",         source: "tensor.input_0.hbm_size" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
-
-  dma_reformat:
-    params:
-      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
-      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "dst",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "src",   type: "tensor_desc", source: "tensor.input_0" }
       - { name: "count", type: "int",         source: "tensor.input_0.elem_count" }
 
-dma_ops:
-  npu_dma_load:
-    params:
-      - { name: "l1_dst",    type: "addr" }
-      - { name: "hbm_src",   type: "addr" }
-      - { name: "size",      type: "int" }
-      - { name: "src_fmt",   type: "format_enum", default: "NPU_FORMAT_ND" }
-      - { name: "dst_fmt",   type: "format_enum", default: "NPU_FORMAT_ND" }
-  npu_dma_store:
-    params:
-      - { name: "hbm_dst",   type: "addr" }
-      - { name: "l1_src",    type: "addr" }
-      - { name: "size",      type: "int" }
-      - { name: "src_fmt",   type: "format_enum", default: "NPU_FORMAT_ND" }
-      - { name: "dst_fmt",   type: "format_enum", default: "NPU_FORMAT_ND" }
-  npu_dma_barrier:
-    params: []
+idma_ops:
 
-sync_ops:
-  npu_set_dependency:
+  # L1 → pipe 内部数据搬运
+  idma_move:
+    unit: idma
     params:
-      - { name: "src_id",    type: "int" }
-      - { name: "dst_id",    type: "int" }
-  npu_barrier:
-    params: []
+      - { name: "dst",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "src",   type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "count", type: "int",         source: "tensor.input_0.elem_count" }
+
+  idma_reshape:
+    unit: idma
+    params:
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "size",  type: "int",         source: "tensor.input_0.hbm_size" }
+
+  idma_broadcast:
+    unit: idma
+    params:
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "count", type: "int",         source: "tensor.output_0.elem_count" }
+
+  idma_concat:
+    unit: idma
+    params:
+      - { name: "inputs", type: "tensor_desc_array", source: "tensor.inputs" }
+      - { name: "counts", type: "int_array",         source: "tensor.input_counts" }
+      - { name: "num_inputs", type: "int",            source: "tensor.num_inputs" }
+      - { name: "out",   type: "tensor_desc",        source: "tensor.output_0" }

@@ -1,19 +1,12 @@
-set(TEST_SOURCES
-    test_fp16
-    test_elementwise
-    test_matmul
-    test_norm
-    test_rmsnorm
-    test_softmax
-    test_transpose
-    test_dma
+set(TRAIN_TEST_SOURCES
+    test_train_loss
+    test_train_backward
+    test_train_optimizer
 )
 
-foreach(t ${TEST_SOURCES})
+foreach(t ${TRAIN_TEST_SOURCES})
     add_executable(${t} ${t}.c)
     target_link_libraries(${t} PRIVATE npu_cpu_mock m)
     target_include_directories(${t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     add_test(NAME ${t} COMMAND ${t})
 endforeach()
-
-add_subdirectory(train)

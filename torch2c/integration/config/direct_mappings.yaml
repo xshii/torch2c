@@ -1,7 +1,9 @@
 # ATen → NPU 算子直接映射表
 # 算子名为 torch.export 输出的全称
+# compute_unit: cube / vector / dma / idma
 
 mappings:
+  # ---- cube ----
   aten.addmm.default:
     npu_op: cube_matmul_bias
     compute_unit: cube
@@ -14,15 +16,33 @@ mappings:
   aten.linear.default:
     npu_op: cube_matmul_bias
     compute_unit: cube
+
+  # ---- vector: arithmetic ----
   aten.add.Tensor:
     npu_op: vector_add
+    compute_unit: vector
+  aten.sub.Tensor:
+    npu_op: vector_sub
     compute_unit: vector
   aten.mul.Tensor:
     npu_op: vector_mul
     compute_unit: vector
+  aten.div.Tensor:
+    npu_op: vector_div
+    compute_unit: vector
+  aten.mul.Scalar:
+    npu_op: vector_mul_scalar
+    compute_unit: vector
+
+  # ---- vector: activation & regularization ----
   aten.gelu.default:
     npu_op: vector_gelu
     compute_unit: vector
+  aten.dropout.default:
+    npu_op: vector_dropout
+    compute_unit: vector
+
+  # ---- vector: normalization ----
   aten._softmax.default:
     npu_op: vector_softmax
     compute_unit: vector
@@ -35,18 +55,28 @@ mappings:
   aten.layer_norm.default:
     npu_op: vector_layernorm
     compute_unit: vector
+  aten.rms_norm.default:
+    npu_op: vector_rmsnorm
+    compute_unit: vector
+
+  # ---- vector: shape ----
   aten.transpose.int:
     npu_op: vector_transpose
     compute_unit: vector
   aten.t.default:
     npu_op: vector_transpose_2d
     compute_unit: vector
+
+  # ---- idma: data movement ----
   aten.view.default:
-    npu_op: scalar_reshape
-    compute_unit: scalar
+    npu_op: idma_reshape
+    compute_unit: idma
+  aten.reshape.default:
+    npu_op: idma_reshape
+    compute_unit: idma
   aten.expand.default:
-    npu_op: scalar_broadcast
-    compute_unit: scalar
+    npu_op: idma_broadcast
+    compute_unit: idma
   aten.clone.default:
-    npu_op: scalar_copy
-    compute_unit: scalar
+    npu_op: idma_move
+    compute_unit: idma
