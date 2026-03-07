@@ -51,3 +51,28 @@ def is_tensor_overload(op_name_str: str) -> bool:
     """判断算子重载是否期望全部 Tensor 参数（如 aten.mul.Tensor）。"""
     parts = op_name_str.rsplit(".", 1)
     return len(parts) >= 2 and parts[-1] == "Tensor"
+
+
+def normalize_op_inputs(
+    op: str,
+    input_tids: list[str],
+    params: dict,
+) -> tuple[list[str], dict]:
+    """输入重排 + 参数重命名 + 默认值填充（规则来自 capture_rules.yaml）。"""
+    reorder = INPUT_REORDER.get(op)
+    if reorder and len(input_tids) >= len(reorder):
+        input_tids = [input_tids[i] for i in reorder]
+
+    renames = PARAM_RENAMES.get(op)
+    if renames:
+        for old_key, new_key in renames.items():
+            if old_key in params and new_key not in params:
+                params[new_key] = params.pop(old_key)
+
+    defaults = PARAM_DEFAULTS.get(op)
+    if defaults:
+        for key, val in defaults.items():
+            if key not in params:
+                params[key] = val
+
+    return input_tids, params

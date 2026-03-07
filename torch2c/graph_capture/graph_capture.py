@@ -11,15 +11,12 @@ from torch.export import export
 
 from ..common.graph_ir import Graph, Node, Tensor
 from ..common.logger import get_logger
-from ..common.npu_annotate import NpuSpec, get_input_annotation, get_npu_annotations
+from ._annotations import _apply_npu_annotations
 from ._constants import (
-    DIM_TO_SIZE_OPS,
-    INPUT_REORDER,
-    PARAM_DEFAULTS,
-    PARAM_RENAMES,
     WEIGHT_TRANSPOSE_INPUT,
     dtype_str,
     is_tensor_overload,
+    normalize_op_inputs,
     op_name,
 )
 
@@ -55,8 +52,7 @@ def capture(model: nn.Module, dummy_input: torch.Tensor, mask: torch.Tensor | No
 
     ep = export(model, args)
 
-    # 区分参数/权重 placeholder 和用户输入 placeholder
-    # 映射 FX placeholder name → state_dict key (spec.target)
+    # 映射 FX placeholder name → state_dict key (区分权重/用户输入)
     param_names: dict[str, str] = {}
     for spec in ep.graph_signature.input_specs:
         if spec.kind.name != "USER_INPUT":
@@ -78,11 +74,8 @@ def capture(model: nn.Module, dummy_input: torch.Tensor, mask: torch.Tensor | No
         elif fx_node.op == "output":
             _handle_output(graph, fx_node, fx_map)
 
-    # npu() 标注传播：通过 nn_module_stack 匹配模块，写入 Node.params["_npu"]
+    # npu() 标注传播 + 负索引 dim 解析
     _apply_npu_annotations(graph, model, dummy_input, mask, ep, fx_to_nid)
-
-    # 负索引 dim 解析 & softmax dim → size 转换
-    _resolve_negative_dims(graph)
 
     # 校验图完整性
     errors = graph.validate()
@@ -90,110 +83,10 @@ def capture(model: nn.Module, dummy_input: torch.Tensor, mask: torch.Tensor | No
         for err in errors:
             logger.warning("图校验警告: %s", err)
 
-    weight_count = sum(1 for t in graph.tensors.values() if t.is_weight)
-    logger.info(
-        "图捕获完成，节点数: %d, tensor数: %d, 权重tensor数: %d",
-        len(graph.nodes),
-        len(graph.tensors),
-        weight_count,
-    )
+    n_weights = sum(1 for t in graph.tensors.values() if t.is_weight)
+    logger.info("图捕获完成，节点: %d, tensor: %d, 权重: %d",
+                len(graph.nodes), len(graph.tensors), n_weights)
     return graph
-
-
-def _apply_npu_annotations(
-    graph: Graph,
-    model: nn.Module,
-    dummy_input: torch.Tensor,
-    mask: torch.Tensor | None,
-    ep: Any,
-    fx_to_nid: dict[str, str],
-) -> None:
-    """将 npu() / npu_input() 标注传播到 Graph IR。
-
-    模块标注：通过 nn_module_stack 匹配 FX 节点到模块路径，
-    将完整标注写入 Node.params["_npu"]（供 format_annotator 等下游读取），
-    compute_dtype 同时写入 Node.params["compute_dtype"]。
-    输入标注：按 USER_INPUT placeholder 顺序匹配。
-    """
-    annotations = get_npu_annotations(model)
-
-    # ---- 模块标注 → 通过 nn_module_stack 匹配节点 ----
-    if annotations:
-        for fx_node in ep.graph_module.graph.nodes:
-            if fx_node.op != "call_function" or fx_node.name not in fx_to_nid:
-                continue
-            nn_stack = fx_node.meta.get("nn_module_stack")
-            if not nn_stack:
-                continue
-            # 取最内层模块路径 (value[0] 是 module path 字符串)
-            innermost_path = list(nn_stack.values())[-1][0]
-            if innermost_path not in annotations:
-                continue
-            ann = annotations[innermost_path]
-            nid = fx_to_nid[fx_node.name]
-            node = graph.get_node(nid)
-            if node is None:
-                continue
-            node.params["_npu"] = ann
-            if "compute_dtype" in ann and "compute_dtype" not in node.params:
-                node.params["compute_dtype"] = ann["compute_dtype"]
-            logger.debug("模块标注 %s → node %s: %s", innermost_path, nid, ann)
-
-    # ---- 权重标注 → weight Tensor 的 dtype/format ----
-    if annotations:
-        weight_to_module: dict[str, str] = {}
-        for name in model.state_dict():
-            parts = name.rsplit(".", 1)
-            if len(parts) == 2:
-                weight_to_module[name] = parts[0]
-        for t in graph.tensors.values():
-            if not (t.is_weight and t.name):
-                continue
-            mod_path = weight_to_module.get(t.name)
-            if mod_path is None or mod_path not in annotations:
-                continue
-            ann = annotations[mod_path]
-            spec: NpuSpec | None = ann.get("weight")
-            if spec is not None:
-                # 保留原始 dtype（来自 .pth / torch.export）
-                # format 无需保留：PyTorch 没有 format 概念，源端始终是 nd
-                t.src_dtype = t.dtype
-                # 目标 dtype/format（NPU 上的存储）
-                t.dtype = spec.dtype
-                t.format = spec.format
-            logger.debug("权重标注 %s: %s → %s", t.name, t.src_dtype, spec)
-
-    # ---- 输入标注 → model_input Tensor ----
-    input_tensors = [t for t in graph.tensors.values() if t.is_model_input]
-    input_objects = [dummy_input] + ([mask] if mask is not None else [])
-    for tensor_ir, input_obj in zip(input_tensors, input_objects):
-        spec = get_input_annotation(input_obj)
-        if spec is None:
-            continue
-        tensor_ir.src_dtype = tensor_ir.dtype
-        tensor_ir.dtype = spec.dtype
-        tensor_ir.format = spec.format
-        logger.debug("输入标注 %s: %s → %s", tensor_ir.id, tensor_ir.src_dtype, spec)
-
-
-def _resolve_negative_dims(graph: Graph) -> None:
-    """将 dim 参数的负索引转正，并将 softmax 的 dim 从索引转为维度大小。"""
-    for node in graph.nodes.values():
-        dim_val = node.params.get("dim")
-        if dim_val is None or not isinstance(dim_val, int):
-            continue
-        if not node.inputs:
-            continue
-        t = graph.get_tensor(node.inputs[0])
-        if t is None or not t.shape:
-            continue
-        ndim = len(t.shape)
-        if dim_val < 0:
-            dim_val = dim_val + ndim
-        if node.op_type in DIM_TO_SIZE_OPS:
-            node.params["dim"] = t.shape[dim_val]
-        else:
-            node.params["dim"] = dim_val
 
 
 def _handle_placeholder(
@@ -264,32 +157,6 @@ def _parse_call_args(
     return input_tids, params
 
 
-def _normalize_op_inputs(
-    op: str,
-    input_tids: list[str],
-    params: dict,
-) -> tuple[list[str], dict]:
-    """输入重排 + 参数重命名（规则来自 capture_rules.yaml）。"""
-    reorder = INPUT_REORDER.get(op)
-    if reorder and len(input_tids) >= len(reorder):
-        input_tids = [input_tids[i] for i in reorder]
-
-    renames = PARAM_RENAMES.get(op)
-    if renames:
-        for old_key, new_key in renames.items():
-            if old_key in params and new_key not in params:
-                params[new_key] = params.pop(old_key)
-
-    # 缺失参数补充默认值
-    defaults = PARAM_DEFAULTS.get(op)
-    if defaults:
-        for key, val in defaults.items():
-            if key not in params:
-                params[key] = val
-
-    return input_tids, params
-
-
 def _create_call_outputs(
     graph: Graph,
     fx_node,
@@ -323,11 +190,7 @@ def _create_call_outputs(
 def _insert_weight_transpose(
     graph: Graph, input_tids: list[str], weight_idx: int, tgen: _IdGen, ngen: _IdGen,
 ) -> list[str]:
-    """为 linear 等算子的 weight 输入插入 transpose_2d 节点。
-
-    PyTorch nn.Linear weight shape = [out, in]，需转置为 [in, out]
-    才能用 npu_matmul_bias(a @ b + bias) 正确计算。
-    """
+    """为 linear weight [out,in] 插入 transpose 节点，转为 [in,out]。"""
     weight_tid = input_tids[weight_idx]
     weight_t = graph.get_tensor(weight_tid)
     if weight_t is None or len(weight_t.shape) != 2:
@@ -374,7 +237,7 @@ def _handle_call(
         op,
         tensor_overload,
     )
-    input_tids, params = _normalize_op_inputs(op, input_tids, params)
+    input_tids, params = normalize_op_inputs(op, input_tids, params)
 
     # linear 等算子需要对 weight 做转置
     wt_idx = WEIGHT_TRANSPOSE_INPUT.get(op)

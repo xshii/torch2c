@@ -4,21 +4,14 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
-import numpy as np
 import torch
 import torch.nn as nn
 
-from torch2c.codegen import c_emitter, golden_exporter, weight_exporter
 from torch2c.viz import emit_graph_ascii, emit_graph_dot, emit_lifetime_ascii
-from torch2c.codegen.c_project import (
-    cmake_emitter,
-    main_emitter,
-    mock_emitter,
-    utils_emitter,
-)
-from torch2c.common import CompilerError, DiagnosticCollector, Graph, dtype_numpy, get_logger, get_model_config, load_config
+from torch2c.common import CompilerError, DiagnosticCollector, Graph, get_logger, get_model_config, load_config
+from torch2c.integration._codegen_runner import _run_codegen
 from torch2c.format_annotator import format_annotator
 from torch2c.graph_capture import graph_capture
 from torch2c.reformat_inserter import reformat_inserter
@@ -99,10 +92,7 @@ def _load_configs(
     target_format: str | None = None,
     compute_dtype: str | None = None,
 ) -> dict:
-    """加载全部配置文件。
-
-    model_config.yaml 提供默认值，函数参数可覆盖。
-    """
+    """加载全部配置文件，函数参数可覆盖 model_config.yaml 默认值。"""
     hardware = load_config(os.path.join(config_dir, "hardware_config.yaml"))
 
     format_config: dict = {
@@ -130,44 +120,6 @@ def _load_configs(
 def _build_validator_config(signatures_config: dict) -> dict:
     """从 c_api_signatures 的 compute_ops 键集构建 validator 配置。"""
     return {"supported_ops": list(signatures_config.get("compute_ops", {}).keys())}
-
-
-def _build_codegen_plan(graph: Graph, dma_plans: list) -> dict:
-    """将 Graph + DMA 计划序列化为 codegen plan dict。"""
-    plan = graph.to_dict()
-    plan["dma_plans"] = [asdict(dp) for dp in dma_plans]
-    return plan
-
-
-def _infer_golden_dtype(graph: Graph) -> type:
-    """从 graph 的 model_input tensor 推断 golden 数据精度。"""
-    for t in graph.tensors.values():
-        if t.is_model_input and t.dtype:
-            return dtype_numpy(t.dtype)
-    return np.float16
-
-
-def _run_golden(
-    model: nn.Module,
-    dummy_input: torch.Tensor,
-    mask: torch.Tensor | None = None,
-    *,
-    numpy_dtype: type = np.float16,
-) -> tuple[list[np.ndarray], list[np.ndarray]]:
-    """前向推理获取 golden 输入/输出。"""
-    model.eval()
-    with torch.no_grad():
-        out = model(dummy_input, mask) if mask is not None else model(dummy_input)
-
-    inputs = [dummy_input.cpu().float().numpy().astype(numpy_dtype)]
-    if mask is not None:
-        inputs.append(mask.cpu().float().numpy().astype(numpy_dtype))
-
-    if isinstance(out, torch.Tensor):
-        outputs = [out.cpu().float().numpy().astype(numpy_dtype)]
-    else:
-        outputs = [o.cpu().float().numpy().astype(numpy_dtype) for o in out]
-    return inputs, outputs
 
 
 def _run_post_validation(
@@ -240,6 +192,35 @@ def _run_late_passes(
     return graph, dma_plans
 
 
+def _resolve_compile_configs(
+    model: nn.Module,
+    config_dir: str,
+    target_dtype: str | None,
+    target_format: str | None,
+    compute_dtype: str | None,
+) -> dict:
+    """解析模型装饰器配置并加载编译配置。
+
+    配置优先级：compile() 参数 > 模型 @torch2c_config > 默认值。
+    """
+    model_cfg = get_model_config(model)
+    resolved_dtype = target_dtype or model_cfg.get("target_dtype")
+    resolved_format = target_format or model_cfg.get("target_format")
+    resolved_compute = compute_dtype or model_cfg.get("compute_dtype")
+    compute_rules = model_cfg.get("compute_dtype_rules")
+
+    configs = _load_configs(
+        config_dir,
+        target_dtype=resolved_dtype,
+        target_format=resolved_format,
+        compute_dtype=resolved_compute,
+    )
+    # 分层 compute_dtype_rules 从模型配置注入（如果有且未被参数覆盖）
+    if compute_rules and not resolved_compute:
+        configs["format"]["compute_dtype_rules"] = compute_rules
+    return configs
+
+
 # ---- 主入口 ----
 
 
@@ -257,42 +238,12 @@ def compile(
     cosine_tol: float = 0.999,
     static_golden: bool = False,
 ) -> str:
-    """完整编译流水线。
-
-    配置优先级：compile() 参数 > 模型 @torch2c_config > 默认值。
-
-    Args:
-        model: PyTorch 模型（可通过 @torch2c_config 装饰器附带编译配置）。
-        dummy_input: 样例输入张量。
-        config_dir: 配置文件目录路径。
-        output_dir: C 工程输出目录路径。
-        mask: 可选 attention mask 张量。
-        target_dtype: 存储 dtype（如 "fp16"），None 则从模型配置或原始 dtype 继承。
-        target_format: 存储 format（如 "nz"），None 则从模型配置或原始 format 继承。
-        compute_dtype: 计算精度（如 "fp32"），None 则从模型配置或 target_dtype 继承。
-        static_golden: True 时将 golden 数据编译为 C 静态数组，无文件系统依赖。
-
-    Returns:
-        生成的 C 工程输出目录路径。
-    """
+    """完整编译流水线：9 Pass 从 PyTorch 模型到 C 工程。返回输出目录路径。"""
     logger.info("=== 编译管线开始 ===")
 
-    # 模型装饰器配置作为默认值，compile() 参数可覆盖
-    model_cfg = get_model_config(model)
-    resolved_dtype = target_dtype or model_cfg.get("target_dtype")
-    resolved_format = target_format or model_cfg.get("target_format")
-    resolved_compute = compute_dtype or model_cfg.get("compute_dtype")
-    compute_rules = model_cfg.get("compute_dtype_rules")
-
-    configs = _load_configs(
-        config_dir,
-        target_dtype=resolved_dtype,
-        target_format=resolved_format,
-        compute_dtype=resolved_compute,
+    configs = _resolve_compile_configs(
+        model, config_dir, target_dtype, target_format, compute_dtype,
     )
-    # 分层 compute_dtype_rules 从模型配置注入（如果有且未被参数覆盖）
-    if compute_rules and not resolved_compute:
-        configs["format"]["compute_dtype_rules"] = compute_rules
     collector = DiagnosticCollector()
 
     # Pass ① graph_capture（特殊：不是 run(graph, config) 模式）
@@ -320,73 +271,6 @@ def compile(
 
     logger.info("=== 编译管线完成，输出目录: %s ===", output_dir)
     return output_dir
-
-
-def _run_codegen(
-    model: nn.Module,
-    dummy_input: torch.Tensor,
-    mask: torch.Tensor | None,
-    graph: Graph,
-    dma_plans: list,
-    configs: dict,
-    config_dir: str,
-    output_dir: str,
-    atol: float,
-    cosine_tol: float,
-    *,
-    static_golden: bool = False,
-) -> None:
-    """Pass ⑨：C 代码生成 + 权重导出 + golden 数据。"""
-    logger.info("Pass ⑨ codegen 开始")
-    plan = _build_codegen_plan(graph, dma_plans)
-
-    c_emitter.run(plan, output_dir, config_dir=config_dir)
-    mock_emitter.run(output_dir, config_dir=config_dir)
-    elem_size = 2 if _infer_golden_dtype(graph) == np.float16 else 4
-    main_emitter.run(
-        plan, configs["hardware"], output_dir,
-        atol=atol, cosine_tol=cosine_tol,
-        static_mode=static_golden, elem_size=elem_size,
-    )
-    cmake_emitter.run(output_dir)
-    utils_emitter.run(output_dir)
-
-    weight_path = os.path.join(output_dir, "src", "model_weights.h")
-    weight_offsets = {
-        t["name"]: t.get("hbm_offset", 0) or 0
-        for t in plan["tensors"].values()
-        if t.get("is_weight") and t.get("name")
-    }
-    golden_dtype = _infer_golden_dtype(graph)
-    dtype_str = {np.float16: "fp16", np.float32: "fp32"}.get(golden_dtype, "fp16")
-    weight_exporter.export_weights(
-        model.state_dict(), weight_path, dtype=dtype_str, offsets=weight_offsets
-    )
-    inputs, outputs = _run_golden(model, dummy_input, mask, numpy_dtype=golden_dtype)
-
-    # golden 数据：文件模式 + 可选静态模式
-    golden_dir = os.path.join(output_dir, "golden")
-    golden_exporter.export_golden(inputs, outputs, golden_dir, dtype=dtype_str)
-    if static_golden:
-        input_offsets = [
-            t.get("hbm_offset", 0) or 0
-            for t in sorted(
-                [t for t in plan["tensors"].values() if t.get("is_model_input")],
-                key=lambda t: t.get("hbm_offset", 0) or 0,
-            )
-        ]
-        output_offsets = [
-            t.get("hbm_offset", 0) or 0
-            for t in sorted(
-                [t for t in plan["tensors"].values() if t.get("is_model_output")],
-                key=lambda t: t.get("hbm_offset", 0) or 0,
-            )
-        ]
-        golden_exporter.export_golden_static(
-            inputs, outputs, input_offsets, output_offsets,
-            os.path.join(output_dir, "src", "model_golden.h"),
-        )
-    logger.info("Pass ⑨ 完成")
 
 
 # ---- 诊断入口 ----
