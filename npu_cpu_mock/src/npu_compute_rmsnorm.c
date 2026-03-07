@@ -1,4 +1,5 @@
 #include "npu_api.h"
+#include "npu_debug.h"
 #include <math.h>
 #include <string.h>
 
@@ -9,7 +10,13 @@ void vector_rmsnorm(TidInfo tid, npu_tensor_t input, npu_tensor_t gamma, npu_ten
 
 void vector_rmsnorm_part1(TidInfo tid, npu_tensor_t input, npu_tensor_t gamma, npu_tensor_t out,
                           int hidden, int seq, float eps, npu_dtype_t compute_dtype) {
-    (void)tid;
+    int count = seq * hidden;
+    npu_debug_tensor_arg_t _dbg[] = {
+        NPU_DBG_T(input, input, count), NPU_DBG_T(gamma, gamma, hidden),
+        NPU_DBG_T(out, out, count)
+    };
+    NPU_TRACE_BEGIN("vector_rmsnorm_part1", tid, _dbg, 3);
+
     void* pi = npu_t_ptr(input);
     void* pg = npu_t_ptr(gamma);
     void* po = npu_t_ptr(out);
@@ -30,12 +37,20 @@ void vector_rmsnorm_part1(TidInfo tid, npu_tensor_t input, npu_tensor_t gamma, n
             npu_write_compute(po, s * hidden + h, x * inv_rms * g, out.dtype, compute_dtype);
         }
     }
+
+    NPU_TRACE_END("vector_rmsnorm_part1", tid, _dbg, 3);
 }
 
 void vector_rmsnorm_part2(TidInfo tid, npu_tensor_t inter, npu_tensor_t orig, npu_tensor_t out,
                           int size, npu_dtype_t compute_dtype) {
-    (void)tid;
     (void)orig;
     (void)compute_dtype;
+    int elem_size = (int)npu_dtype_size(inter.dtype);
+    int count = (elem_size > 0) ? size / elem_size : 0;
+    npu_debug_tensor_arg_t _dbg[] = {
+        NPU_DBG_T(inter, inter, count), NPU_DBG_T(out, out, count)
+    };
+    NPU_TRACE_BEGIN("vector_rmsnorm_part2", tid, _dbg, 2);
     memcpy(npu_t_ptr(out), npu_t_ptr(inter), (size_t)size);
+    NPU_TRACE_END("vector_rmsnorm_part2", tid, _dbg, 2);
 }

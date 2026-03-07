@@ -86,7 +86,7 @@ def test_compute_unit():
     assert n1.compute_unit == "vector"  # add
     n4 = graph.get_node("n4")
     assert n4 is not None
-    assert n4.compute_unit == "scalar"  # view/reshape
+    assert n4.compute_unit == "idma"  # view/reshape
 
 
 def test_empty_graph():

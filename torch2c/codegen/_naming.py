@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ._helpers import DTYPE_C_ENUM_MAP, FORMAT_MAP  # noqa: F401
+from ._helpers import DTYPE_C_ENUM_MAP, FORMAT_MAP, find_op_sig  # noqa: F401
 
 
 # ---- npu_op → 简短前缀 ----
@@ -14,6 +14,7 @@ _OP_SHORT = {
     "vector_layernorm_part1": "layernorm_p1", "vector_layernorm_part2": "layernorm_p2",
     "vector_softmax_part1": "softmax_p1", "vector_softmax_part2": "softmax_p2",
     "vector_transpose": "trans", "vector_transpose_2d": "trans2d",
+    "idma_reshape": "reshape", "idma_broadcast": "bcast", "idma_move": "copy",
     "scalar_reshape": "reshape", "scalar_broadcast": "bcast", "scalar_copy": "copy",
     "dma_reformat": "reformat",
 }
@@ -168,7 +169,19 @@ def _resolve_module_groups(nodes: dict, order: list[str]) -> dict[str, str]:
         if mp:
             node_group[nid] = path_to_group.get(mp, mp)
 
-    # 无 module_path 的节点继承最近邻居
+    # 无 module_path 的节点：按 output 的 consumer 所属组归类
+    for nid in order:
+        if nid in node_group:
+            continue
+        node = nodes[nid]
+        for out_tid in node.get("outputs", []):
+            for other_nid in order:
+                if other_nid in node_group and out_tid in nodes[other_nid].get("inputs", []):
+                    node_group[nid] = node_group[other_nid]
+                    break
+            if nid in node_group:
+                break
+    # 仍无组的节点继承前邻居
     prev_group = None
     for nid in order:
         if nid in node_group:
@@ -195,7 +208,7 @@ def _collect_func_tensor_ids(
     result: list[str] = []
     for nid in nids:
         node = nodes[nid]
-        sig = signatures.get("compute_ops", {}).get(node.get("npu_op", "unknown"))
+        sig = find_op_sig(signatures, node.get("npu_op", "unknown"))
         if sig is None:
             continue
         resolver = SourceResolver(node, tensors)
@@ -216,13 +229,43 @@ def _collect_used_tensor_ids(plan: dict, signatures: dict) -> list[str]:
 
 
 def _build_groups(nodes, order, node_group):
-    """按组收集节点，返回 (group_order, group_nids)。"""
-    group_order: list[str] = []
+    """按组收集节点，返回 (group_order, group_nids)。
+
+    group_order 按拓扑序排列：若 A 组的某节点输出被 B 组消费，则 A 排在 B 前。
+    """
     group_nids: dict[str, list[str]] = {}
     for nid in order:
         g = node_group.get(nid, "__ungrouped__")
-        if g not in group_nids:
-            group_order.append(g)
-            group_nids[g] = []
-        group_nids[g].append(nid)
-    return group_order, group_nids
+        group_nids.setdefault(g, []).append(nid)
+
+    # 构建 tensor → producer_group 映射
+    tid_group: dict[str, str] = {}
+    for g, nids in group_nids.items():
+        for nid in nids:
+            for out_tid in nodes[nid].get("outputs", []):
+                tid_group[out_tid] = g
+
+    # 构建组间依赖图
+    group_deps: dict[str, set[str]] = {g: set() for g in group_nids}
+    for g, nids in group_nids.items():
+        for nid in nids:
+            for in_tid in nodes[nid].get("inputs", []):
+                pg = tid_group.get(in_tid)
+                if pg and pg != g:
+                    group_deps[g].add(pg)
+
+    # 拓扑排序
+    sorted_groups: list[str] = []
+    visited: set[str] = set()
+
+    def visit(g: str) -> None:
+        if g in visited:
+            return
+        visited.add(g)
+        for dep in group_deps.get(g, set()):
+            visit(dep)
+        sorted_groups.append(g)
+
+    for g in group_nids:
+        visit(g)
+    return sorted_groups, group_nids

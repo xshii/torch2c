@@ -76,16 +76,25 @@ def export_weights(
     output_path: str,
     dtype: str = "fp16",
     offsets: dict[str, int] | list[int] | None = None,
+    per_weight_dtype: dict[str, str] | None = None,
 ) -> None:
-    """将 PyTorch state_dict 导出为 model_weights.h。"""
+    """将 PyTorch state_dict 导出为 model_weights.h。
+
+    Args:
+        per_weight_dtype: 权重名→dtype 字符串的映射（覆盖全局 dtype）。
+    """
     logger.info("weight_exporter: 导出权重到 %s", output_path)
-    np_dtype = DTYPE_NUMPY.get(dtype)
-    if np_dtype is None:
+    default_np_dtype = DTYPE_NUMPY.get(dtype)
+    if default_np_dtype is None:
         raise CodegenError(f"不支持的 dtype: {dtype}")
 
     weights = {}
     for name, tensor in state_dict.items():
-        arr = tensor.detach().cpu().numpy().astype(np_dtype)
+        if per_weight_dtype and name in per_weight_dtype:
+            np_dt = DTYPE_NUMPY.get(per_weight_dtype[name], default_np_dtype)
+        else:
+            np_dt = default_np_dtype
+        arr = tensor.detach().cpu().numpy().astype(np_dt)
         weights[name] = arr
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)

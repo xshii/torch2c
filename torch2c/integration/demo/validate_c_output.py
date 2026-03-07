@@ -6,7 +6,7 @@ import os
 import shutil
 import subprocess
 
-from torch2c.common import NPU_CPU_MOCK_DIR, get_logger
+from torch2c.common import NPU_CPU_MOCK_DIR, c_mock_compile_level, get_logger
 
 logger = get_logger(__name__)
 
@@ -15,13 +15,14 @@ _NPU_MOCK_DIR = NPU_CPU_MOCK_DIR
 # npu_cpu_mock 的所有源文件
 _MOCK_SOURCES = [
     "src/npu_dtype_utils.c",
+    "src/npu_debug.c",
     "src/npu_compute_elementwise.c",
     "src/npu_compute_matmul.c",
     "src/npu_compute_norm.c",
+    "src/npu_compute_rmsnorm.c",
     "src/npu_compute_softmax.c",
     "src/npu_compute_transpose.c",
     "src/npu_dma.c",
-    "src/npu_sync.c",
 ]
 
 _NPU_MOCK_SHIM = """\
@@ -41,7 +42,7 @@ def _find_cc() -> str | None:
     return None
 
 
-def validate_c(output_dir: str) -> dict:
+def validate_c(output_dir: str, *, c_debug_level: int | None = None) -> dict:
     """编译并运行生成的 C 工程，比对 golden 数据。
 
     Args:
@@ -56,6 +57,9 @@ def validate_c(output_dir: str) -> dict:
     cc = _find_cc()
     if cc is None:
         raise RuntimeError("未找到 C 编译器 (cc/gcc/clang)")
+
+    if c_debug_level is None:
+        c_debug_level = c_mock_compile_level()
 
     mock_dir = str(_NPU_MOCK_DIR)
     if not os.path.isdir(mock_dir):
@@ -90,6 +94,7 @@ def validate_c(output_dir: str) -> dict:
         "-I.",
         "-Isrc",
         f"-I{os.path.join(mock_dir, 'include')}",
+        f"-DNPU_DEBUG_LEVEL={c_debug_level}",
         "-lm",
     ]
 

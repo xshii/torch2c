@@ -1,0 +1,17 @@
+# debug.yaml — 维测开关集中配置
+#
+# 所有维测功能默认关闭，按需开启。
+
+# Python 侧 PyTorch forward hook 维测
+torch_trace:
+  enabled: false
+  leaf_only: false        # true: 只 hook 叶子模块; false: 叶子 + 带 _torch2c 标注的模块
+
+# memory_planner 内存布局日志
+memory_layout:
+  enabled: false          # 打印每个 tensor 的 HBM/L1 地址、大小、dtype
+
+# C 侧 npu_cpu_mock 维测 (编译时 + 运行时)
+c_mock_trace:
+  compile_level: 0        # -DNPU_DEBUG_LEVEL=N (0=关闭, 1=地址/dtype, 2=地址+min/max/nan/inf)
+  runtime_level: 0        # npu_debug_enable(N), 覆盖编译时级别

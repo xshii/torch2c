@@ -230,13 +230,21 @@ compute_ops:
 
 dma_ops:
 
+  # 格式/dtype 转换（HBM ↔ L1 或 L1 内部）
+  dma_reformat:
+    unit: dma
+    params:
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "size_bytes", type: "int",    source: "tensor.input_0.hbm_size" }
+
   # 统一的 DMA 传输接口（HBM ↔ L1），支持随路 dtype 转换
   dma_move:
     unit: dma
     params:
-      - { name: "dst",   type: "tensor_desc", source: "tensor.output_0" }
-      - { name: "src",   type: "tensor_desc", source: "tensor.input_0" }
-      - { name: "count", type: "int",         source: "tensor.input_0.elem_count" }
+      - { name: "dst",        type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "src",        type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "size_bytes", type: "int",         source: "tensor.input_0.hbm_size" }
 
 idma_ops:
 
@@ -244,9 +252,9 @@ idma_ops:
   idma_move:
     unit: idma
     params:
-      - { name: "dst",   type: "tensor_desc", source: "tensor.output_0" }
-      - { name: "src",   type: "tensor_desc", source: "tensor.input_0" }
-      - { name: "count", type: "int",         source: "tensor.input_0.elem_count" }
+      - { name: "dst",        type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "src",        type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "size_bytes", type: "int",         source: "tensor.input_0.hbm_size" }
 
   idma_reshape:
     unit: idma

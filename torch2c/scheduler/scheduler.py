@@ -30,10 +30,11 @@ def run(graph: Graph, config: dict | None = None) -> Graph:
     # 1. 拓扑排序确定基本执行顺序
     topo_order = graph.topo_sort()
 
-    # 更新 execution_order 和 schedule_order
+    # 更新 execution_order、schedule_order 和 task_id
     graph.execution_order = topo_order
     for idx, nid in enumerate(topo_order):
         graph.nodes[nid].schedule_order = idx
+        graph.nodes[nid].task_id = idx + 1  # globally unique, starting from 1
         graph.nodes[nid].dependencies = []
 
     # 2. 遍历相邻算子对，确定依赖关系
@@ -58,8 +59,26 @@ def run(graph: Graph, config: dict | None = None) -> Graph:
             # 无数据依赖 + 不同 compute_unit → 可并行
             parallel_count += 1
 
+    # 3. 将 dependencies 转换为 per-unit TidInfo deps
+    _assign_tid_deps(graph)
+
     logger.info("调度完成。依赖关系: %d 条，可并行算子对: %d", dep_count, parallel_count)
     return graph
+
+
+def _assign_tid_deps(graph: Graph) -> None:
+    """为每个节点计算 per-unit TidInfo 依赖（存入 node.params）。"""
+    unit_keys = {"cube": "_tid_dep_cube", "vector": "_tid_dep_vector",
+                 "dma": "_tid_dep_dma", "idma": "_tid_dep_idma"}
+    for node in graph.nodes.values():
+        deps_by_unit: dict[str, int] = {k: 0 for k in unit_keys}
+        for dep_id in node.dependencies:
+            dep_node = graph.nodes[dep_id]
+            unit = (dep_node.compute_unit or "").lower()
+            if unit in deps_by_unit:
+                deps_by_unit[unit] = max(deps_by_unit[unit], dep_node.task_id)
+        for unit, param_key in unit_keys.items():
+            node.params[param_key] = deps_by_unit[unit]
 
 
 def post_validate(graph: Graph) -> list[str]:

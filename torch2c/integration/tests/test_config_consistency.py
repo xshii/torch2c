@@ -21,8 +21,12 @@ def configs() -> dict:
 
 
 def _signature_ops(configs: dict) -> set[str]:
-    """从 c_api_signatures 提取所有 compute_ops 名称。"""
-    return set(configs["signatures"].get("compute_ops", {}).keys())
+    """从 c_api_signatures 提取所有算子名称（compute + dma + idma）。"""
+    sigs = configs["signatures"]
+    ops = set()
+    for section in ("compute_ops", "dma_ops", "idma_ops"):
+        ops.update(sigs.get(section, {}).keys())
+    return ops
 
 
 def _mapping_npu_ops(configs: dict) -> set[str]:

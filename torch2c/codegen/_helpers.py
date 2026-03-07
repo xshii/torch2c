@@ -87,32 +87,59 @@ def c_header_guard(guard_name: str, body: str) -> str:
     return f"#ifndef {guard_name}\n#define {guard_name}\n\n{body}\n#endif\n"
 
 
+# ---- 签名查找 ----
+
+_OP_SECTIONS = ("compute_ops", "dma_ops", "idma_ops")
+
+
+def find_op_sig(signatures: dict, npu_op: str) -> dict | None:
+    """跨所有 section 查找算子签名。"""
+    for section in _OP_SECTIONS:
+        sig = signatures.get(section, {}).get(npu_op)
+        if sig is not None:
+            return sig
+    return None
+
+
+def all_supported_ops(signatures: dict) -> list[str]:
+    """收集所有 section 中的算子名。"""
+    ops: list[str] = []
+    for section in _OP_SECTIONS:
+        ops.extend(signatures.get(section, {}).keys())
+    return ops
+
+
 # ---- compute op 声明生成 ----
 
 
 def gen_compute_decl(name: str, sig: dict) -> str:
-    """从 YAML 签名生成单个 C 函数声明。"""
+    """从 YAML 签名生成单个 C 函数声明（自动注入 TidInfo 为第一参数）。"""
     params = sig.get("params", [])
-    if not params:
-        return f"void {name}(void);"
-    args = ", ".join(f"{PARAM_TYPE_C.get(p['type'], 'int')} {p['name']}" for p in params)
-    return f"void {name}({args});"
+    args_parts = ["TidInfo tid"]
+    args_parts.extend(
+        f"{PARAM_TYPE_C.get(p['type'], 'int')} {p['name']}" for p in params
+    )
+    return f"void {name}({', '.join(args_parts)});"
 
 
 def gen_compute_declarations(signatures: dict) -> str:
-    """从 c_api_signatures.yaml 生成所有 compute op 的 C 函数声明。
+    """从 c_api_signatures.yaml 生成所有 op 的 C 函数声明。
 
-    按计算单元前缀分组输出：cube_ / vector_ / scalar_。
+    按计算单元前缀分组输出：cube_ / vector_ / scalar_ / dma_ / idma_。
     """
-    ops = signatures.get("compute_ops", {})
-    groups: dict[str, list[str]] = {"cube": [], "vector": [], "scalar": []}
-    for name, sig in ops.items():
-        prefix = name.split("_", 1)[0]
-        groups.setdefault(prefix, []).append(gen_compute_decl(name, sig))
+    groups: dict[str, list[str]] = {
+        "cube": [], "vector": [], "scalar": [], "dma": [], "idma": [],
+    }
+    for section in ["compute_ops", "dma_ops", "idma_ops"]:
+        ops = signatures.get(section, {})
+        for name, sig in ops.items():
+            prefix = name.split("_", 1)[0]
+            groups.setdefault(prefix, []).append(gen_compute_decl(name, sig))
 
     lines: list[str] = []
     for unit, label in [("cube", "cube compute ops"), ("vector", "vector compute ops"),
-                        ("scalar", "scalar compute ops")]:
+                        ("scalar", "scalar compute ops"), ("dma", "dma ops"),
+                        ("idma", "idma ops")]:
         decls = groups.get(unit, [])
         if decls:
             lines.append(f"/* ---- {label} ---- */")

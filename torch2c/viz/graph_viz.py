@@ -20,6 +20,34 @@ from torch2c.viz._utils import (
 logger = get_logger(__name__)
 
 
+_DEP_KEYS = {
+    "_tid_dep_cube": "dep:cube",
+    "_tid_dep_vector": "dep:vector",
+    "_tid_dep_dma": "dep:dma",
+    "_tid_dep_idma": "dep:idma",
+}
+
+
+def _build_tid_to_nid(graph: Graph) -> dict[int, str]:
+    """task_id → node_id 的映射表。"""
+    return {n.task_id: nid for nid, n in graph.nodes.items() if n.task_id}
+
+
+def _emit_dep_edges(graph: Graph, lines: list[str]) -> None:
+    """向 DOT lines 追加 task-dependency 虚线红边。"""
+    tid_map = _build_tid_to_nid(graph)
+    for nid, node in graph.nodes.items():
+        for key, label in _DEP_KEYS.items():
+            dep_tid = node.params.get(key, 0)
+            if dep_tid and dep_tid in tid_map:
+                src_nid = tid_map[dep_tid]
+                lines.append(
+                    f'  "{src_nid}" -> "{nid}" '
+                    f'[label="{label}", style=dashed, color="#CC0000", '
+                    f'fontcolor="#CC0000", penwidth=1.0, constraint=false];'
+                )
+
+
 # ── DOT ───────────────────────────────────────────────────
 
 
@@ -67,7 +95,7 @@ def render_dot(graph: Graph, cube_size: int) -> str:
             if at:
                 absorbed_labels.append(f"+{param}: {shape_str(at.shape)}")
 
-        label = f"{op_name}\\n[{cu}]"
+        label = f"{op_name}\\n[{cu} tid={node.task_id}]"
         if absorbed_labels:
             label += "\\n" + "\\n".join(absorbed_labels)
 
@@ -116,6 +144,11 @@ def render_dot(graph: Graph, cube_size: int) -> str:
 
         if t.is_model_output and t.producer_node_id:
             lines.append(f'  "{t.producer_node_id}" -> "{tid}" [{attr_str}];')
+
+    lines.append('')
+
+    # dependency edges (dashed red)
+    _emit_dep_edges(graph, lines)
 
     lines.append('')
 
@@ -215,7 +248,8 @@ def render_ascii(graph: Graph, cube_size: int) -> str:
         pipe_badge = f" {GREEN_BG}{BOLD} PIPE {RESET}" if has_pipe_out else ""
 
         lines.append(f"  {'':>4s}┌{'─' * 50}┐")
-        lines.append(f"  {BOLD}t={idx:<3d}{RESET}│ {cu_color}{BOLD}{op:^30s}{RESET} [{cu:^6s}]{absorbed_str}{pipe_badge}")
+        tid_label = f"{cu} tid={node.task_id}"
+        lines.append(f"  {BOLD}t={idx:<3d}{RESET}│ {cu_color}{BOLD}{op:^30s}{RESET} [{tid_label}]{absorbed_str}{pipe_badge}")
         lines.append(f"  {'':>4s}└{'─' * 50}┘")
 
         for tid, storage, t in node_outputs[nid]:

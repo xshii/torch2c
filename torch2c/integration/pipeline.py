@@ -10,7 +10,10 @@ import torch
 import torch.nn as nn
 
 from torch2c.viz import emit_graph_ascii, emit_graph_dot, emit_lifetime_ascii
-from torch2c.common import CompilerError, DiagnosticCollector, Graph, get_logger, get_model_config, load_config
+from torch2c.common import (
+    CompilerError, DiagnosticCollector, Graph,
+    get_logger, get_model_config, load_config, load_debug_config,
+)
 from torch2c.integration._codegen_runner import _run_codegen
 from torch2c.format_annotator import format_annotator
 from torch2c.graph_capture import graph_capture
@@ -102,6 +105,9 @@ def _load_configs(
     if compute_dtype:
         format_config["compute_dtype"] = compute_dtype
 
+    # 加载维测配置（debug.yaml 不存在时全部关闭）
+    debug = load_debug_config(config_dir)
+
     return {
         "mapping": load_config(os.path.join(config_dir, "direct_mappings.yaml")),
         "decomposition": load_config(os.path.join(config_dir, "decompositions.yaml")),
@@ -114,12 +120,16 @@ def _load_configs(
         },
         "hardware": hardware,
         "signatures": load_config(os.path.join(config_dir, "c_api_signatures.yaml")),
+        "debug": debug,
     }
 
 
 def _build_validator_config(signatures_config: dict) -> dict:
-    """从 c_api_signatures 的 compute_ops 键集构建 validator 配置。"""
-    return {"supported_ops": list(signatures_config.get("compute_ops", {}).keys())}
+    """从 c_api_signatures 所有 section 的键集构建 validator 配置。"""
+    ops: list[str] = []
+    for section in ("compute_ops", "dma_ops", "idma_ops"):
+        ops.extend(signatures_config.get(section, {}).keys())
+    return {"supported_ops": ops}
 
 
 def _run_post_validation(

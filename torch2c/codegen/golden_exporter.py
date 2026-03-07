@@ -39,24 +39,41 @@ def export_golden(
     inputs: list[np.ndarray],
     outputs: list[np.ndarray],
     output_dir: str,
-    dtype: str = "fp16",
+    dtype: str | list[str] = "fp16",
     fmt: str = "nd",
+    output_dtype: list[str] | None = None,
 ) -> None:
-    """导出 golden 数据为二进制文件 + 描述文件。"""
+    """导出 golden 数据为二进制文件 + 描述文件。
+
+    Args:
+        dtype: 输入 dtype。字符串时所有输入共享；列表时 per-tensor。
+        output_dtype: 输出 dtype 列表。None 时使用 dtype 值。
+    """
     logger.info("golden_exporter: 导出 golden 到 %s", output_dir)
     os.makedirs(output_dir, exist_ok=True)
+
+    # 标准化 dtype
+    if isinstance(dtype, str):
+        in_dtypes = [dtype] * len(inputs)
+    else:
+        in_dtypes = dtype
+    out_dtypes = output_dtype if output_dtype is not None else (
+        [dtype] * len(outputs) if isinstance(dtype, str) else dtype[:len(outputs)]
+    )
 
     for i, arr in enumerate(inputs):
         bin_path = os.path.join(output_dir, f"input_{i}.bin")
         desc_path = os.path.join(output_dir, f"input_{i}.desc")
         arr.tofile(bin_path)
-        _write_desc(desc_path, list(arr.shape), dtype, fmt, arr.nbytes)
+        dt = in_dtypes[i] if i < len(in_dtypes) else "fp16"
+        _write_desc(desc_path, list(arr.shape), dt, fmt, arr.nbytes)
 
     for i, arr in enumerate(outputs):
         bin_path = os.path.join(output_dir, f"output_{i}.bin")
         desc_path = os.path.join(output_dir, f"output_{i}.desc")
         arr.tofile(bin_path)
-        _write_desc(desc_path, list(arr.shape), dtype, fmt, arr.nbytes)
+        dt = out_dtypes[i] if i < len(out_dtypes) else "fp16"
+        _write_desc(desc_path, list(arr.shape), dt, fmt, arr.nbytes)
 
     logger.info("golden_exporter: 完成，%d 输入 + %d 输出", len(inputs), len(outputs))
 

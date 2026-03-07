@@ -92,7 +92,7 @@ def render_ascii(
         node = graph.nodes[nid]
         cu = (node.compute_unit or "?")[0].upper()
         short = nid.replace("n_", "")
-        header += f"{cu}:{short}".center(col_width)
+        header += f"{cu}:{short}(tid={node.task_id})".center(col_width)
     lines.append(header)
 
     idx_line = " " * 12

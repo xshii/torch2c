@@ -22,6 +22,7 @@ class DmaInstruction:
     size_bytes: int
     src_format: str
     dst_format: str
+    dtype: str = "fp16"
 
 
 @dataclass
@@ -78,6 +79,7 @@ def build_dma_plan(
                     size_bytes=calc_padded_size(t.shape, t.dtype, t.format, cube_size),
                     src_format=t.format,
                     dst_format=dst_fmt,
+                    dtype=t.dtype,
                 )
             )
 
@@ -103,6 +105,7 @@ def build_dma_plan(
                     size_bytes=calc_padded_size(t.shape, t.dtype, t.format, cube_size),
                     src_format=l1_fmt,
                     dst_format=t.format,
+                    dtype=t.dtype,
                 )
             )
     return plan
@@ -164,6 +167,7 @@ def build_bulk_dma(graph: Graph, cube_size: int) -> list[DmaPlan]:
                     size_bytes=size,
                     src_format=t.format,
                     dst_format=t.format,
+                    dtype=t.dtype,
                 )
             )
         if t.is_model_output:
@@ -176,6 +180,7 @@ def build_bulk_dma(graph: Graph, cube_size: int) -> list[DmaPlan]:
                     size_bytes=size,
                     src_format=t.format,
                     dst_format=t.format,
+                    dtype=t.dtype,
                 )
             )
 

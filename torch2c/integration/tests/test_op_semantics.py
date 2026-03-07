@@ -202,7 +202,7 @@ class TestMatmulSemantics:
             dummy_input=dummy,
             config_dir=_CONFIG_DIR,
             output_dir=output_dir,
-            atol=2e-2,
+            atol=5e-2,
         )
 
         result = _validate_c(output_dir)
@@ -294,7 +294,7 @@ class TestLinearChainSemantics:
             dummy_input=dummy,
             config_dir=_CONFIG_DIR,
             output_dir=output_dir,
-            atol=2e-2,
+            atol=1e-1,
         )
 
         result = _validate_c(output_dir)

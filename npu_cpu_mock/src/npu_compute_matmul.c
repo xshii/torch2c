@@ -1,4 +1,5 @@
 #include "npu_api.h"
+#include "npu_debug.h"
 #include <stdlib.h>
 #include <assert.h>
 
@@ -42,8 +43,12 @@ static void matmul_free(float* buf, float* stack_buf) {
 
 void cube_matmul(TidInfo tid, npu_tensor_t a, npu_tensor_t b, npu_tensor_t out,
                  int loop, int m, int n, int k, npu_dtype_t compute_dtype) {
-    (void)tid;
     size_t total = (size_t)loop * (size_t)m * (size_t)n;
+    npu_debug_tensor_arg_t dbg[] = {
+        NPU_DBG_T(a, a, (int)(loop*m*k)), NPU_DBG_T(b, b, (int)(loop*k*n)),
+        NPU_DBG_T(out, out, (int)total)
+    };
+    NPU_TRACE_BEGIN("cube_matmul", tid, dbg, 3);
     float acc_buf[MATMUL_STACK_ELEMS];
     float* acc = matmul_alloc(acc_buf, total);
 
@@ -55,12 +60,17 @@ void cube_matmul(TidInfo tid, npu_tensor_t a, npu_tensor_t b, npu_tensor_t out,
         npu_write_from_float(po, (int)i, acc[i], out.dtype);
 
     matmul_free(acc, acc_buf);
+    NPU_TRACE_END("cube_matmul", tid, dbg, 3);
 }
 
 void cube_matmul_bias(TidInfo tid, npu_tensor_t a, npu_tensor_t b, npu_tensor_t bias, npu_tensor_t out,
                       int loop, int m, int n, int k, npu_dtype_t compute_dtype) {
-    (void)tid;
     size_t total = (size_t)loop * (size_t)m * (size_t)n;
+    npu_debug_tensor_arg_t dbg[] = {
+        NPU_DBG_T(a, a, (int)(loop*m*k)), NPU_DBG_T(b, b, (int)(loop*k*n)),
+        NPU_DBG_T(bias, bias, n), NPU_DBG_T(out, out, (int)total)
+    };
+    NPU_TRACE_BEGIN("cube_matmul_bias", tid, dbg, 4);
     float acc_buf[MATMUL_STACK_ELEMS];
     float* acc = matmul_alloc(acc_buf, total);
 
@@ -82,4 +92,5 @@ void cube_matmul_bias(TidInfo tid, npu_tensor_t a, npu_tensor_t b, npu_tensor_t 
     }
 
     matmul_free(acc, acc_buf);
+    NPU_TRACE_END("cube_matmul_bias", tid, dbg, 4);
 }

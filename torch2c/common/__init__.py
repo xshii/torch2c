@@ -18,6 +18,15 @@ from .errors import (
 from .graph_ir import Graph, Node, Tensor
 from .logger import get_logger, setup_logging
 from .compile_config import get_model_config, torch2c_config
+from .debug_config import (
+    c_mock_compile_level,
+    c_mock_runtime_level,
+    get_debug_config,
+    load_debug_config,
+    memory_layout_enabled,
+    torch_trace_enabled,
+    torch_trace_leaf_only,
+)
 from .npu_annotate import (
     NpuSpec,
     format_annotation,
@@ -28,6 +37,13 @@ from .npu_annotate import (
     npu_input,
 )
 from .pass_protocol import CompilerPass
+from .torch_debug import (
+    disable_trace,
+    enable_trace,
+    flush_trace,
+    get_records,
+    trace_context,
+)
 from .paths import (
     DEFAULT_OUTPUT_DIR,
     HARDWARE_CONFIG_PATH,
@@ -77,4 +93,16 @@ __all__ = [
     "get_logger",
     "load_config",
     "setup_logging",
+    "enable_trace",
+    "disable_trace",
+    "flush_trace",
+    "get_records",
+    "trace_context",
+    "load_debug_config",
+    "get_debug_config",
+    "torch_trace_enabled",
+    "torch_trace_leaf_only",
+    "memory_layout_enabled",
+    "c_mock_compile_level",
+    "c_mock_runtime_level",
 ]

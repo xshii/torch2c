@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "npu_mock.h"
+#include "npu_debug.h"
 #include "src/model_graph.h"
 #include "src/model_memory.h"
 #include "src/model_weights.h"
@@ -11,7 +12,7 @@
 
 int main(void) {{
     printf("=== NPU Model Runner ===\\n");
-
+{debug_init}
     /* Allocate HBM and L1 */
     unsigned char* hbm = (unsigned char*)calloc(1, {hbm_size});
     unsigned char* l1  = (unsigned char*)calloc(1, {l1_size});

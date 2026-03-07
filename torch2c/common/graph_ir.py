@@ -82,6 +82,7 @@ class Node:
     is_mapped: bool = False
     format_annotation: dict | None = None
     schedule_order: int | None = None
+    task_id: int = 0
     dependencies: list[str] = field(default_factory=list)
     absorbed_inputs: dict = field(default_factory=dict)
     module_path: str | None = None

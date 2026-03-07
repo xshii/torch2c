@@ -218,6 +218,34 @@ class TestAdjacentOnlyDeps:
         assert "node_1" not in g.nodes["node_3"].dependencies
 
 
+class TestTaskId:
+    def test_task_id_assigned(self):
+        """每个节点的 task_id = schedule_order + 1。"""
+        g = _make_linear_chain()
+        g = run(g)
+        for nid in g.execution_order:
+            node = g.nodes[nid]
+            assert node.task_id == node.schedule_order + 1
+            assert node.task_id > 0
+
+    def test_task_id_unique(self):
+        """task_id 全局唯一。"""
+        g = _make_linear_chain()
+        g = run(g)
+        task_ids = [g.nodes[nid].task_id for nid in g.execution_order]
+        assert len(task_ids) == len(set(task_ids))
+
+    def test_tid_deps_in_params(self):
+        """per-unit TidInfo deps 写入 params。"""
+        g = _make_linear_chain()
+        g = run(g)
+        # node_1 (vector) depends on node_0 (cube, task_id=1)
+        assert g.nodes["node_1"].params["_tid_dep_cube"] == 1
+        assert g.nodes["node_1"].params["_tid_dep_vector"] == 0
+        # node_0 has no deps
+        assert g.nodes["node_0"].params["_tid_dep_cube"] == 0
+
+
 class TestPostValidate:
     def test_post_validate_after_schedule(self):
         """调度后校验通过。"""

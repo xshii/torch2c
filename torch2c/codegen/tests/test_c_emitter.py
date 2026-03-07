@@ -72,10 +72,10 @@ class TestOpBlockGeneration:
         node = plan["nodes"]["node_0"]
         dp = plan["dma_plans"][0]
         block = c_emitter.gen_op_block(node, plan["tensors"], dp, sigs)
-        assert "npu_dma_load" in block
+        assert "dma_move" in block
         assert "cube_matmul" in block
-        assert "npu_dma_store" in block
-        assert "npu_dma_barrier" in block
+        assert "TidInfo" in block
+        assert "npu_dma_barrier" not in block
 
     def test_gelu_block(self):
         plan = _load_plan()
@@ -95,14 +95,14 @@ class TestOpBlockGeneration:
         assert "vector_add" in block
 
     def test_no_loads_no_barrier_before_call(self):
-        """无 DMA load 时，不生成 barrier。"""
+        """无 DMA load 时，不生成 dma_move。"""
         sigs = _load_sigs()
         tensors = {"in": _make_tensor("in", [1, 32, 64]), "out": _make_tensor("out", [1, 32, 64])}
         node = _make_node("n", "vector_gelu", ["in"], ["out"])
         block = c_emitter.gen_op_block(node, tensors, _empty_dma(), sigs)
         # 只有 op 调用，没有 DMA 部分
         assert "vector_gelu" in block
-        assert "npu_dma_load" not in block
+        assert "dma_move" not in block
 
     def test_unknown_op_raises(self):
         sigs = _load_sigs()
@@ -129,8 +129,8 @@ class TestParamFilling:
         node = plan["nodes"]["node_0"]
         dp = plan["dma_plans"][0]
         block = c_emitter.gen_op_block(node, plan["tensors"], dp, sigs)
-        assert "(void*)(l1 + 0)" in block
-        assert "(void*)(l1 + 4096)" in block
+        assert "l1 + 0" in block
+        assert "l1 + 4096" in block
 
     def test_mul_scalar_float_param(self):
         """vector_mul_scalar 的 scalar 参数应为浮点数格式。"""
@@ -264,8 +264,9 @@ class TestDmaBlock:
             ],
         }
         block = c_emitter.gen_op_block(node, tensors, dma, sigs)
-        assert "npu_dma_store((void*)(hbm + 8192)" in block
-        assert "(void*)(l1 + 4096)" in block
+        assert "dma_move(" in block
+        assert "hbm + 8192" in block
+        assert "l1 + 4096" in block
 
 
 class TestSyntaxCheck:

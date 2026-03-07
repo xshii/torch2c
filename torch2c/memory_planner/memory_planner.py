@@ -6,13 +6,64 @@ DMA 计划生成逻辑见 _dma.py，工具函数见 _utils.py。
 
 from __future__ import annotations
 
-from torch2c.common import Graph, get_logger
+from torch2c.common import Graph, get_logger, memory_layout_enabled
 
 from ._dma import DmaPlan, build_bulk_dma, build_dma_plan, try_global_l1_layout
 from ._hbm_alloc import allocate_hbm, analyze_lifetimes
 from ._l1_alloc import allocate_l1_global, build_per_op_l1_layouts
 
 logger = get_logger("memory_planner")
+
+def _dump_memory_layout(graph: Graph) -> None:
+    """输出内存布局汇总日志：每个 tensor 的 HBM/L1 地址、大小、dtype、用途。"""
+    if not memory_layout_enabled():
+        return
+
+    # 按 HBM offset 排序
+    tensors = sorted(
+        graph.tensors.values(),
+        key=lambda t: (t.hbm_offset if t.hbm_offset is not None else 999999999,
+                       t.l1_offset if t.l1_offset is not None else 999999999),
+    )
+
+    # 统计
+    hbm_max = 0
+    l1_max = 0
+    for t in tensors:
+        if t.hbm_offset is not None and t.hbm_size is not None:
+            hbm_max = max(hbm_max, t.hbm_offset + t.hbm_size)
+        if t.l1_offset is not None and t.hbm_size is not None:
+            l1_max = max(l1_max, t.l1_offset + t.hbm_size)
+
+    lines = [
+        f"===== Memory Layout ({len(tensors)} tensors, "
+        f"HBM peak={hbm_max} bytes, L1 peak={l1_max} bytes) =====",
+        f"{'tensor_id':20s} {'dtype':6s} {'shape':20s} {'role':8s} "
+        f"{'hbm_off':>10s} {'l1_off':>10s} {'size':>10s} {'storage':7s}",
+        "-" * 100,
+    ]
+
+    for t in tensors:
+        role = ""
+        if t.is_weight:
+            role = "weight"
+        elif t.is_model_input:
+            role = "input"
+        elif t.is_model_output:
+            role = "output"
+
+        shape_str = str(t.shape) if t.shape else "[]"
+        hbm_str = str(t.hbm_offset) if t.hbm_offset is not None else "-"
+        l1_str = str(t.l1_offset) if t.l1_offset is not None else "-"
+        size_str = str(t.hbm_size) if t.hbm_size is not None else "-"
+
+        lines.append(
+            f"{t.id:20s} {t.dtype:6s} {shape_str:20s} {role:8s} "
+            f"{hbm_str:>10s} {l1_str:>10s} {size_str:>10s} {t.storage:7s}"
+        )
+
+    lines.append("=" * 100)
+    logger.info("\n".join(lines))
 
 
 def run(graph: Graph, config: dict) -> tuple[Graph, list[DmaPlan]]:
@@ -44,6 +95,7 @@ def run(graph: Graph, config: dict) -> tuple[Graph, list[DmaPlan]]:
             "Pass 完成（L1 全局布局）。HBM 分配: %d 个张量, DMA: bulk load/store",
             allocated,
         )
+        _dump_memory_layout(graph)
         return graph, dma_plans
 
     # 常规路径：HBM 全局分配 + L1 全局 liveness best-fit 分配
@@ -72,6 +124,7 @@ def run(graph: Graph, config: dict) -> tuple[Graph, list[DmaPlan]]:
         reuse_count,
         len(dma_plans),
     )
+    _dump_memory_layout(graph)
     return graph, dma_plans
 
 

@@ -78,8 +78,15 @@ def _gen_compare_outputs(outputs: list[dict], atol: float, cosine_tol: float) ->
     return "\n".join(lines)
 
 
+def _gen_debug_init(runtime_level: int) -> str:
+    if runtime_level > 0:
+        return f"    npu_debug_enable({runtime_level});\n"
+    return ""
+
+
 def _emit_file_mode(
     plan: dict, hw_config: dict, atol: float, cosine_tol: float,
+    runtime_debug_level: int = 0,
 ) -> str:
     inputs, outputs, hbm_size = _extract_io(plan)
     l1_size = hw_config.get("l1_capacity", _DEFAULT_L1_BYTES)
@@ -89,6 +96,7 @@ def _emit_file_mode(
         l1_size=l1_size,
         load_inputs=_gen_load_inputs(inputs),
         compare_outputs=_gen_compare_outputs(outputs, atol, cosine_tol),
+        debug_init=_gen_debug_init(runtime_debug_level),
     )
 
 
@@ -116,6 +124,7 @@ def _gen_static_compare(outputs: list[dict], atol: float, elem_size: int) -> str
 
 def _emit_static_mode(
     plan: dict, hw_config: dict, atol: float, elem_size: int,
+    runtime_debug_level: int = 0,
 ) -> str:
     inputs, outputs, hbm_size = _extract_io(plan)
     l1_size = hw_config.get("l1_capacity", _DEFAULT_L1_BYTES)
@@ -124,6 +133,7 @@ def _emit_static_mode(
         hbm_size=hbm_size,
         l1_size=l1_size,
         compare_outputs=_gen_static_compare(outputs, atol, elem_size),
+        debug_init=_gen_debug_init(runtime_debug_level),
     )
 
 
@@ -132,22 +142,23 @@ def _emit_static_mode(
 
 def emit_main_c(
     plan: dict, hw_config: dict, *, atol: float = 1e-2, cosine_tol: float = 0.999,
-    static_mode: bool = False, elem_size: int = 2,
+    static_mode: bool = False, elem_size: int = 2, runtime_debug_level: int = 0,
 ) -> str:
     """生成 main.c 内容。
 
     Args:
         static_mode: True 时生成无文件 I/O 的静态嵌入版本。
         elem_size: 静态模式下每个元素的字节数（fp16=2, fp32=4）。
+        runtime_debug_level: C 侧运行时维测级别 (0=关闭)。
     """
     if static_mode:
-        return _emit_static_mode(plan, hw_config, atol, elem_size)
-    return _emit_file_mode(plan, hw_config, atol, cosine_tol)
+        return _emit_static_mode(plan, hw_config, atol, elem_size, runtime_debug_level)
+    return _emit_file_mode(plan, hw_config, atol, cosine_tol, runtime_debug_level)
 
 
 def run(
     plan: dict, hw_config: dict, output_dir: str, *, atol: float = 1e-2, cosine_tol: float = 0.999,
-    static_mode: bool = False, elem_size: int = 2,
+    static_mode: bool = False, elem_size: int = 2, runtime_debug_level: int = 0,
 ) -> None:
     """生成 main.c 到 output_dir。"""
     mode_str = "static" if static_mode else "file"
@@ -155,5 +166,6 @@ def run(
     content = emit_main_c(
         plan, hw_config, atol=atol, cosine_tol=cosine_tol,
         static_mode=static_mode, elem_size=elem_size,
+        runtime_debug_level=runtime_debug_level,
     )
     write_file(os.path.join(output_dir, "main.c"), content)

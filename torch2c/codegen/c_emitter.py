@@ -1,12 +1,11 @@
-"""c_emitter — 生成 model_graph.c/h，每个算子三段式：DMA搬入→算子调用→DMA搬出。"""
+"""c_emitter — 生成 model_graph.c/h，每个算子：DMA搬入→算子调用→DMA搬出。"""
 from __future__ import annotations
-
 import math
 import os
-
 from torch2c.common import CodegenError, get_logger
 from ._helpers import (
-    DTYPE_C_ENUM_MAP, FORMAT_MAP, c_header_guard, load_signatures, write_files,
+    DTYPE_C_ENUM_MAP, FORMAT_MAP, c_header_guard, find_op_sig, load_signatures,
+    write_files,
 )
 from ._naming import (
     _build_c_name_map, _build_groups, _build_sectioned_c_names,
@@ -25,7 +24,6 @@ _C_INCLUDES = (
     '#include "model_weights.h"\n#include "npu_mock.h"\n\n\n'
 )
 _EMPTY_DMA = {"loads": [], "stores": []}
-
 
 class SourceResolver:
     """将 c_api_signatures 中的 source 规则解析为 C 字符串。"""
@@ -115,10 +113,20 @@ class SourceResolver:
         if field == "elem_count":
             val = math.prod(t.get("shape", [1]))
             return self._dim_replace.get(val, str(val))
+        if field == "hbm_size":
+            val = t.get("hbm_size")
+            if val is None:
+                from torch2c.common import DTYPE_INFO
+                elem = math.prod(t.get("shape", [1]))
+                dtype_sz = DTYPE_INFO.get(t.get("dtype", "fp16"))
+                val = elem * (dtype_sz.bytes if dtype_sz else 2)
+            return self._dim_replace.get(val, str(val))
         if field not in t:
             raise CodegenError(f"未知的 tensor 字段: {field}")
-        return str(t[field])
-
+        val = t[field]
+        if val is None:
+            raise CodegenError(f"tensor 字段 {field} 为 None: {t.get('id', '?')}")
+        return str(val)
 
 def _format_value(val, ptype: str) -> str:
     if ptype == "float":
@@ -129,11 +137,18 @@ def _format_value(val, ptype: str) -> str:
         return FORMAT_MAP.get(str(val), f"NPU_FORMAT_{str(val).upper()}")
     return str(val)
 
+def _build_tid_str(node: dict) -> str:
+    """从 node dict 构建 TidInfo 复合字面量字符串。"""
+    p = node.get("params", {})
+    vals = [node.get("task_id", 0), p.get("_tid_dep_cube", 0), p.get("_tid_dep_vector", 0),
+            p.get("_tid_dep_dma", 0), p.get("_tid_dep_idma", 0)]
+    return f"(TidInfo){{{', '.join(str(v) for v in vals)}}}"
+
 def _gen_op_call(npu_op, sig, node, tensors,
                  c_names=None, struct_prefix="", dim_replace=None) -> str:
-    """生成单个算子的 C 调用语句。"""
+    """生成单个算子的 C 调用语句（自动注入 TidInfo 为第一参数）。"""
     resolver = SourceResolver(node, tensors, c_names, struct_prefix, dim_replace)
-    args = []
+    args = [_build_tid_str(node)]
     for p in sig.get("params", []):
         if p["type"] == "int_array":
             parts = p["source"].split(".")
@@ -149,43 +164,43 @@ def _gen_op_call(npu_op, sig, node, tensors,
     return f"{npu_op}({', '.join(args)})"
 
 def _gen_dma_line(instr: dict) -> str:
-    src = FORMAT_MAP.get(instr.get("src_format", "nd"), "NPU_FORMAT_ND")
-    dst = FORMAT_MAP.get(instr.get("dst_format", "nd"), "NPU_FORMAT_ND")
-    l1, hbm, sz = instr["l1_offset"], instr["hbm_offset"], instr["size_bytes"]
+    """生成 dma_move 调用（TidInfo 全零，DMA 不参与图调度）。"""
+    dt = DTYPE_C_ENUM_MAP.get(instr.get("dtype", "fp16"), "NPU_DTYPE_FP16")
+    sf = FORMAT_MAP.get(instr.get("src_format", "nd"), "NPU_FORMAT_ND")
+    df = FORMAT_MAP.get(instr.get("dst_format", "nd"), "NPU_FORMAT_ND")
+    l1o, ho, sz = instr["l1_offset"], instr["hbm_offset"], instr["size_bytes"]
     if instr["op"] == "load":
-        return f"npu_dma_load((void*)(l1 + {l1}), (void*)(hbm + {hbm}), {sz}, {src}, {dst});"
-    return f"npu_dma_store((void*)(hbm + {hbm}), (void*)(l1 + {l1}), {sz}, {src}, {dst});"
+        dst, src = f"(npu_tensor_t){{l1 + {l1o}, {dt}, {df}}}", f"(npu_tensor_t){{hbm + {ho}, {dt}, {sf}}}"
+    else:
+        dst, src = f"(npu_tensor_t){{hbm + {ho}, {dt}, {df}}}", f"(npu_tensor_t){{l1 + {l1o}, {dt}, {sf}}}"
+    return f"dma_move((TidInfo){{0}}, {dst}, {src}, {sz});"
 
-def _gen_dma_block(instructions: list[dict], indent: str) -> str:
+def _gen_dma_block(instructions: list[dict], indent: str = "    ") -> str:
     return "\n".join(f"{indent}{_gen_dma_line(i)}" for i in instructions)
 
 def gen_op_block(node, tensors, dma_plan, signatures,
                  c_names=None, struct_prefix="", dim_replace=None) -> str:
-    """为单个算子生成完整的三段式代码块。"""
+    """为单个算子生成完整的代码块：DMA搬入→算子调用→DMA搬出。"""
     npu_op = node.get("npu_op", "unknown")
-    sig = signatures.get("compute_ops", {}).get(npu_op)
+    sig = find_op_sig(signatures, npu_op)
     if sig is None:
         raise CodegenError(f"签名未找到: {npu_op}")
-    indent = "    "
     op_call = _gen_op_call(npu_op, sig, node, tensors, c_names, struct_prefix, dim_replace)
-    loads = _gen_dma_block(dma_plan.get("loads", []), indent)
-    stores = _gen_dma_block(dma_plan.get("stores", []), indent)
-    lines = [f"{indent}/* === {node['id']}: {npu_op} ({node.get('compute_unit', '?')}) === */"]
+    loads = _gen_dma_block(dma_plan.get("loads", []))
+    stores = _gen_dma_block(dma_plan.get("stores", []))
+    lines = [f"    /* === {node['id']}: {npu_op} ({node.get('compute_unit', '?')}) === */"]
     if loads:
-        lines += [loads, f"{indent}npu_dma_barrier();"]
-    lines.append(f"{indent}{op_call};")
+        lines.append(loads)
+    lines.append(f"    {op_call};")
     if stores:
-        lines += [stores, f"{indent}npu_dma_barrier();"]
+        lines.append(stores)
     return "\n".join(lines)
 
 def _gen_bulk_dma(dma_plan: dict, label: str) -> str:
-    indent = "    "
     instructions = dma_plan.get("loads", []) + dma_plan.get("stores", [])
     if not instructions:
         return ""
-    return "\n".join([f"{indent}/* === {label} === */",
-                      _gen_dma_block(instructions, indent),
-                      f"{indent}npu_dma_barrier();"])
+    return "\n".join([f"    /* === {label} === */", _gen_dma_block(instructions)])
 
 def _gen_grouped_body(group_order, group_nids, dma_plans, nodes, tensors,
                       signatures, c_names, dim_replace, sections, spec_macros):
@@ -271,19 +286,17 @@ def emit_model_memory_h(plan: dict) -> str:
     """生成 model_memory.h。"""
     lines = []
     for tid, t in plan["tensors"].items():
-        safe = tid.upper()
-        lines.append(f"#define {safe}_HBM_OFFSET  {t.get('hbm_offset', 0) or 0}")
-        lines.append(f"#define {safe}_HBM_SIZE    {t.get('hbm_size', 0) or 0}")
-        lines.append(f"#define {safe}_L1_OFFSET   {t.get('l1_offset', 0) or 0}")
+        s = tid.upper()
+        lines += [f"#define {s}_HBM_OFFSET  {t.get('hbm_offset', 0) or 0}",
+                  f"#define {s}_HBM_SIZE    {t.get('hbm_size', 0) or 0}",
+                  f"#define {s}_L1_OFFSET   {t.get('l1_offset', 0) or 0}"]
     return c_header_guard("MODEL_MEMORY_H", "\n".join(lines) + "\n")
 
 def emit_model_params_h(plan: dict) -> str:
     """生成 model_params.h。"""
-    lines = []
-    for nid, node in plan["nodes"].items():
-        for k, v in node.get("params", {}).items():
-            safe = f"{nid}_{k}".upper()
-            lines.append(f"#define {safe}  {v}")
+    lines = [f"#define {nid}_{k}".upper() + f"  {v}"
+             for nid, node in plan["nodes"].items()
+             for k, v in node.get("params", {}).items()]
     return c_header_guard("MODEL_PARAMS_H", "\n".join(lines) + "\n")
 
 def run(plan: dict, output_dir: str, config_dir: str | None = None) -> None:
