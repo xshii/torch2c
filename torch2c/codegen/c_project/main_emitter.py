@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 
-from torch2c.common import get_logger
+from torch2c.common import Tensor, get_logger
 
 from .._helpers import load_template, write_file
 
@@ -19,26 +19,25 @@ logger = get_logger("codegen.main_emitter")
 _DEFAULT_L1_BYTES = 16 * 1024 * 1024  # 16 MB
 
 
-def _extract_io(plan: dict) -> tuple[list[dict], list[dict], int]:
+def _extract_io(plan) -> tuple[list[Tensor], list[Tensor], int]:
     """提取输入/输出 tensor 信息和 HBM 总大小。"""
-    tensors = plan["tensors"]
-    by_offset = lambda t: t.get("hbm_offset", 0) or 0  # noqa: E731
-    inputs = sorted([t for t in tensors.values() if t.get("is_model_input")], key=by_offset)
-    outputs = sorted([t for t in tensors.values() if t.get("is_model_output")], key=by_offset)
+    tensors = plan.tensors
+    by_offset = lambda t: t.hbm_offset or 0  # noqa: E731
+    inputs = sorted([t for t in tensors.values() if t.is_model_input], key=by_offset)
+    outputs = sorted([t for t in tensors.values() if t.is_model_output], key=by_offset)
     hbm_size = 0
     for t in tensors.values():
-        end = (t.get("hbm_offset", 0) or 0) + (t.get("hbm_size", 0) or 0)
-        hbm_size = max(hbm_size, end)
+        hbm_size = max(hbm_size, (t.hbm_offset or 0) + (t.hbm_size or 0))
     return inputs, outputs, hbm_size
 
 
 # ---- file 模式 ----
 
 
-def _gen_load_inputs(inputs: list[dict]) -> str:
+def _gen_load_inputs(inputs: list[Tensor]) -> str:
     lines: list[str] = []
     for i, t in enumerate(inputs):
-        offset = t.get("hbm_offset", 0) or 0
+        offset = t.hbm_offset or 0
         lines.append(f'    printf("Loading input {i}...\\n");')
         lines.append(
             f"    if (load_tensor(hbm, {offset}, "
@@ -50,11 +49,11 @@ def _gen_load_inputs(inputs: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _gen_compare_outputs(outputs: list[dict], atol: float, cosine_tol: float) -> str:
+def _gen_compare_outputs(outputs: list[Tensor], atol: float, cosine_tol: float) -> str:
     lines: list[str] = []
     for i, t in enumerate(outputs):
-        offset = t.get("hbm_offset", 0) or 0
-        size = t.get("hbm_size", 0) or 0
+        offset = t.hbm_offset or 0
+        size = t.hbm_size or 0
         lines.append(f'    printf("Comparing output {i}...\\n");')
         lines.append(f'    dump_tensor(hbm, {offset}, {size}, "actual_output_{i}.bin");')
         lines.append(
@@ -85,7 +84,7 @@ def _gen_debug_init(runtime_level: int) -> str:
 
 
 def _emit_file_mode(
-    plan: dict, hw_config: dict, atol: float, cosine_tol: float,
+    plan, hw_config: dict, atol: float, cosine_tol: float,
     runtime_debug_level: int = 0,
 ) -> str:
     inputs, outputs, hbm_size = _extract_io(plan)
@@ -103,12 +102,12 @@ def _emit_file_mode(
 # ---- static 模式 ----
 
 
-def _gen_static_compare(outputs: list[dict], atol: float, elem_size: int) -> str:
+def _gen_static_compare(outputs: list[Tensor], atol: float, elem_size: int) -> str:
     """生成静态模式的输出比对代码（内联，无文件 I/O）。"""
     lines: list[str] = []
     for i, t in enumerate(outputs):
-        offset = t.get("hbm_offset", 0) or 0
-        size = t.get("hbm_size", 0) or 0
+        offset = t.hbm_offset or 0
+        size = t.hbm_size or 0
         lines.append(f'    printf("Comparing output {i}...\\n");')
         lines.append("    {")
         lines.append(f"        float d = max_abs_diff(hbm + {offset}, golden_output_ptr({i}), {size}, {elem_size});")
@@ -123,7 +122,7 @@ def _gen_static_compare(outputs: list[dict], atol: float, elem_size: int) -> str
 
 
 def _emit_static_mode(
-    plan: dict, hw_config: dict, atol: float, elem_size: int,
+    plan, hw_config: dict, atol: float, elem_size: int,
     runtime_debug_level: int = 0,
 ) -> str:
     inputs, outputs, hbm_size = _extract_io(plan)
@@ -141,7 +140,7 @@ def _emit_static_mode(
 
 
 def emit_main_c(
-    plan: dict, hw_config: dict, *, atol: float = 1e-2, cosine_tol: float = 0.999,
+    plan, hw_config: dict, *, atol: float = 1e-2, cosine_tol: float = 0.999,
     static_mode: bool = False, elem_size: int = 2, runtime_debug_level: int = 0,
 ) -> str:
     """生成 main.c 内容。
@@ -157,7 +156,7 @@ def emit_main_c(
 
 
 def run(
-    plan: dict, hw_config: dict, output_dir: str, *, atol: float = 1e-2, cosine_tol: float = 0.999,
+    plan, hw_config: dict, output_dir: str, *, atol: float = 1e-2, cosine_tol: float = 0.999,
     static_mode: bool = False, elem_size: int = 2, runtime_debug_level: int = 0,
 ) -> None:
     """生成 main.c 到 output_dir。"""

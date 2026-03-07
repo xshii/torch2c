@@ -11,15 +11,22 @@ from pathlib import Path
 import pytest
 
 from torch2c.codegen import c_emitter, mock_emitter
-from torch2c.common import INTEGRATION_CONFIG_DIR, CodegenError, load_config
+from torch2c.codegen._plan import CodegenPlan
+from torch2c.common import (
+    INTEGRATION_CONFIG_DIR, CodegenError, Graph, Node, Tensor, load_config,
+)
+from torch2c.memory_planner._dma import DmaPlan
 
 _CONFIG_DIR = str(INTEGRATION_CONFIG_DIR)
 _DEMO_PLAN = str(Path(__file__).resolve().parents[1] / "demo" / "demo_input_plan.json")
 
 
-def _load_plan() -> dict:
+def _load_plan() -> CodegenPlan:
     with open(_DEMO_PLAN) as f:
-        return json.load(f)
+        data = json.load(f)
+    graph = Graph.from_dict(data)
+    dma_plans = [DmaPlan(**dp) for dp in data.get("dma_plans", [])]
+    return CodegenPlan(graph, dma_plans)
 
 
 def _load_sigs() -> dict:
@@ -33,30 +40,30 @@ def _load_sigs() -> dict:
 
 
 def _make_tensor(tid, shape, dtype="fp16", fmt="nd", hbm_offset=0, l1_offset=0, hbm_size=4096):
-    return {
-        "id": tid,
-        "shape": shape,
-        "dtype": dtype,
-        "format": fmt,
-        "hbm_offset": hbm_offset,
-        "hbm_size": hbm_size,
-        "l1_offset": l1_offset,
-    }
+    return Tensor(
+        id=tid,
+        shape=shape,
+        dtype=dtype,
+        format=fmt,
+        hbm_offset=hbm_offset,
+        hbm_size=hbm_size,
+        l1_offset=l1_offset,
+    )
 
 
 def _make_node(
     nid, npu_op, inputs, outputs, params=None, compute_unit="Vector", absorbed_inputs=None
 ):
-    return {
-        "id": nid,
-        "op_type": npu_op,
-        "npu_op": npu_op,
-        "inputs": inputs,
-        "outputs": outputs,
-        "params": params or {},
-        "compute_unit": compute_unit,
-        "absorbed_inputs": absorbed_inputs or {},
-    }
+    return Node(
+        id=nid,
+        op_type=npu_op,
+        npu_op=npu_op,
+        inputs=inputs,
+        outputs=outputs,
+        params=params or {},
+        compute_unit=compute_unit,
+        absorbed_inputs=absorbed_inputs or {},
+    )
 
 
 def _empty_dma():
@@ -69,9 +76,9 @@ class TestOpBlockGeneration:
     def test_matmul_block_has_dma_and_call(self):
         plan = _load_plan()
         sigs = _load_sigs()
-        node = plan["nodes"]["node_0"]
-        dp = plan["dma_plans"][0]
-        block = c_emitter.gen_op_block(node, plan["tensors"], dp, sigs)
+        node = plan.nodes["node_0"]
+        dp = plan.dma_map["node_0"]
+        block = c_emitter.gen_op_block(node, plan.tensors, dp, sigs)
         assert "dma_move" in block
         assert "cube_matmul" in block
         assert "TidInfo" in block
@@ -80,18 +87,18 @@ class TestOpBlockGeneration:
     def test_gelu_block(self):
         plan = _load_plan()
         sigs = _load_sigs()
-        node = plan["nodes"]["node_1"]
-        dp = plan["dma_plans"][1]
-        block = c_emitter.gen_op_block(node, plan["tensors"], dp, sigs)
+        node = plan.nodes["node_1"]
+        dp = plan.dma_map["node_1"]
+        block = c_emitter.gen_op_block(node, plan.tensors, dp, sigs)
         assert "vector_gelu" in block
         assert "2048" in block  # elem_count = 1*32*64
 
     def test_add_block(self):
         plan = _load_plan()
         sigs = _load_sigs()
-        node = plan["nodes"]["node_2"]
-        dp = plan["dma_plans"][2]
-        block = c_emitter.gen_op_block(node, plan["tensors"], dp, sigs)
+        node = plan.nodes["node_2"]
+        dp = plan.dma_map["node_2"]
+        block = c_emitter.gen_op_block(node, plan.tensors, dp, sigs)
         assert "vector_add" in block
 
     def test_no_loads_no_barrier_before_call(self):
@@ -117,18 +124,18 @@ class TestParamFilling:
     def test_matmul_shape_params(self):
         plan = _load_plan()
         sigs = _load_sigs()
-        node = plan["nodes"]["node_0"]
-        dp = plan["dma_plans"][0]
-        block = c_emitter.gen_op_block(node, plan["tensors"], dp, sigs)
+        node = plan.nodes["node_0"]
+        dp = plan.dma_map["node_0"]
+        block = c_emitter.gen_op_block(node, plan.tensors, dp, sigs)
         assert "cube_matmul(" in block
         assert "NPU_DTYPE_FP16" in block
 
     def test_addr_params_use_offsets(self):
         plan = _load_plan()
         sigs = _load_sigs()
-        node = plan["nodes"]["node_0"]
-        dp = plan["dma_plans"][0]
-        block = c_emitter.gen_op_block(node, plan["tensors"], dp, sigs)
+        node = plan.nodes["node_0"]
+        dp = plan.dma_map["node_0"]
+        block = c_emitter.gen_op_block(node, plan.tensors, dp, sigs)
         assert "l1 + 0" in block
         assert "l1 + 4096" in block
 
@@ -213,7 +220,7 @@ class TestModelGraphGeneration:
     def test_model_params_h_with_params(self):
         plan = _load_plan()
         # 添加一个有 params 的节点
-        plan["nodes"]["node_1"]["params"]["test_key"] = 42
+        plan.nodes["node_1"].params["test_key"] = 42
         header = c_emitter.emit_model_params_h(plan)
         assert "NODE_1_TEST_KEY" in header
         assert "42" in header

@@ -6,18 +6,9 @@ import os
 
 from torch2c.common import get_logger
 
-from .._helpers import PARAM_TYPE_C, load_signatures, write_file
+from .._helpers import gen_compute_decl, load_signatures, write_file
 
 logger = get_logger("codegen.mock_emitter")
-
-
-def _gen_func_decl(name: str, sig: dict) -> str:
-    all_params = sig.get("params", []) + sig.get("optional_params", [])
-    args_parts = ["TidInfo tid"]  # Always first
-    args_parts.extend(
-        f"{PARAM_TYPE_C.get(p['type'], 'int')} {p['name']}" for p in all_params
-    )
-    return f"void {name}({', '.join(args_parts)});"
 
 
 def emit_mock_h(signatures: dict) -> str:
@@ -48,7 +39,7 @@ def emit_mock_h(signatures: dict) -> str:
         if ops:
             lines.append(f"/* {section} */")
             for name, sig in ops.items():
-                lines.append(_gen_func_decl(name, sig))
+                lines.append(gen_compute_decl(name, sig, include_optional=True))
             lines.append("")
 
     lines += [

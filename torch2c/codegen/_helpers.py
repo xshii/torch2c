@@ -47,14 +47,9 @@ PARAM_TYPE_C = {
 _DEFAULT_CONFIG_DIR = INTEGRATION_CONFIG_DIR
 
 
-def resolve_config_dir(config_dir: str | None) -> str:
-    """解析 config 目录路径，默认使用模块内 config/。"""
-    return config_dir if config_dir else str(_DEFAULT_CONFIG_DIR)
-
-
 def load_signatures(config_dir: str | None = None) -> dict:
     """加载 c_api_signatures.yaml。"""
-    d = resolve_config_dir(config_dir)
+    d = config_dir if config_dir else str(_DEFAULT_CONFIG_DIR)
     return load_config(
         os.path.join(d, "c_api_signatures.yaml"),
         required_keys=["compute_ops"],
@@ -101,20 +96,14 @@ def find_op_sig(signatures: dict, npu_op: str) -> dict | None:
     return None
 
 
-def all_supported_ops(signatures: dict) -> list[str]:
-    """收集所有 section 中的算子名。"""
-    ops: list[str] = []
-    for section in _OP_SECTIONS:
-        ops.extend(signatures.get(section, {}).keys())
-    return ops
-
-
 # ---- compute op 声明生成 ----
 
 
-def gen_compute_decl(name: str, sig: dict) -> str:
+def gen_compute_decl(name: str, sig: dict, *, include_optional: bool = False) -> str:
     """从 YAML 签名生成单个 C 函数声明（自动注入 TidInfo 为第一参数）。"""
     params = sig.get("params", [])
+    if include_optional:
+        params = params + sig.get("optional_params", [])
     args_parts = ["TidInfo tid"]
     args_parts.extend(
         f"{PARAM_TYPE_C.get(p['type'], 'int')} {p['name']}" for p in params

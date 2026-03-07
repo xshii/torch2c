@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import math
 import os
-import re
 
 from torch2c.common import Graph, get_logger
 from torch2c.memory_planner._utils import align_up, calc_padded_size
@@ -16,7 +15,7 @@ from torch2c.memory_planner._hbm_alloc import analyze_lifetimes
 from torch2c.memory_planner._l1_alloc import _analyze_l1_lifetimes
 from torch2c.viz._utils import (
     BG_COLORS, BOLD, CYAN, DIM, RESET, STORAGE_SYMBOL,
-    human_size,
+    ensure_viz_dir, human_size, strip_ansi,
 )
 
 logger = get_logger(__name__)
@@ -158,20 +157,12 @@ def render_ascii(
 
 # ── 对外接口（pipeline 调用）──────────────────────────────
 
-_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
-
-
 def emit_lifetime_ascii(graph: Graph, output_dir: str, cube_size: int) -> str:
     """生成 L1 + HBM 生命周期图到 output_dir/viz/，返回目录路径。"""
-    viz_dir = os.path.join(output_dir, "viz")
-    os.makedirs(viz_dir, exist_ok=True)
-
+    viz_dir = ensure_viz_dir(output_dir)
     for mode in ("l1", "hbm"):
-        text = render_ascii(graph, cube_size, mode=mode)
-        clean = _ANSI_RE.sub("", text)
         path = os.path.join(viz_dir, f"lifetime_{mode}.txt")
         with open(path, "w") as f:
-            f.write(clean)
+            f.write(strip_ansi(render_ascii(graph, cube_size, mode=mode)))
         logger.info("内存生命周期 %s 已写入: %s", mode.upper(), path)
-
     return viz_dir

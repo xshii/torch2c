@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from torch2c.common import Tensor
+
 from ._helpers import DTYPE_C_ENUM_MAP, FORMAT_MAP
 from ._naming import _section_to_c_field
 
@@ -25,15 +27,15 @@ def _gen_tensor_struct_typedef(
 
 
 def _collect_spec_macros(
-    sections: list[tuple[str, list[str]]], tensors: dict,
+    sections: list[tuple[str, list[str]]], tensors: dict[str, Tensor],
 ) -> dict[tuple[str, str], str]:
     """收集所有 (dtype_enum, format_enum) 组合，生成宏名映射。"""
     specs: set[tuple[str, str]] = set()
     for _, tids in sections:
         for tid in tids:
-            t = tensors.get(tid, {})
-            dtype_enum = DTYPE_C_ENUM_MAP.get(t.get("dtype", "fp16"), "NPU_DTYPE_FP16")
-            fmt_enum = FORMAT_MAP.get(t.get("format", "nd"), "NPU_FORMAT_ND")
+            t = tensors.get(tid)
+            dtype_enum = DTYPE_C_ENUM_MAP.get(t.dtype if t else "fp16", "NPU_DTYPE_FP16")
+            fmt_enum = FORMAT_MAP.get(t.format if t else "nd", "NPU_FORMAT_ND")
             specs.add((dtype_enum, fmt_enum))
     # NPU_DTYPE_FP16 → FP16, NPU_FORMAT_NZ → NZ
     result: dict[tuple[str, str], str] = {}
@@ -57,7 +59,7 @@ def _gen_spec_macro_defs(macros: dict[tuple[str, str], str]) -> str:
 
 def _gen_tensor_struct_init(
     sections: list[tuple[str, list[str]]],
-    tensors: dict,
+    tensors: dict[str, Tensor],
     c_names: dict[str, str],
     spec_macros: dict[tuple[str, str], str],
 ) -> str:
@@ -67,10 +69,10 @@ def _gen_tensor_struct_init(
         c_section = _section_to_c_field(section_name)
         lines.append(f"        .{c_section} = {{")
         for tid in tids:
-            t = tensors.get(tid, {})
-            offset = t.get("l1_offset", 0) or 0
-            dtype_enum = DTYPE_C_ENUM_MAP.get(t.get("dtype", "fp16"), "NPU_DTYPE_FP16")
-            fmt_enum = FORMAT_MAP.get(t.get("format", "nd"), "NPU_FORMAT_ND")
+            t = tensors.get(tid)
+            offset = t.l1_offset or 0 if t else 0
+            dtype_enum = DTYPE_C_ENUM_MAP.get(t.dtype if t else "fp16", "NPU_DTYPE_FP16")
+            fmt_enum = FORMAT_MAP.get(t.format if t else "nd", "NPU_FORMAT_ND")
             full = c_names.get(tid, tid)
             field = full.split(".", 1)[1] if "." in full else full
             macro = spec_macros.get((dtype_enum, fmt_enum))
@@ -85,15 +87,15 @@ def _gen_tensor_struct_init(
     return "\n".join(lines)
 
 
-def _extract_model_dims(tensors: dict) -> dict[str, int]:
+def _extract_model_dims(tensors: dict[str, Tensor]) -> dict[str, int]:
     """从 tensor shape 推断模型维度常量。
 
     返回 {宏名: 值}，如 {"BATCH": 1, "SEQ_LEN": 32, "D_MODEL": 256, "DIM_FF": 512}。
     """
     dims: dict[str, int] = {}
     for t in tensors.values():
-        shape = t.get("shape", [])
-        if t.get("is_model_input") and not dims.get("BATCH"):
+        shape = t.shape
+        if t.is_model_input and not dims.get("BATCH"):
             # 输入形如 [batch, seq_len, d_model]
             if len(shape) == 3:
                 dims["BATCH"] = shape[0]
@@ -102,8 +104,8 @@ def _extract_model_dims(tensors: dict) -> dict[str, int]:
             elif len(shape) == 2:
                 dims["BATCH"] = shape[0]
                 dims["SEQ_LEN"] = shape[1]
-        if t.get("is_weight") and t.get("name", ""):
-            name = t["name"]
+        if t.is_weight and t.name:
+            name = t.name
             # linear1.weight → [dim_ff, d_model] or NZ equivalent
             if "linear1.weight" in name and len(shape) >= 2:
                 # 取最大维度作为 dim_ff

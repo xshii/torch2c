@@ -7,14 +7,13 @@
 from __future__ import annotations
 
 import os
-import re
 
 from torch2c.common import Graph, get_logger
 from torch2c.memory_planner._utils import calc_padded_size
 from torch2c.viz._utils import (
     BOLD, BLUE, CU_COLOR, CU_DOT_COLOR, DIM, GRAY, GREEN, GREEN_BG,
     RESET, STORAGE_EDGE, WHITE,
-    human_size, shape_str,
+    ensure_viz_dir, human_size, shape_str, strip_ansi,
 )
 
 logger = get_logger(__name__)
@@ -288,13 +287,9 @@ def render_ascii(graph: Graph, cube_size: int) -> str:
 
 # ── 对外接口（pipeline 调用）──────────────────────────────
 
-_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
-
-
 def emit_graph_dot(graph: Graph, output_dir: str, cube_size: int) -> str:
     """生成 DOT 文件到 output_dir/viz/graph.dot，返回文件路径。"""
-    viz_dir = os.path.join(output_dir, "viz")
-    os.makedirs(viz_dir, exist_ok=True)
+    viz_dir = ensure_viz_dir(output_dir)
     path = os.path.join(viz_dir, "graph.dot")
     with open(path, "w") as f:
         f.write(render_dot(graph, cube_size))
@@ -304,11 +299,9 @@ def emit_graph_dot(graph: Graph, output_dir: str, cube_size: int) -> str:
 
 def emit_graph_ascii(graph: Graph, output_dir: str, cube_size: int) -> str:
     """生成 ASCII 依赖图到 output_dir/viz/graph.txt，返回文件路径。"""
-    viz_dir = os.path.join(output_dir, "viz")
-    os.makedirs(viz_dir, exist_ok=True)
+    viz_dir = ensure_viz_dir(output_dir)
     path = os.path.join(viz_dir, "graph.txt")
-    clean = _ANSI_RE.sub("", render_ascii(graph, cube_size))
     with open(path, "w") as f:
-        f.write(clean)
+        f.write(strip_ansi(render_ascii(graph, cube_size)))
     logger.info("依赖图 ASCII 已写入: %s", path)
     return path

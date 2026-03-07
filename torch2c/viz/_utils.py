@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import re
+
 # ── ANSI 颜色 ─────────────────────────────────────────────
 
 RESET = "\033[0m"
@@ -60,3 +63,20 @@ def human_size(n: int) -> str:
 def shape_str(shape: list[int]) -> str:
     """形状列表转 1x128x512 格式字符串。"""
     return "x".join(str(d) for d in shape)
+
+
+# ── ANSI 清理 + 文件输出 ─────────────────────────────────
+
+ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+
+
+def strip_ansi(text: str) -> str:
+    """移除 ANSI 转义序列。"""
+    return ANSI_RE.sub("", text)
+
+
+def ensure_viz_dir(output_dir: str) -> str:
+    """确保 output_dir/viz/ 存在，返回 viz 目录路径。"""
+    viz_dir = os.path.join(output_dir, "viz")
+    os.makedirs(viz_dir, exist_ok=True)
+    return viz_dir

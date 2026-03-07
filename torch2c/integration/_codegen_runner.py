@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import os
-from dataclasses import asdict
-
 import numpy as np
 import torch
 import torch.nn as nn
 
 from torch2c.codegen import c_emitter, golden_exporter, weight_exporter
+from torch2c.codegen._plan import CodegenPlan
 from torch2c.codegen.c_project import (
     cmake_emitter,
     main_emitter,
@@ -21,11 +20,9 @@ from torch2c.common import Graph, c_mock_runtime_level, dtype_numpy, get_logger
 logger = get_logger(__name__)
 
 
-def _build_codegen_plan(graph: Graph, dma_plans: list) -> dict:
-    """将 Graph + DMA 计划序列化为 codegen plan dict。"""
-    plan = graph.to_dict()
-    plan["dma_plans"] = [asdict(dp) for dp in dma_plans]
-    return plan
+def _build_codegen_plan(graph: Graph, dma_plans: list) -> CodegenPlan:
+    """构建 codegen 的类型化输入。"""
+    return CodegenPlan(graph, dma_plans)
 
 
 def _infer_golden_dtype(graph: Graph) -> type:
@@ -93,7 +90,7 @@ def _run_golden(
 
 
 def _emit_c_project(
-    plan: dict,
+    plan: CodegenPlan,
     configs: dict,
     config_dir: str,
     output_dir: str,
@@ -116,11 +113,11 @@ def _emit_c_project(
     utils_emitter.run(output_dir)
 
 
-def _compute_offsets(plan: dict, key: str) -> list[int]:
-    """从 plan tensors 中按 hbm_offset 排序提取偏移列表。"""
-    filtered = [t for t in plan["tensors"].values() if t.get(key)]
-    sorted_tensors = sorted(filtered, key=lambda t: t.get("hbm_offset", 0) or 0)
-    return [t.get("hbm_offset", 0) or 0 for t in sorted_tensors]
+def _compute_offsets(graph: Graph, attr: str) -> list[int]:
+    """从 graph tensors 中按 hbm_offset 排序提取偏移列表。"""
+    filtered = [t for t in graph.tensors.values() if getattr(t, attr, False)]
+    filtered.sort(key=lambda t: t.hbm_offset or 0)
+    return [t.hbm_offset or 0 for t in filtered]
 
 
 def _np_to_str(np_dtype: type) -> str:
@@ -131,7 +128,6 @@ def _export_weights_and_golden(
     model: nn.Module,
     dummy_input: torch.Tensor,
     mask: torch.Tensor | None,
-    plan: dict,
     graph: Graph,
     output_dir: str,
     static_golden: bool,
@@ -141,16 +137,9 @@ def _export_weights_and_golden(
 
     # 权重导出 — 每个权重使用 graph 中标注的 dtype
     weight_path = os.path.join(output_dir, "src", "model_weights.h")
-    weight_offsets = {
-        t["name"]: t.get("hbm_offset", 0) or 0
-        for t in plan["tensors"].values()
-        if t.get("is_weight") and t.get("name")
-    }
-    per_weight_dtype = {
-        t["name"]: t.get("dtype", "fp16")
-        for t in plan["tensors"].values()
-        if t.get("is_weight") and t.get("name")
-    }
+    weights = [t for t in graph.tensors.values() if t.is_weight and t.name]
+    weight_offsets = {t.name: t.hbm_offset or 0 for t in weights}
+    per_weight_dtype = {t.name: t.dtype or "fp16" for t in weights}
     weight_exporter.export_weights(
         model.state_dict(), weight_path, dtype="fp16", offsets=weight_offsets,
         per_weight_dtype=per_weight_dtype,
@@ -173,8 +162,8 @@ def _export_weights_and_golden(
 
     # 可选静态模式
     if static_golden:
-        input_offsets = _compute_offsets(plan, "is_model_input")
-        output_offsets = _compute_offsets(plan, "is_model_output")
+        input_offsets = _compute_offsets(graph, "is_model_input")
+        output_offsets = _compute_offsets(graph, "is_model_output")
         golden_exporter.export_golden_static(
             inputs, outputs, input_offsets, output_offsets,
             os.path.join(output_dir, "src", "model_golden.h"),
@@ -207,6 +196,6 @@ def _run_codegen(
         out0_np, atol, cosine_tol, static_golden,
     )
     _export_weights_and_golden(
-        model, dummy_input, mask, plan, graph, output_dir, static_golden,
+        model, dummy_input, mask, graph, output_dir, static_golden,
     )
     logger.info("Pass ⑨ 完成")
