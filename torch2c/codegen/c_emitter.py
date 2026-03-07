@@ -702,8 +702,12 @@ def emit_model_graph_c(plan: dict, signatures: dict) -> str:
 def _emit_flat(plan, signatures, dma_plans, order, nodes, tensors, c_names):
     """无模块信息时退化为平铺模式（同样使用结构体）。"""
     used_tids = _collect_used_tensor_ids(plan, signatures)
-    struct_typedef = _gen_tensor_struct_typedef(used_tids, c_names)
-    struct_init = _gen_tensor_struct_init(used_tids, tensors, c_names)
+    sections = [("flat", used_tids)]
+    # 为 flat 模式给 c_names 添加 "flat." 前缀
+    flat_c_names = {tid: f"flat.{c_names.get(tid, tid)}" for tid in used_tids}
+    spec_macros = _collect_spec_macros(sections, tensors)
+    struct_typedef = _gen_tensor_struct_typedef(sections, flat_c_names)
+    struct_init = _gen_tensor_struct_init(sections, tensors, flat_c_names, spec_macros)
     prefix = "t."
     parts = []
     bulk_load = dma_plans.get("__bulk_load__")
@@ -711,16 +715,19 @@ def _emit_flat(plan, signatures, dma_plans, order, nodes, tensors, c_names):
         parts.append(_gen_bulk_dma(bulk_load, "Bulk DMA Load"))
     for nid in order:
         dp = dma_plans.get(nid, {"loads": [], "stores": []})
-        parts.append(gen_op_block(nodes[nid], tensors, dp, signatures, c_names, prefix))
+        parts.append(gen_op_block(nodes[nid], tensors, dp, signatures, flat_c_names, prefix))
     bulk_store = dma_plans.get("__bulk_store__")
     if bulk_store:
         parts.append(_gen_bulk_dma(bulk_store, "Bulk DMA Store"))
     body = "\n\n".join(p for p in parts if p)
+    spec_macro_defs = _gen_spec_macro_defs(spec_macros)
+    all_macros = spec_macro_defs if spec_macro_defs else ""
     return (
         '#include "model_graph.h"\n'
         '#include "model_memory.h"\n'
         '#include "model_weights.h"\n'
         '#include "npu_mock.h"\n\n\n'
+        f"{all_macros}\n\n"
         f"{struct_typedef}\n\n"
         "void model_run(unsigned char* hbm, unsigned char* l1) {\n"
         f"{struct_init}\n\n"
