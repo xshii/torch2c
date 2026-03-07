@@ -255,6 +255,7 @@ def compile(
     compute_dtype: str | None = None,
     atol: float = 1e-2,
     cosine_tol: float = 0.999,
+    static_golden: bool = False,
 ) -> str:
     """完整编译流水线。
 
@@ -269,6 +270,7 @@ def compile(
         target_dtype: 存储 dtype（如 "fp16"），None 则从模型配置或原始 dtype 继承。
         target_format: 存储 format（如 "nz"），None 则从模型配置或原始 format 继承。
         compute_dtype: 计算精度（如 "fp32"），None 则从模型配置或 target_dtype 继承。
+        static_golden: True 时将 golden 数据编译为 C 静态数组，无文件系统依赖。
 
     Returns:
         生成的 C 工程输出目录路径。
@@ -312,7 +314,8 @@ def compile(
 
     # Pass ⑨ codegen
     _run_codegen(
-        model, dummy_input, mask, graph, dma_plans, configs, config_dir, output_dir, atol, cosine_tol
+        model, dummy_input, mask, graph, dma_plans, configs, config_dir, output_dir,
+        atol, cosine_tol, static_golden=static_golden,
     )
 
     logger.info("=== 编译管线完成，输出目录: %s ===", output_dir)
@@ -330,6 +333,8 @@ def _run_codegen(
     output_dir: str,
     atol: float,
     cosine_tol: float,
+    *,
+    static_golden: bool = False,
 ) -> None:
     """Pass ⑨：C 代码生成 + 权重导出 + golden 数据。"""
     logger.info("Pass ⑨ codegen 开始")
@@ -337,7 +342,12 @@ def _run_codegen(
 
     c_emitter.run(plan, output_dir, config_dir=config_dir)
     mock_emitter.run(output_dir, config_dir=config_dir)
-    main_emitter.run(plan, configs["hardware"], output_dir, atol=atol, cosine_tol=cosine_tol)
+    elem_size = 2 if _infer_golden_dtype(graph) == np.float16 else 4
+    main_emitter.run(
+        plan, configs["hardware"], output_dir,
+        atol=atol, cosine_tol=cosine_tol,
+        static_mode=static_golden, elem_size=elem_size,
+    )
     cmake_emitter.run(output_dir)
     utils_emitter.run(output_dir)
 
@@ -347,14 +357,35 @@ def _run_codegen(
         for t in plan["tensors"].values()
         if t.get("is_weight") and t.get("name")
     }
-    golden_dir = os.path.join(output_dir, "golden")
     golden_dtype = _infer_golden_dtype(graph)
     dtype_str = {np.float16: "fp16", np.float32: "fp32"}.get(golden_dtype, "fp16")
     weight_exporter.export_weights(
         model.state_dict(), weight_path, dtype=dtype_str, offsets=weight_offsets
     )
     inputs, outputs = _run_golden(model, dummy_input, mask, numpy_dtype=golden_dtype)
+
+    # golden 数据：文件模式 + 可选静态模式
+    golden_dir = os.path.join(output_dir, "golden")
     golden_exporter.export_golden(inputs, outputs, golden_dir, dtype=dtype_str)
+    if static_golden:
+        input_offsets = [
+            t.get("hbm_offset", 0) or 0
+            for t in sorted(
+                [t for t in plan["tensors"].values() if t.get("is_model_input")],
+                key=lambda t: t.get("hbm_offset", 0) or 0,
+            )
+        ]
+        output_offsets = [
+            t.get("hbm_offset", 0) or 0
+            for t in sorted(
+                [t for t in plan["tensors"].values() if t.get("is_model_output")],
+                key=lambda t: t.get("hbm_offset", 0) or 0,
+            )
+        ]
+        golden_exporter.export_golden_static(
+            inputs, outputs, input_offsets, output_offsets,
+            os.path.join(output_dir, "src", "model_golden.h"),
+        )
     logger.info("Pass ⑨ 完成")
 
 

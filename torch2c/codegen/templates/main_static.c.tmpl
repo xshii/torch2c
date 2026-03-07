@@ -1,0 +1,70 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include "npu_mock.h"
+#include "src/model_graph.h"
+#include "src/model_memory.h"
+#include "src/model_weights.h"
+#include "src/model_golden.h"
+
+static float max_abs_diff(const unsigned char* a, const unsigned char* b,
+                          size_t n_bytes, size_t elem_size) {{
+    size_t n = n_bytes / elem_size;
+    float max_d = 0.0f;
+    if (elem_size == 2) {{
+        const unsigned short* pa = (const unsigned short*)a;
+        const unsigned short* pb = (const unsigned short*)b;
+        for (size_t i = 0; i < n; i++) {{
+            /* fp16 → fp32 decode */
+            unsigned int ea = (unsigned int)pa[i], eb = (unsigned int)pb[i];
+            unsigned int sa = ((ea & 0x8000) << 16) | (((ea >> 10) & 0x1f) == 0 ? 0 : ((((ea >> 10) & 0x1f) - 15 + 127) << 23)) | ((ea & 0x3ff) << 13);
+            unsigned int sb = ((eb & 0x8000) << 16) | (((eb >> 10) & 0x1f) == 0 ? 0 : ((((eb >> 10) & 0x1f) - 15 + 127) << 23)) | ((eb & 0x3ff) << 13);
+            float fa, fb;
+            memcpy(&fa, &sa, 4);
+            memcpy(&fb, &sb, 4);
+            float d = fa - fb;
+            if (d < 0) d = -d;
+            if (d > max_d) max_d = d;
+        }}
+    }} else {{
+        const float* pa = (const float*)a;
+        const float* pb = (const float*)b;
+        for (size_t i = 0; i < n; i++) {{
+            float d = pa[i] - pb[i];
+            if (d < 0) d = -d;
+            if (d > max_d) max_d = d;
+        }}
+    }}
+    return max_d;
+}}
+
+int main(void) {{
+    printf("=== NPU Model Runner (static) ===\n");
+
+    /* Allocate HBM and L1 */
+    unsigned char* hbm = (unsigned char*)calloc(1, {hbm_size});
+    unsigned char* l1  = (unsigned char*)calloc(1, {l1_size});
+    if (!hbm || !l1) {{
+        printf("Memory allocation failed\n");
+        return 1;
+    }}
+
+    /* Load weights + golden inputs into HBM */
+    load_weights(hbm);
+    load_golden_inputs(hbm);
+
+    /* Run model */
+    printf("Running model...\n");
+    model_run(hbm, l1);
+    printf("Model execution complete.\n");
+
+    /* Compare outputs */
+    int pass = 1;
+{compare_outputs}
+
+    free(hbm);
+    free(l1);
+    printf("\n=== %s ===\n", pass ? "ALL PASSED" : "FAILED");
+    return pass ? 0 : 1;
+}}
