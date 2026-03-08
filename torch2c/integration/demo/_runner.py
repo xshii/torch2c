@@ -24,9 +24,10 @@ def compile_and_validate(
     precision: str,
     output_dir: str,
     *,
-    d_model: int = 256,
-    dim_ff: int = 512,
-    num_layers: int = 2,
+    d_model: int = 192,
+    dim_ff: int = 384,
+    num_layers: int = 3,
+    num_heads: int = 3,
     batch: int = 1,
     seq_len: int = 32,
 ) -> dict:
@@ -37,7 +38,8 @@ def compile_and_validate(
          "max_abs": float, "cosine": float, "stdout": str}
     """
     model = EncoderModel(
-        d_model=d_model, dim_ff=dim_ff, num_layers=num_layers, precision=precision,
+        d_model=d_model, dim_ff=dim_ff, num_layers=num_layers,
+        num_heads=num_heads, precision=precision,
     )
     model.eval()
 

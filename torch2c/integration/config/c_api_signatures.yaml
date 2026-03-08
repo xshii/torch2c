@@ -266,9 +266,10 @@ idma_ops:
   idma_broadcast:
     unit: idma
     params:
-      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
-      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
-      - { name: "count", type: "int",         source: "tensor.output_0.elem_count" }
+      - { name: "input",     type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",       type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "src_count", type: "int",         source: "tensor.input_0.elem_count" }
+      - { name: "dst_count", type: "int",         source: "tensor.output_0.elem_count" }
 
   idma_concat:
     unit: idma

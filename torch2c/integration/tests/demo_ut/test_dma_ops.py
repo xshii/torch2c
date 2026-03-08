@@ -411,7 +411,7 @@ int main(void) {{
     load_file("scalar.bin", l1, {src_bytes});
 
     idma_broadcast(TID0, T(l1, 0, {_c_enum(src_dtype)}),
-                         T(l1, 1024, {_c_enum(dst_dtype)}), {count});
+                         T(l1, 1024, {_c_enum(dst_dtype)}), 1, {count});
 
     save_file("out.bin", l1 + 1024, {dst_bytes});
     return 0;

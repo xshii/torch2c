@@ -113,7 +113,7 @@ void dma_reformat(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int size_by
 /* ---- idma (L1 → pipe) ---- */
 void idma_move(TidInfo tid, npu_tensor_t dst, npu_tensor_t src, int size_bytes);
 void idma_reshape(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int size);
-void idma_broadcast(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int count);
+void idma_broadcast(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int src_count, int dst_count);
 void idma_concat(TidInfo tid, const npu_tensor_t* inputs, const int* counts, int num_inputs, npu_tensor_t out);
 
 #endif /* NPU_API_H */

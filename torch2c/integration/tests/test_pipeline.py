@@ -54,10 +54,10 @@ class TestEndToEnd:
 
     def test_compile_produces_c_project(self, output_dir):
         """端到端编译生成完整 C 工程。"""
-        model = EncoderModel(d_model=256, dim_ff=512, num_layers=2)
+        model = EncoderModel(d_model=192, dim_ff=384, num_layers=2)
         model.eval()
 
-        dummy = torch.randn(1, 32, 256)
+        dummy = torch.randn(1, 32, 192)
         mask = torch.zeros(1, 32, 32)
 
         result_dir = compile(
@@ -87,10 +87,10 @@ class TestEndToEnd:
 
     def test_golden_data_exported(self, output_dir):
         """golden 数据正确导出。"""
-        model = EncoderModel(d_model=256, dim_ff=512, num_layers=2)
+        model = EncoderModel(d_model=192, dim_ff=384, num_layers=2)
         model.eval()
 
-        dummy = torch.randn(1, 32, 256)
+        dummy = torch.randn(1, 32, 192)
         mask = torch.zeros(1, 32, 32)
 
         result_dir = compile(
@@ -109,10 +109,10 @@ class TestEndToEnd:
 
     def test_model_graph_has_op_blocks(self, output_dir):
         """model_graph.c 包含算子块。"""
-        model = EncoderModel(d_model=256, dim_ff=512, num_layers=2)
+        model = EncoderModel(d_model=192, dim_ff=384, num_layers=2)
         model.eval()
 
-        dummy = torch.randn(1, 32, 256)
+        dummy = torch.randn(1, 32, 192)
         mask = torch.zeros(1, 32, 32)
 
         result_dir = compile(
@@ -134,10 +134,10 @@ class TestEndToEnd:
 
     def test_compile_without_mask(self, output_dir):
         """无 mask 时也能正常编译。"""
-        model = EncoderModel(d_model=256, dim_ff=512, num_layers=2)
+        model = EncoderModel(d_model=192, dim_ff=384, num_layers=2)
         model.eval()
 
-        dummy = torch.randn(1, 32, 256)
+        dummy = torch.randn(1, 32, 192)
 
         result_dir = compile(
             model=model,
@@ -166,10 +166,10 @@ class TestCGoldenComparison:
         """C 工程编译运行后 golden 比对通过 (max_abs < 0.02, cosine > 0.999)。"""
         from torch2c.integration.demo.validate_c_output import validate_c
 
-        model = EncoderModel(d_model=256, dim_ff=512, num_layers=2)
+        model = EncoderModel(d_model=192, dim_ff=384, num_layers=2)
         model.eval()
 
-        dummy = torch.randn(1, 32, 256)
+        dummy = torch.randn(1, 32, 192)
         mask = torch.zeros(1, 32, 32)
 
         compile(

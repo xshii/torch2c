@@ -59,7 +59,7 @@ static int test_idma_broadcast(void) {
     L1_INIT();
     float* src = L1_PTR(float, OFF_IN);
     src[0] = 42.0f;
-    idma_broadcast(TID0, TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_BCAST, NPU_DTYPE_FP32), 5);
+    idma_broadcast(TID0, TENSOR(OFF_IN, NPU_DTYPE_FP32), TENSOR(OFF_BCAST, NPU_DTYPE_FP32), 1, 5);
     float* out = L1_PTR(float, OFF_BCAST);
     for (int i = 0; i < 5; i++)
         ASSERT_FLOAT_EQ(out[i], 42.0f, 0.0f);

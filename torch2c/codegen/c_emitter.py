@@ -94,7 +94,9 @@ class SourceResolver:
                 return _format_value(param["default"], param["type"])
             raise CodegenError(f"参数 {param_name} 未找到: node={self._node.id}")
         if param["type"] == "int" and isinstance(val, int) and val in self._dim_replace:
-            return self._dim_replace[val]
+            # 不替换维度索引参数（如 transpose 的 dim0/dim1），只替换维度大小
+            if param_name not in ("dim0", "dim1"):
+                return self._dim_replace[val]
         return _format_value(val, param["type"])
 
     def _extract_field(self, t: Tensor, field: str, extra: list[str]) -> str:

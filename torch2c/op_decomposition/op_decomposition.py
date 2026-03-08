@@ -5,9 +5,12 @@
 2. 如果节点 op_type 在裂解规则中，按 steps 创建新节点组
 3. 中间 tensor shape = 源算子第一个输入的 shape（§16.5）
 4. 删除原节点，新节点标记 is_mapped=True
+5. 对已映射的逐元素算子，若两个输入 shape 不同则插入 idma_broadcast
 """
 
 from __future__ import annotations
+
+import math
 
 from ..common.graph_ir import Graph, Node, Tensor
 from ..common.logger import get_logger
@@ -44,6 +47,10 @@ def run(graph: Graph, config: dict) -> Graph:
         total_new_nodes,
         total_new_tensors,
     )
+
+    # 广播展开：逐元素算子的输入 shape 不匹配时插入 idma_broadcast
+    _insert_broadcast_expands(graph)
+
     return graph
 
 
@@ -161,6 +168,94 @@ def _decompose_node(graph: Graph, node: Node, rule: dict) -> tuple[int, int]:
     new_nodes = _build_step_nodes(node, steps, intermediates)
     _rewire_graph(graph, node, new_nodes, intermediates)
     return len(new_nodes), len(intermediates)
+
+
+# ---- 广播展开 ----
+
+_ELEMENTWISE_OPS = {"vector_add", "vector_sub", "vector_mul", "vector_div"}
+
+
+def _needs_broadcast(graph: Graph, node: Node) -> int | None:
+    """检查逐元素算子的两个输入是否需要广播。
+
+    Returns:
+        需要广播的输入索引 (0 或 1)，不需要则返回 None。
+    """
+    if node.npu_op not in _ELEMENTWISE_OPS or len(node.inputs) < 2:
+        return None
+    t0 = graph.get_tensor(node.inputs[0])
+    t1 = graph.get_tensor(node.inputs[1])
+    if t0 is None or t1 is None:
+        return None
+    n0 = math.prod(t0.shape)
+    n1 = math.prod(t1.shape)
+    if n0 == n1:
+        return None
+    # 返回较小那个的索引
+    return 1 if n1 < n0 else 0
+
+
+def _broadcast_shape(small_shape: list[int], big_shape: list[int]) -> list[int]:
+    """计算广播后的 shape（结果 = big_shape）。"""
+    return list(big_shape)
+
+
+def _insert_broadcast(graph: Graph, node: Node, input_idx: int) -> None:
+    """在 node 的第 input_idx 个输入前插入 idma_broadcast 节点。"""
+    small_tid = node.inputs[input_idx]
+    big_tid = node.inputs[1 - input_idx]
+    small_t = graph.get_tensor(small_tid)
+    big_t = graph.get_tensor(big_tid)
+    if small_t is None or big_t is None:
+        return
+
+    # 创建广播输出 tensor
+    bc_out_tid = f"{node.id}_bc_{input_idx}"
+    bc_shape = _broadcast_shape(small_t.shape, big_t.shape)
+    bc_out = Tensor(
+        id=bc_out_tid, shape=bc_shape, dtype=small_t.dtype,
+        producer_node_id=f"{node.id}_broadcast",
+    )
+    graph.add_tensor(bc_out)
+
+    # 创建 idma_broadcast 节点
+    bc_nid = f"{node.id}_broadcast"
+    bc_node = Node(
+        id=bc_nid, op_type="aten.expand.default",
+        inputs=[small_tid], outputs=[bc_out_tid],
+        npu_op="idma_broadcast", compute_unit="idma", is_mapped=True,
+    )
+    graph.add_node(bc_node)
+
+    # 更新 execution_order：broadcast 在原节点之前
+    if node.id in graph.execution_order:
+        idx = graph.execution_order.index(node.id)
+        graph.execution_order.remove(bc_nid)  # add_node 会追加到末尾
+        graph.execution_order.insert(idx, bc_nid)
+
+    # 更新 tensor 引用
+    small_t.consumer_node_ids.append(bc_nid)
+    bc_out.consumer_node_ids.append(node.id)
+    if node.id in small_t.consumer_node_ids:
+        small_t.consumer_node_ids.remove(node.id)
+
+    # 替换原节点的输入
+    node.inputs[input_idx] = bc_out_tid
+
+    logger.debug("插入广播: %s → %s (shape %s → %s)", bc_nid, node.id, small_t.shape, bc_shape)
+
+
+def _insert_broadcast_expands(graph: Graph) -> int:
+    """扫描所有逐元素算子，对 shape 不匹配的输入插入 idma_broadcast。"""
+    count = 0
+    for node in list(graph.nodes.values()):
+        idx = _needs_broadcast(graph, node)
+        if idx is not None:
+            _insert_broadcast(graph, node, idx)
+            count += 1
+    if count:
+        logger.info("插入了 %d 个广播展开节点", count)
+    return count
 
 
 def post_validate(graph: Graph) -> list[str]:

@@ -239,6 +239,12 @@ def _handle_call(
     )
     input_tids, params = normalize_op_inputs(op, input_tids, params)
 
+    # bmm: 从输入 shape 推断 batch 维度，注入 loop 参数
+    if op == "aten.bmm.default" and "loop" not in params and input_tids:
+        in_t = graph.get_tensor(input_tids[0])
+        if in_t and len(in_t.shape) == 3:
+            params["loop"] = in_t.shape[0]
+
     # linear 等算子需要对 weight 做转置
     wt_idx = WEIGHT_TRANSPOSE_INPUT.get(op)
     if wt_idx is not None and wt_idx < len(input_tids):

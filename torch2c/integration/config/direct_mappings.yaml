@@ -71,7 +71,13 @@ mappings:
   aten.view.default:
     npu_op: idma_reshape
     compute_unit: idma
+  aten._unsafe_view.default:
+    npu_op: idma_reshape
+    compute_unit: idma
   aten.reshape.default:
+    npu_op: idma_reshape
+    compute_unit: idma
+  aten.unsqueeze.default:
     npu_op: idma_reshape
     compute_unit: idma
   aten.expand.default:

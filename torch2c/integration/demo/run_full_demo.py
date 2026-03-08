@@ -1,4 +1,4 @@
-"""端到端 demo：编译 2 层 Encoder 模型并生成完整 C 工程。
+"""端到端 demo：编译 3 层 3 头 Encoder 模型并生成完整 C 工程。
 
 包含两种精度模式：
 - mixed：混合精度（linear1/norm1 fp32，其余 fp16）

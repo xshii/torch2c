@@ -85,17 +85,26 @@ void idma_reshape(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int size) {
     NPU_TRACE_END("idma_reshape", tid, args, 2);
 }
 
-void idma_broadcast(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int count) {
+void idma_broadcast(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int src_count, int dst_count) {
     npu_debug_tensor_arg_t args[] = {
-        NPU_DBG_T(input, input, 1), NPU_DBG_T(out, out, count)
+        NPU_DBG_T(input, input, src_count), NPU_DBG_T(out, out, dst_count)
     };
     NPU_TRACE_BEGIN("idma_broadcast", tid, args, 2);
 
     void* pi = npu_t_ptr(input);
     void* po = npu_t_ptr(out);
-    float val = npu_read_as_float(pi, 0, input.dtype);
-    for (int i = 0; i < count; i++)
-        npu_write_from_float(po, i, val, out.dtype);
+    if (src_count == 1) {
+        /* 标量广播：读 1 个元素填充整个输出 */
+        float val = npu_read_as_float(pi, 0, input.dtype);
+        for (int i = 0; i < dst_count; i++)
+            npu_write_from_float(po, i, val, out.dtype);
+    } else {
+        /* tile 广播：将 src_count 个元素重复铺满 dst_count */
+        for (int i = 0; i < dst_count; i++) {
+            float val = npu_read_as_float(pi, i % src_count, input.dtype);
+            npu_write_from_float(po, i, val, out.dtype);
+        }
+    }
 
     NPU_TRACE_END("idma_broadcast", tid, args, 2);
 }
