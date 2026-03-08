@@ -2,9 +2,9 @@
 
 使用单头注意力 + LayerNorm + GELU FFN，所有算子均在已支持的 NPU 算子集合内。
 
-npu() 就近标注示例：
-- linear1, norm1: fp32 全精度（输入/输出/权重/计算均 fp32）
-- 其余模块: fp16 IO + fp16 权重 + fp32 计算（节省存储，保持计算精度）
+支持两种精度模式：
+- mixed：linear1/norm1 为 fp32 全精度，其余 fp16 IO + fp32 计算
+- fp16：全部 fp16 IO + fp16 权重 + fp32 计算
 """
 
 from __future__ import annotations
@@ -20,19 +20,26 @@ _FP16 = NpuSpec("fp16", "nd")
 _FP16_NZ = NpuSpec("fp16", "nz")
 
 
+def _linear(d_in: int, d_out: int, *, precision: str) -> nn.Linear:
+    """按精度模式包装 nn.Linear。"""
+    m = nn.Linear(d_in, d_out)
+    if precision == "fp16":
+        return npu(m, input=_FP16, output=_FP16, weight=_FP16_NZ, compute_dtype="fp32")
+    return m  # mixed 模式由调用者单独标注
+
+
 class SelfAttention(nn.Module):
     """单头自注意力。"""
 
-    def __init__(self, d_model: int):
+    def __init__(self, d_model: int, *, precision: str = "mixed"):
         super().__init__()
-        self.q_proj = npu(nn.Linear(d_model, d_model),
-                          input=_FP16, output=_FP16, weight=_FP16_NZ, compute_dtype="fp32")
-        self.k_proj = npu(nn.Linear(d_model, d_model),
-                          input=_FP16, output=_FP16, weight=_FP16_NZ, compute_dtype="fp32")
-        self.v_proj = npu(nn.Linear(d_model, d_model),
-                          input=_FP16, output=_FP16, weight=_FP16_NZ, compute_dtype="fp32")
-        self.o_proj = npu(nn.Linear(d_model, d_model),
-                          input=_FP16, output=_FP16, weight=_FP16_NZ, compute_dtype="fp32")
+        self.q_proj = _linear(d_model, d_model, precision=precision)
+        self.k_proj = _linear(d_model, d_model, precision=precision)
+        self.v_proj = _linear(d_model, d_model, precision=precision)
+        self.o_proj = _linear(d_model, d_model, precision=precision)
+        if precision == "mixed":
+            for proj in (self.q_proj, self.k_proj, self.v_proj, self.o_proj):
+                npu(proj, input=_FP16, output=_FP16, weight=_FP16_NZ, compute_dtype="fp32")
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
         q = self.q_proj(x)
@@ -49,15 +56,22 @@ class SelfAttention(nn.Module):
 class EncoderLayer(nn.Module):
     """单层 Encoder：SelfAttention + FFN，各带残差连接和 LayerNorm。"""
 
-    def __init__(self, d_model: int, dim_ff: int):
+    def __init__(self, d_model: int, dim_ff: int, *, precision: str = "mixed"):
         super().__init__()
-        self.self_attn = SelfAttention(d_model)
-        # linear1 + norm1: fp32 全精度（高精度路径）
-        self.linear1 = npu(nn.Linear(d_model, dim_ff),
-                           input=_FP32, output=_FP32, weight=_FP32, compute_dtype="fp32")
-        self.norm1 = npu(nn.LayerNorm(d_model),
-                         input=_FP32, output=_FP32, weight=_FP32, compute_dtype="fp32")
-        # linear2 + norm2 + activation: fp16 IO, fp32 计算（节省空间）
+        self.self_attn = SelfAttention(d_model, precision=precision)
+        if precision == "mixed":
+            # linear1 + norm1: fp32 全精度（高精度路径）
+            self.linear1 = npu(nn.Linear(d_model, dim_ff),
+                               input=_FP32, output=_FP32, weight=_FP32, compute_dtype="fp32")
+            self.norm1 = npu(nn.LayerNorm(d_model),
+                             input=_FP32, output=_FP32, weight=_FP32, compute_dtype="fp32")
+        else:
+            # fp16: 全部 fp16
+            self.linear1 = npu(nn.Linear(d_model, dim_ff),
+                               input=_FP16, output=_FP16, weight=_FP16_NZ, compute_dtype="fp32")
+            self.norm1 = npu(nn.LayerNorm(d_model),
+                             input=_FP16, output=_FP16, weight=_FP16, compute_dtype="fp32")
+        # linear2 + norm2 + activation: 两种模式都用 fp16
         self.linear2 = npu(nn.Linear(dim_ff, d_model),
                            input=_FP16, output=_FP16, weight=_FP16_NZ, compute_dtype="fp32")
         self.norm2 = npu(nn.LayerNorm(d_model),
@@ -74,11 +88,21 @@ class EncoderLayer(nn.Module):
 
 
 class EncoderModel(nn.Module):
-    """2 层 Encoder Transformer 模型。"""
+    """2 层 Encoder Transformer 模型。
 
-    def __init__(self, d_model: int = 256, dim_ff: int = 512, num_layers: int = 2):
+    Args:
+        precision: "mixed"（混合精度）或 "fp16"（全 fp16）。
+    """
+
+    def __init__(
+        self, d_model: int = 256, dim_ff: int = 512,
+        num_layers: int = 2, *, precision: str = "mixed",
+    ):
         super().__init__()
-        self.layers = nn.ModuleList([EncoderLayer(d_model, dim_ff) for _ in range(num_layers)])
+        self.precision = precision
+        self.layers = nn.ModuleList(
+            [EncoderLayer(d_model, dim_ff, precision=precision) for _ in range(num_layers)]
+        )
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
         for layer in self.layers:
@@ -120,10 +144,6 @@ if __name__ == "__main__":
 
     model = EncoderModel(d_model=256, dim_ff=512, num_layers=2)
     inputs = make_demo_inputs(weights_path="encoder_weights.pth")
-
-    # 如果有预训练权重，加载到模型
-    # if inputs["weights_path"]:
-    #     model.load_state_dict(torch.load(inputs["weights_path"]))
 
     inspect(model, inputs["x"], mask=inputs["mask"])
 
