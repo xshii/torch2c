@@ -12,23 +12,27 @@ NPU离线编译栈：将PyTorch模型编译为可在自研NPU上运行的完整C
 PyTorch 模型
     │
     ▼
-① graph_capture    : torch.export → Graph IR
+① graph_capture      : torch.export → Graph IR
     ▼
-② op_mapping       : ATen op → NPU op（1对1直接映射）
+② op_mapping         : ATen op → NPU op（1对1直接映射）
     ▼
-③ op_decomposition : ATen op → NPU ops（1对N裂解）
+③ op_decomposition   : ATen op → NPU ops（1对N裂解）
     ▼
-④ op_absorption    : 独立算子吸收为相邻算子的参数
+④ op_absorption      : 独立算子吸收为相邻算子的参数
     ▼
-⑤ format_annotator : 标注每个tensor的format/dtype/compute_dtype
+⑤ format_annotator   : 标注每个tensor的format/dtype/compute_dtype
     ▼
-⑥ validator        : 校验所有算子在C接口中有对应
+⑤a reformat_inserter : 插入format转换节点（format不匹配时）
     ▼
-⑦ memory_planner   : HBM全局规划 + L1局部排列 + DMA计划
+⑤b storage_assigner  : 分配tensor存储类型（hbm/local/pipe）
     ▼
-⑧ scheduler        : 计算单元分配 + 依赖关系生成
+⑥ validator          : 校验所有算子在C接口中有对应
     ▼
-⑨ codegen          : 生成完整C工程
+⑦ memory_planner     : HBM全局规划 + L1局部排列 + DMA计划
+    ▼
+⑧ scheduler          : 拓扑排序 + 依赖关系生成
+    ▼
+⑨ codegen            : 生成完整C工程
     ▼
 输出：完整C工程目录
 ```
@@ -42,7 +46,7 @@ PyTorch 模型
 - C工程在NPU工具链上编译通过
 - 执行后与PyTorch golden数据精度比对通过
 
-**Demo模型参数：** batch=1, seq_len=32, hidden_size=64, num_heads=4, ffn_dim=256, mask_shape=[1,1,32,32]
+**Demo模型参数：** batch=1, seq_len=32, hidden_size=64, num_heads=3, ffn_dim=256, mask_shape=[1,1,32,32]
 
 ### 一阶段不做
 
@@ -86,81 +90,63 @@ Unified Buffer（Vector工作空间）
 
 ```
 torch2c/
-├── torch2c/                Python包
+├── torch2c/                     Python包
 │   ├── common/                  基础设施（Graph IR、日志、配置、异常）
-│   │   ├── graph_ir.py
-│   │   ├── logger.py
-│   │   ├── config_loader.py
-│   │   ├── errors.py
-│   │   └── tests/
-│   │
 │   ├── graph_capture/           Pass①：torch.export → Graph IR
-│   │   ├── graph_capture.py
-│   │   ├── config/  demo/  tests/
-│   │
 │   ├── op_mapping/              Pass②：ATen op → NPU op（1对1映射）
-│   │   ├── op_mapping.py
-│   │   ├── config/  demo/  tests/
-│   │
 │   ├── op_decomposition/        Pass③：ATen op → NPU ops（1对N裂解）
-│   │   ├── op_decomposition.py
-│   │   ├── config/  demo/  tests/
-│   │
 │   ├── op_absorption/           Pass④：独立算子吸收为相邻算子参数
-│   │   ├── op_absorption.py
-│   │   ├── config/  demo/  tests/
-│   │
 │   ├── format_annotator/        Pass⑤：标注format/dtype/compute_dtype
-│   │   ├── format_annotator.py
-│   │   ├── config/  demo/  tests/
-│   │
+│   ├── reformat_inserter/       Pass⑤a：插入format转换节点
+│   ├── storage_assigner/        Pass⑤b：分配tensor存储类型
 │   ├── validator/               Pass⑥：合法性校验
-│   │   ├── validator.py
-│   │   ├── config/  demo/  tests/
-│   │
-│   ├── memory_planner/          Pass⑦：内存编排
-│   │   ├── memory_planner.py
-│   │   ├── config/  demo/  tests/
-│   │
-│   ├── scheduler/               Pass⑧：调度与依赖生成
-│   │   ├── scheduler.py
-│   │   ├── config/  demo/  tests/
-│   │
+│   ├── memory_planner/          Pass⑦：内存编排（HBM+L1+DMA）
+│   ├── scheduler/               Pass⑧：拓扑排序与依赖生成
 │   ├── codegen/                 Pass⑨：C代码生成
-│   │   ├── c_emitter.py  weight_exporter.py  golden_exporter.py
-│   │   ├── utils_emitter.py  mock_emitter.py  cmake_emitter.py
-│   │   ├── templates/  config/  demo/  tests/
-│   │
+│   ├── viz/                     可视化工具（依赖图、生命周期图）
 │   ├── integration/             管线串联与端到端测试
-│   │   ├── pipeline.py
-│   │   ├── config/  demo/  tests/
-│   │
+│   │   ├── pipeline.py          编译入口
+│   │   ├── config/              全部YAML配置（single source of truth）
+│   │   └── demo/                端到端demo + 系统测试
 │   └── main.py                  入口
 │
+├── npu_cpu_mock/                NPU C API 的 CPU 模拟实现
+│   ├── include/                 npu_api.h + npu_fp16.h
+│   ├── src/                     全部算子实现（C99）
+│   └── tests/                   C单元测试（CMake + ctest）
+│
 ├── docs/
-│   └── ordr.md                  需求文档
+│   ├── ordr.md                  需求文档（权威来源）
+│   ├── architecture.md          架构设计文档
+│   ├── dev-guide.md             开发指南（扩展算子/定位问题/测试）
+│   └── roadmap.md               开发路线图
+│
 ├── pyproject.toml
 ├── requirements.txt
-└── README.md
+└── CHANGELOG.md
 ```
+
+每个 Pass 模块内部结构统一：`<module>.py` + `config/` + `demo/` + `tests/` + `README.md`
 
 ## 模块依赖关系
 
 ```
 common（所有模块的唯一依赖）
   │
-  ├── graph_capture     ─┐
-  ├── op_mapping        ─┤
-  ├── op_decomposition  ─┤
-  ├── op_absorption     ─┼── 全部只依赖common，互相无依赖，可完全并行开发
-  ├── format_annotator  ─┤
-  ├── validator         ─┤
-  ├── memory_planner    ─┤
-  ├── scheduler         ─┤
-  └── codegen           ─┘
+  ├── graph_capture      ─┐
+  ├── op_mapping         ─┤
+  ├── op_decomposition   ─┤
+  ├── op_absorption      ─┤
+  ├── format_annotator   ─┼── 全部只依赖common，互相无依赖
+  ├── reformat_inserter  ─┤
+  ├── storage_assigner   ─┤
+  ├── validator          ─┤
+  ├── memory_planner     ─┤
+  ├── scheduler          ─┤
+  └── codegen            ─┘
           │
           ▼
-      integration（串联所有模块，最后开发）
+      integration（串联所有模块）
 ```
 
 ## 快速开始
@@ -273,15 +259,11 @@ gcc -fsyntax-only -include npu_mock.h src/model_graph.c
 | 余弦相似度 | > 0.999 |
 | 不匹配元素比例 | < 0.1% |
 
-## 多Agent并行开发
+## 文档
 
-| Agent | 负责模块 | 前置 |
-|-------|---------|------|
-| Agent 0 | common | 无 |
-| Agent 1 | graph_capture + op_mapping + op_decomposition | common |
-| Agent 2 | op_absorption + format_annotator + validator | common |
-| Agent 3 | memory_planner + scheduler | common |
-| Agent 4 | codegen | common |
-| Agent 0 | integration（串联+端到端测试） | 全部模块 |
-
-详见 [docs/ordr.md](docs/ordr.md) 获取完整需求文档（含第16节补充决策记录）。
+| 文档 | 说明 |
+|------|------|
+| [docs/ordr.md](docs/ordr.md) | 一阶段需求文档（权威来源，含补充决策记录） |
+| [docs/architecture.md](docs/architecture.md) | 架构设计：管线、Graph IR、模块接口、配置系统 |
+| [docs/dev-guide.md](docs/dev-guide.md) | 开发指南：扩展算子、问题定位、测试策略 |
+| [docs/roadmap.md](docs/roadmap.md) | 开发路线图：改进方向与技术债清单 |

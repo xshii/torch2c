@@ -1,14 +1,15 @@
-# NPU编译栈一阶段需求文档（最终版）
+# NPU编译栈一阶段需求文档
+
+> **状态**：MVP 已完成。本文档保留为需求与设计决策的权威记录。
+> 架构详情见 [architecture.md](architecture.md)，开发指南见 [dev-guide.md](dev-guide.md)。
 
 ## 文档信息
 
 | 项目 | 说明 |
 |------|------|
 | 项目名称 | PyTorch前端 → NPU C接口 离线编译栈 |
-| 阶段 | 一阶段 MVP |
-| 目标 | 2层Encoder Transformer小shape端到端跑通，精度比对通过 |
-| 团队 | 1-2人 + 多AI Agent并行 |
-| 周期 | AI辅助下半天（~4h）完成代码+UT，1-2天联调 |
+| 阶段 | 一阶段 MVP（已完成） |
+| 目标 | 多层Encoder Transformer端到端跑通，精度比对通过 |
 | 交付物 | Python离线编译器 + 生成的完整C工程 + demo + UT/ST框架 |
 | 代码原则 | 简化代码、高复用、高可靠、完整日志系统、模块自包含 |
 
@@ -89,23 +90,27 @@ NPU的裂解是**固定成组的算子组合**（如layernorm → part1 + part2�
 PyTorch 模型
     │
     ▼
-① graph_capture    : torch.export → Graph IR
+① graph_capture      : torch.export → Graph IR
     ▼
-② op_mapping       : ATen op → NPU op（1对1直接映射）
+② op_mapping         : ATen op → NPU op（1对1直接映射）
     ▼
-③ op_decomposition : ATen op → NPU ops（1对N裂解）
+③ op_decomposition   : ATen op → NPU ops（1对N裂解）+ broadcast插入
     ▼
-④ op_absorption    : 独立算子吸收为相邻算子的参数
+④ op_absorption      : 独立算子吸收为相邻算子的参数
     ▼
-⑤ format_annotator : 标注每个tensor的format/dtype
+⑤ format_annotator   : 标注每个tensor的format/dtype/compute_dtype
     ▼
-⑥ validator        : 校验所有算子在C接口中有对应
+⑤a reformat_inserter : 插入format转换节点（format不匹配时）
     ▼
-⑦ memory_planner   : HBM全局规划 + L1局部排列 + DMA计划
+⑤b storage_assigner  : 分配tensor存储类型（hbm/local/pipe）
     ▼
-⑧ scheduler        : 计算单元分配 + 依赖关系生成
+⑥ validator          : 校验所有算子在C接口中有对应
     ▼
-⑨ codegen          : 生成完整C工程
+⑦ memory_planner     : HBM全局规划 + L1局部排列 + DMA计划
+    ▼
+⑧ scheduler          : 拓扑排序 + 依赖关系生成
+    ▼
+⑨ codegen            : 生成完整C工程
     ▼
 输出：完整C工程目录
 ```
@@ -113,20 +118,22 @@ PyTorch 模型
 ### 3.2 模块间依赖关系
 
 ```
-common（必须最先完成，是所有模块的唯一依赖）
+common（所有模块的唯一依赖）
   │
-  ├── graph_capture     ─┐
-  ├── op_mapping        ─┤
-  ├── op_decomposition  ─┤
-  ├── op_absorption     ─┼── 全部只依赖common，互相无依赖，可完全并行开发
-  ├── format_annotator  ─┤
-  ├── validator         ─┤
-  ├── memory_planner    ─┤
-  ├── scheduler         ─┤
-  └── codegen           ─┘
+  ├── graph_capture      ─┐
+  ├── op_mapping         ─┤
+  ├── op_decomposition   ─┤
+  ├── op_absorption      ─┤
+  ├── format_annotator   ─┼── 全部只依赖common，互相无依赖
+  ├── reformat_inserter  ─┤
+  ├── storage_assigner   ─┤
+  ├── validator          ─┤
+  ├── memory_planner     ─┤
+  ├── scheduler          ─┤
+  └── codegen            ─┘
           │
           ▼
-      integration（串联所有模块，最后开发）
+      integration（串联所有模块）
 ```
 
 ---
@@ -190,42 +197,46 @@ common（必须最先完成，是所有模块的唯一依赖）
 
 ```python
 from dataclasses import dataclass, field
-from typing import Optional
 
 @dataclass
 class Tensor:
     """图中的边——表示一个tensor"""
-    id: str                                    # 全局唯一ID，如 "tensor_0", "q_proj_weight"
+    id: str                                    # 全局唯一ID，如 "t_0", "weight_linear_0"
     shape: list[int]                           # 如 [1, 32, 64]
-    dtype: str                                 # "fp16" | "fp32" | ...
-    format: str = "nd"                         # "nd" | "nz" | "nc1hwc0"
+    dtype: str                                 # "fp16" | "fp32" | ... (NPU目标精度)
+    format: str = "nd"                         # "nd" | "nz" | "nc1hwc0" (HBM存储格式)
+    src_dtype: str | None = None               # 原始精度（来自.pth / torch.export）
 
     # 以下字段由后续Pass填充
-    hbm_offset: Optional[int] = None           # Pass⑦ memory_planner 填充
-    hbm_size: Optional[int] = None             # Pass⑦ 填充（padding后的字节数）
-    l1_offset: Optional[int] = None            # Pass⑦ 填充
+    hbm_offset: int | None = None              # Pass⑦ memory_planner 填充
+    hbm_size: int | None = None                # Pass⑦ 填充（padding后的字节数）
+    l1_offset: int | None = None               # Pass⑦ 填充
     is_weight: bool = False                    # 是否为权重tensor
     is_model_input: bool = False               # 是否为模型的外部输入
     is_model_output: bool = False              # 是否为模型的最终输出
-    producer_node_id: Optional[str] = None     # 产生此tensor的节点ID
+    name: str | None = None                    # 权重名（state_dict key），用于codegen导出
+    storage: str = "hbm"                       # "hbm" | "local" | "pipe" (Pass⑤b填充)
+    producer_node_id: str | None = None        # 产生此tensor的节点ID
     consumer_node_ids: list[str] = field(default_factory=list)  # 消费此tensor的节点ID列表
 
 @dataclass
 class Node:
     """图中的节点——表示一个算子"""
-    id: str                                    # 全局唯一ID，如 "node_0", "node_1"
-    op_type: str                               # 算子类型，如 "aten.mm" 或 "npu_matmul"
+    id: str                                    # 全局唯一ID，如 "node_0"
+    op_type: str                               # 算子类型，如 "aten.mm.default"
     inputs: list[str] = field(default_factory=list)    # 输入tensor的ID列表
     outputs: list[str] = field(default_factory=list)   # 输出tensor的ID列表
-    params: dict = field(default_factory=dict)         # 算子参数，如 {"dim": -1, "epsilon": 1e-5}
+    params: dict = field(default_factory=dict)         # 算子参数，如 {"dim": -1}
 
     # 以下字段由后续Pass填充
-    compute_unit: Optional[str] = None         # Pass② "cube" | "vector" | "scalar"
-    npu_op: Optional[str] = None               # Pass② 映射后的NPU算子名
+    compute_unit: str | None = None            # Pass② "cube" | "vector" | "idma" | "dma"
+    npu_op: str | None = None                  # Pass② 映射后的NPU算子名
     is_mapped: bool = False                    # Pass② 是否已完成映射
-    format_annotation: Optional[dict] = None   # Pass⑤ 输入输出的format/dtype标注
-    schedule_order: Optional[int] = None       # Pass⑧ 执行顺序
+    format_annotation: dict | None = None      # Pass⑤ 输入输出的format/dtype标注
+    schedule_order: int | None = None          # Pass⑧ 执行顺序
+    task_id: int = 0                           # Pass⑧ 全局任务ID (1-indexed, 用于TidInfo)
     dependencies: list[str] = field(default_factory=list)  # Pass⑧ 依赖的节点ID列表
+    module_path: str | None = None             # 源模块路径 (如 "encoder.layers.0.self_attn")
 
     # 吸收相关
     absorbed_inputs: dict = field(default_factory=dict)  # Pass④ 被吸收的额外输入
@@ -243,14 +254,15 @@ class Graph:
     def remove_node(self, node_id: str) -> None: ...
     def add_tensor(self, tensor: Tensor) -> None: ...
     def remove_tensor(self, tensor_id: str) -> None: ...
-    def get_node(self, node_id: str) -> Node: ...
-    def get_tensor(self, tensor_id: str) -> Tensor: ...
+    def get_node(self, node_id: str) -> Node | None: ...
+    def get_tensor(self, tensor_id: str) -> Tensor | None: ...
     def topo_sort(self) -> list[str]: ...                    # 返回拓扑排序后的node_id列表
     def validate(self) -> list[str]: ...                     # 返回校验错误列表（空=通过）
     def to_dict(self) -> dict: ...                           # 序列化为dict（可JSON dump）
     @classmethod
     def from_dict(cls, data: dict) -> 'Graph': ...           # 从dict反序列化
     def summary(self) -> str: ...                            # 返回图的摘要信息
+    def format_npu_annotations(self) -> str: ...             # 标注分布摘要
 ```
 
 ### 5.2 JSON序列化格式
@@ -393,14 +405,15 @@ torch2c/
 ├── format_annotator/                 ← Agent 2
 │   ├── README.md
 │   ├── format_annotator.py
-│   ├── config/
-│   │   └── type_format_config.yaml
-│   ├── demo/
-│   │   ├── demo_input_graph.json
-│   │   ├── run_demo.py
-│   │   └── expected_output.json
-│   └── tests/
-│       └── test_format_annotator.py
+│   ├── config/  demo/  tests/
+│
+├── reformat_inserter/
+│   ├── reformat_inserter.py
+│   ├── config/  tests/
+│
+├── storage_assigner/
+│   ├── storage_assigner.py
+│   ├── config/  tests/
 │
 ├── validator/                        ← Agent 2
 │   ├── README.md
@@ -464,24 +477,33 @@ torch2c/
 │       ├── test_c_emitter.py
 │       └── test_utils_emitter.py
 │
-├── integration/                      ← Agent 0（最后开发）
+├── viz/                              可视化工具（依赖图、生命周期图）
+│
+├── integration/                      管线串联与端到端测试
 │   ├── README.md
 │   ├── pipeline.py
-│   ├── config/
+│   ├── _codegen_runner.py
+│   ├── config/                       全部YAML配置（single source of truth）
 │   │   ├── direct_mappings.yaml
 │   │   ├── decompositions.yaml
 │   │   ├── absorptions.yaml
 │   │   ├── c_api_signatures.yaml
-│   │   ├── type_format_config.yaml
+│   │   ├── capture_rules.yaml
 │   │   ├── hardware_config.yaml
 │   │   ├── model_config.yaml
-│   │   └── codegen_config.yaml
+│   │   ├── codegen_config.yaml
+│   │   └── debug.yaml
 │   ├── demo/
 │   │   ├── encoder_model.py
 │   │   ├── run_full_demo.py
-│   │   └── validate_output.py
+│   │   ├── validate_output.py
+│   │   └── demo_st/                  系统级端到端测试
 │   └── tests/
-│       └── test_pipeline.py
+│       ├── test_pipeline.py
+│       ├── test_config_consistency.py
+│       ├── test_op_semantics.py
+│       ├── test_mha_semantics.py
+│       └── demo_ut/                  C mock 单元测试
 │
 └── main.py
 ```
@@ -525,7 +547,7 @@ YAML配置加载与schema校验。
       缺失必填字段时抛出 ConfigError。
 
 ### errors.py
-统一异常定义：
+统一异常定义 + DiagnosticCollector（编译诊断收集）：
   CompilerError          — 基类
   ConfigError            — 配置文件错误
   MappingError           — 算子映射失败
@@ -534,6 +556,16 @@ YAML配置加载与schema校验。
   ValidationError        — 合法性校验失败
   MemoryPlanError        — 内存编排失败
   CodegenError           — 代码生成失败
+
+### 其他文件（MVP开发中新增）
+  pass_protocol.py       — CompilerPass Protocol 定义
+  compile_config.py      — @torch2c_config 装饰器
+  dtypes.py              — DTYPE_INFO 映射（字节数、C枚举等）
+  npu_annotate.py        — NpuSpec / npu() / npu_input() 标注系统
+  testing.py             — 测试工具（make_linear_chain, load_hw_config）
+  paths.py               — 路径工具
+  debug_config.py        — 调试配置加载
+  torch_debug.py         — PyTorch 调试辅助
 
 ## UT
   test_graph_ir.py:
@@ -567,7 +599,7 @@ YAML配置加载与schema校验。
 - 模型输入/输出tensor标记 is_model_input/is_model_output=True
 
 ## 接口
-  def capture(model: nn.Module, dummy_input: torch.Tensor) -> Graph
+  def capture(model: nn.Module, dummy_input: torch.Tensor, mask: torch.Tensor | None = None) -> Graph
 
 ## 日志
   INFO: "图捕获完成，节点数: N, tensor数: M, 权重tensor数: W"
@@ -643,41 +675,49 @@ YAML配置加载与schema校验。
   DEBUG: 每个算子的映射结果
 
 ## config/direct_mappings.yaml
-（本模块局部配置，demo版）
+（实际配置使用dict格式，key为ATen全名）
 
   mappings:
-    - aten_op: "aten.mm"
-      npu_op: "npu_matmul"
-      compute_unit: "cube"
-    - aten_op: "aten.add.Tensor"
-      npu_op: "npu_add"
-      compute_unit: "vector"
-    - aten_op: "aten.mul.Tensor"
-      npu_op: "npu_mul"
-      compute_unit: "vector"
-    - aten_op: "aten.mul.Scalar"
-      npu_op: "npu_mul_scalar"
-      compute_unit: "vector"
-    - aten_op: "aten.gelu"
-      npu_op: "npu_gelu"
-      compute_unit: "vector"
-    - aten_op: "aten.transpose.int"
-      npu_op: "npu_transpose"
-      compute_unit: "vector"
-    - aten_op: "aten.t"
-      npu_op: "npu_transpose_2d"
-      compute_unit: "vector"
-    - aten_op: "aten.reshape"
-      npu_op: "npu_reshape"
-      compute_unit: "scalar"
+    aten.mm.default:
+      npu_op: cube_matmul
+      compute_unit: cube
+    aten.bmm.default:
+      npu_op: cube_matmul
+      compute_unit: cube
+    aten.addmm.default:
+      npu_op: cube_matmul_bias
+      compute_unit: cube
+    aten.add.Tensor:
+      npu_op: vector_add
+      compute_unit: vector
+    aten.mul.Tensor:
+      npu_op: vector_mul
+      compute_unit: vector
+    aten.mul.Scalar:
+      npu_op: vector_mul_scalar
+      compute_unit: vector
+    aten.gelu.default:
+      npu_op: vector_gelu
+      compute_unit: vector
+    aten.transpose.int:
+      npu_op: vector_transpose
+      compute_unit: vector
+    aten.view.default:
+      npu_op: idma_reshape
+      compute_unit: idma
+    aten.expand.default:
+      npu_op: idma_broadcast
+      compute_unit: idma
+    # ... 共25+条映射，详见 integration/config/direct_mappings.yaml
+
+  NPU算子命名约定：{compute_unit}_{op}，如 cube_matmul, vector_add, idma_reshape
 
 ## demo/demo_input_graph.json
-  含5个节点的小图：mm → add → mul → gelu → reshape
-  （使用第5节定义的JSON格式）
+  含5个节点的小图：mm → add → mul → gelu → view
 
 ## demo/expected_output.json
   映射后5个节点的npu_op分别为：
-  npu_matmul, npu_add, npu_mul, npu_gelu, npu_reshape
+  cube_matmul, vector_add, vector_mul, vector_gelu, idma_reshape
 
 ## UT
   test_op_mapping.py:
@@ -721,55 +761,25 @@ YAML配置加载与schema校验。
   INFO: "裂解完成。裂解了X个算子，新增Y个节点，新增Z个中间tensor"
 
 ## config/decompositions.yaml
-（本模块局部配置，demo版）
+（实际配置使用简化格式）
 
   decompositions:
-    - name: "layernorm_decompose"
-      source_op: "aten.layer_norm"
-      target_ops:
-        - order: 1
-          npu_op: "npu_layernorm_part1"
-          compute_unit: "vector"
-          inputs:
-            - from: "source.input_0"
-            - from: "source.input_1"
-            - from: "source.input_2"
-          outputs:
-            - id: "layernorm_intermediate"
-              shape_same_as: "source.input_0"
-              dtype_same_as: "source.input_0"
-          params_from_source:
-            - { name: "epsilon", source_param: "eps" }
-        - order: 2
-          npu_op: "npu_layernorm_part2"
-          compute_unit: "vector"
-          inputs:
-            - from: "layernorm_intermediate"
-            - from: "source.input_0"
-          outputs:
-            - id: "source.output_0"
+    aten.native_layer_norm.default:
+      steps:
+        - npu_op: vector_layernorm_part1
+          compute_unit: vector
+        - npu_op: vector_layernorm_part2
+          compute_unit: vector
+          extra_inputs: ["original.0"]   # part2需要原始输入
+    aten._softmax.default:
+      steps:
+        - npu_op: vector_softmax_part1
+          compute_unit: vector
+        - npu_op: vector_softmax_part2
+          compute_unit: vector
 
-    - name: "softmax_decompose"
-      source_op: "aten._softmax"
-      target_ops:
-        - order: 1
-          npu_op: "npu_softmax_part1"
-          compute_unit: "vector"
-          inputs:
-            - from: "source.input_0"
-          outputs:
-            - id: "softmax_intermediate"
-              shape_same_as: "source.input_0"
-              dtype_same_as: "source.input_0"
-          params_from_source:
-            - { name: "dim", source_param: "dim" }
-        - order: 2
-          npu_op: "npu_softmax_part2"
-          compute_unit: "vector"
-          inputs:
-            - from: "softmax_intermediate"
-          outputs:
-            - id: "source.output_0"
+  注：中间tensor shape = 源算子第一个输入的shape（§16.5）
+  注：op_decomposition 还会自动检测形状不匹配并插入 idma_broadcast 节点
 
 ## demo/demo_input_graph.json
   含3个节点：layer_norm → mm → softmax
@@ -867,35 +877,36 @@ YAML配置加载与schema校验。
 
 ## 输入
 - Graph IR（所有节点已映射为NPU算子）
-- config/type_format_config.yaml
+- config dict: {target_dtype, target_format, compute_dtype_rules}
 
 ## 输出
-- Graph IR（每个节点的format_annotation被填充）
+- Graph IR（每个节点的format_annotation被填充，tensor的dtype/format更新）
 
 ## 接口
   def run(graph: Graph, config: dict) -> Graph
 
 ## 处理逻辑
-  for node in graph.nodes:
-      req = config.op_format_requirements[node.npu_op]
-      node.format_annotation = {
-          "inputs": [{"format": r.format, "dtype": r.dtype} for r in req.inputs],
-          "outputs": [{"format": r.format, "dtype": r.dtype} for r in req.outputs],
-          "supports_format_convert": req.supports_format_convert,
-          "supports_dtype_cast": req.supports_dtype_cast
-      }
-      # 同时更新tensor本身的format/dtype为该算子期望的值
-      for i, tensor_id in enumerate(node.inputs):
-          if i < len(req.inputs):
-              graph.tensors[tensor_id].format = req.inputs[i].format
-              graph.tensors[tensor_id].dtype = req.inputs[i].dtype
+  config优先级解析（per-node NpuSpec > config target > tensor原始值）。
+  为每个节点设置:
+  - format_annotation = {inputs: [{format, dtype}], outputs: [{format, dtype}], compute_dtype}
+  - 更新tensor.dtype和tensor.format
+
+  compute_dtype分层优先级:
+    1. per-op: compute_dtype_rules.by_op[npu_op]
+    2. per-unit: compute_dtype_rules.by_compute_unit[unit]
+    3. global default
+
+  npu()装饰器（NpuSpec）可在模型定义中逐模块指定dtype/format。
 
 ## 日志
   INFO: "Format标注完成。标注了N个节点，M个tensor"
 
-## config/type_format_config.yaml
-（本模块局部配置，demo版，含枚举定义和算子要求）
-  见第5.5节的完整定义
+## config
+  不再使用独立的type_format_config.yaml。
+  精度/格式配置来源：
+  - 模型装饰器 @torch2c_config(target_dtype=..., compute_dtype_rules=...)
+  - compile()函数参数
+  - 默认值
 
 ## demo/demo_input_graph.json
   含2个节点：matmul(cube) → add(vector)
@@ -941,21 +952,20 @@ YAML配置加载与schema校验。
   if unsupported:
       raise ValidationError(f"以下算子未映射: {unsupported}")
 
-## config/supported_ops.yaml
+## config/supported_ops
+  实际实现中不使用独立的 supported_ops.yaml。
+  pipeline 从 c_api_signatures.yaml 的所有 section (compute_ops, dma_ops, idma_ops)
+  的 key 集合自动构建 supported_ops 列表。
 
-  supported_ops:
-    - "npu_matmul"
-    - "npu_add"
-    - "npu_mul"
-    - "npu_mul_scalar"
-    - "npu_gelu"
-    - "npu_layernorm_part1"
-    - "npu_layernorm_part2"
-    - "npu_softmax_part1"
-    - "npu_softmax_part2"
-    - "npu_transpose"
-    - "npu_transpose_2d"
-    - "npu_reshape"
+  当前支持的算子（使用 {unit}_{op} 命名）:
+    cube: cube_matmul, cube_matmul_bias
+    vector: vector_add, vector_sub, vector_mul, vector_div,
+            vector_mul_scalar, vector_gelu, vector_dropout,
+            vector_layernorm_part1, vector_layernorm_part2,
+            vector_softmax_part1, vector_softmax_part2,
+            vector_transpose, vector_transpose_2d
+    idma: idma_reshape, idma_broadcast, idma_move, idma_concat
+    dma: dma_reformat, dma_move
 
 ## demo/
   demo_valid_graph.json: 全部节点都在支持列表中 → 通过
@@ -1194,108 +1204,82 @@ templates/目录下的.tmpl文件是C代码片段模板，使用Python f-string�
 
 ```yaml
 # 算子直接映射：1个ATen → 1个NPU
+# key 为 torch.export 输出的全称，value 含 npu_op + compute_unit
+# NPU算子命名约定：{compute_unit}_{op}
 mappings:
-  - aten_op: "aten.mm"
-    npu_op: "npu_matmul"
-    compute_unit: "cube"
-
-  - aten_op: "aten.add.Tensor"
-    npu_op: "npu_add"
-    compute_unit: "vector"
-
-  - aten_op: "aten.mul.Tensor"
-    npu_op: "npu_mul"
-    compute_unit: "vector"
-
-  - aten_op: "aten.mul.Scalar"
-    npu_op: "npu_mul_scalar"
-    compute_unit: "vector"
-
-  - aten_op: "aten.gelu"
-    npu_op: "npu_gelu"
-    compute_unit: "vector"
-
-  - aten_op: "aten.transpose.int"
-    npu_op: "npu_transpose"
-    compute_unit: "vector"
-
-  - aten_op: "aten.t"
-    npu_op: "npu_transpose_2d"
-    compute_unit: "vector"
-
-  - aten_op: "aten.reshape"
-    npu_op: "npu_reshape"
-    compute_unit: "scalar"
+  aten.mm.default:
+    npu_op: cube_matmul
+    compute_unit: cube
+  aten.bmm.default:
+    npu_op: cube_matmul
+    compute_unit: cube
+  aten.addmm.default:
+    npu_op: cube_matmul_bias
+    compute_unit: cube
+  aten.add.Tensor:
+    npu_op: vector_add
+    compute_unit: vector
+  aten.mul.Tensor:
+    npu_op: vector_mul
+    compute_unit: vector
+  aten.mul.Scalar:
+    npu_op: vector_mul_scalar
+    compute_unit: vector
+  aten.gelu.default:
+    npu_op: vector_gelu
+    compute_unit: vector
+  aten.transpose.int:
+    npu_op: vector_transpose
+    compute_unit: vector
+  aten.t.default:
+    npu_op: vector_transpose_2d
+    compute_unit: vector
+  aten.view.default:
+    npu_op: idma_reshape
+    compute_unit: idma
+  aten.reshape.default:
+    npu_op: idma_reshape
+    compute_unit: idma
+  aten.expand.default:
+    npu_op: idma_broadcast
+    compute_unit: idma
+  # ... 完整列表见 integration/config/direct_mappings.yaml (25+条)
 ```
 
 ### 8.2 decompositions.yaml
 
 ```yaml
 # 算子裂解：1个ATen → N个NPU（固定成组）
+# 中间 tensor shape = 源算子第一个输入的 shape（§16.5）
 decompositions:
-  - name: "layernorm_decompose"
-    source_op: "aten.layer_norm"
-    target_ops:
-      - order: 1
-        npu_op: "npu_layernorm_part1"
-        compute_unit: "vector"
-        inputs:
-          - from: "source.input_0"
-          - from: "source.input_1"
-          - from: "source.input_2"
-        outputs:
-          - id: "layernorm_intermediate"
-            shape_same_as: "source.input_0"
-            dtype_same_as: "source.input_0"
-        params_from_source:
-          - { name: "epsilon", source_param: "eps" }
-      - order: 2
-        npu_op: "npu_layernorm_part2"
-        compute_unit: "vector"
-        inputs:
-          - from: "layernorm_intermediate"
-          - from: "source.input_0"
-        outputs:
-          - id: "source.output_0"
-
-  - name: "softmax_decompose"
-    source_op: "aten._softmax"
-    target_ops:
-      - order: 1
-        npu_op: "npu_softmax_part1"
-        compute_unit: "vector"
-        inputs:
-          - from: "source.input_0"
-        outputs:
-          - id: "softmax_intermediate"
-            shape_same_as: "source.input_0"
-            dtype_same_as: "source.input_0"
-        params_from_source:
-          - { name: "dim", source_param: "dim" }
-      - order: 2
-        npu_op: "npu_softmax_part2"
-        compute_unit: "vector"
-        inputs:
-          - from: "softmax_intermediate"
-        outputs:
-          - id: "source.output_0"
+  aten.native_layer_norm.default:
+    steps:
+      - npu_op: vector_layernorm_part1
+        compute_unit: vector
+      - npu_op: vector_layernorm_part2
+        compute_unit: vector
+        extra_inputs: ["original.0"]   # part2需要原始输入
+  aten._softmax.default:
+    steps:
+      - npu_op: vector_softmax_part1
+        compute_unit: vector
+      - npu_op: vector_softmax_part2
+        compute_unit: vector
 ```
 
 ### 8.3 absorptions.yaml
 
 ```yaml
 # 参数吸收：独立算子 → 相邻算子的可选参数
+# 实际配置使用简化格式，每条规则为 flat dict
+# 注意：integration/config/ 中为空（npu_cpu_mock 不支持融合算子）
+# 模块测试使用如下规则：
 absorptions:
-  - name: "softmax_absorb_mask"
-    absorbed_op: "npu_add"
-    target_op: "npu_softmax_part1"
-    conditions:
-      position: "immediately_before_target"
-      absorbed_output_is_target_input: true
-    param_mapping:
-      absorbed_input_index: 1
-      target_param_name: "mask"
-    eliminates_intermediate: true
+  - absorbed_op: vector_add
+    target_op: vector_softmax_part1
+    param_name: mask
+    absorbed_input_index: 1      # add 的第几个输入被吸收（mask）
+    passthrough_input_index: 0   # add 的第几个输入传递给 target（scores）
 ```
 
 ### 8.4 c_api_signatures.yaml
@@ -1434,89 +1418,31 @@ sync_ops:
     params: []
 ```
 
-### 8.5 type_format_config.yaml
+### 8.5 精度/格式配置（取代原 type_format_config.yaml）
 
-```yaml
-dtype_enum:
-  fp16: "NPU_DTYPE_FP16"
-  fp32: "NPU_DTYPE_FP32"
-  bf16: "NPU_DTYPE_BF16"
-  int8: "NPU_DTYPE_INT8"
-  int32: "NPU_DTYPE_INT32"
+原 `type_format_config.yaml` 已不存在。dtype/format 信息分散到以下机制：
 
-dtype_bytes:
-  fp16: 2
-  fp32: 4
-  bf16: 2
-  int8: 1
-  int32: 4
+- **dtype 枚举映射**：内置在 `common/dtypes.py` 的 `DTYPE_INFO` 字典
+- **format 枚举映射**：内置在代码中（"nd" → NPU_FORMAT_ND 等）
+- **算子精度/格式需求**：通过 `npu()` 装饰器 + `@torch2c_config` 在模型定义中指定
+- **compute_dtype 分层**：`compute_dtype_rules` 配置（per-op > per-unit > global）
 
-format_enum:
-  nd: "NPU_FORMAT_ND"
-  nz: "NPU_FORMAT_NZ"
-  nc1hwc0: "NPU_FORMAT_NC1HWC0"
+示例（在模型定义中）：
+```python
+from torch2c.common import npu, NpuSpec, torch2c_config
 
-op_format_requirements:
-  npu_matmul:
-    inputs:  [{ format: "nz", dtype: "fp16" }, { format: "nz", dtype: "fp16" }]
-    outputs: [{ format: "nz", dtype: "fp16" }]
-    supports_format_convert: true
-    supports_dtype_cast: true
-  npu_add:
-    inputs:  [{ format: "nd", dtype: "fp16" }, { format: "nd", dtype: "fp16" }]
-    outputs: [{ format: "nd", dtype: "fp16" }]
-    supports_format_convert: true
-    supports_dtype_cast: true
-  npu_mul:
-    inputs:  [{ format: "nd", dtype: "fp16" }, { format: "nd", dtype: "fp16" }]
-    outputs: [{ format: "nd", dtype: "fp16" }]
-    supports_format_convert: true
-    supports_dtype_cast: true
-  npu_mul_scalar:
-    inputs:  [{ format: "nd", dtype: "fp16" }]
-    outputs: [{ format: "nd", dtype: "fp16" }]
-    supports_format_convert: true
-    supports_dtype_cast: true
-  npu_gelu:
-    inputs:  [{ format: "nd", dtype: "fp16" }]
-    outputs: [{ format: "nd", dtype: "fp16" }]
-    supports_format_convert: true
-    supports_dtype_cast: true
-  npu_layernorm_part1:
-    inputs:  [{ format: "nd", dtype: "fp32" }, { format: "nd", dtype: "fp32" }, { format: "nd", dtype: "fp32" }]
-    outputs: [{ format: "nd", dtype: "fp32" }]
-    supports_format_convert: true
-    supports_dtype_cast: true
-  npu_layernorm_part2:
-    inputs:  [{ format: "nd", dtype: "fp32" }, { format: "nd", dtype: "fp32" }]
-    outputs: [{ format: "nd", dtype: "fp32" }]
-    supports_format_convert: true
-    supports_dtype_cast: true
-  npu_softmax_part1:
-    inputs:  [{ format: "nd", dtype: "fp16" }]
-    outputs: [{ format: "nd", dtype: "fp16" }]
-    supports_format_convert: true
-    supports_dtype_cast: true
-  npu_softmax_part2:
-    inputs:  [{ format: "nd", dtype: "fp16" }]
-    outputs: [{ format: "nd", dtype: "fp16" }]
-    supports_format_convert: true
-    supports_dtype_cast: true
-  npu_transpose:
-    inputs:  [{ format: "nd", dtype: "fp16" }]
-    outputs: [{ format: "nd", dtype: "fp16" }]
-    supports_format_convert: true
-    supports_dtype_cast: true
-  npu_transpose_2d:
-    inputs:  [{ format: "nd", dtype: "fp16" }]
-    outputs: [{ format: "nd", dtype: "fp16" }]
-    supports_format_convert: true
-    supports_dtype_cast: true
-  npu_reshape:
-    inputs:  [{ format: "nd", dtype: "fp16" }]
-    outputs: [{ format: "nd", dtype: "fp16" }]
-    supports_format_convert: true
-    supports_dtype_cast: true
+@torch2c_config(target_dtype="fp16", target_format="nd", compute_dtype_rules={
+    "default": "fp16",
+    "by_compute_unit": {"cube": "fp32"},
+    "by_op": {"vector_softmax_part1": "fp32"},
+})
+class MyModel(nn.Module):
+    def __init__(self):
+        self.linear = npu(nn.Linear(64, 64),
+                          input=NpuSpec("fp16", "nd"),
+                          output=NpuSpec("fp16", "nd"),
+                          weight=NpuSpec("fp16", "nz"),
+                          compute_dtype="fp32")
 ```
 
 ### 8.6 hardware_config.yaml
@@ -1548,32 +1474,16 @@ dma:
 ### 8.7 model_config.yaml
 
 ```yaml
+# 模型结构参数（仅参考，精度配置由 @torch2c_config 提供）
 model:
-  name: "transformer_encoder_2layer_demo"
-  type: "transformer_encoder"
-  num_layers: 2
-  hidden_size: 64
-  num_attention_heads: 4
-  intermediate_size: 256
-  layer_norm_epsilon: 1.0e-5
-  activation: "gelu"
-  input_shape:
-    batch_size: 1
-    seq_len: 32
-  compute_dtype: "fp16"
-  weight_dtype: "fp16"
-
-weights:
-  export_format: "static_array"
-  header_file: "model_weights.h"
-
-golden:
-  export_input: true
-  export_output: true
-  export_intermediate: false
-  output_dir: "golden/"
-  data_format: "raw_binary"
+  d_model: 192
+  dim_ff: 384
+  num_layers: 3
+  seq_len: 32
+  batch_size: 1
 ```
+
+注：`target_dtype`/`target_format`/`compute_dtype_rules` 由模型 `@torch2c_config` 装饰器提供，不在此文件中。
 
 ### 8.8 codegen_config.yaml
 
@@ -1802,39 +1712,40 @@ total_bytes: 4096
 
 ---
 
-## 10. Demo规格：2层Encoder Transformer
+## 10. Demo规格：多层Encoder Transformer
 
 ### 10.1 模型结构
 
 ```
-Input [1, 32, 64]
+Input [1, 32, 192]
 │
-├── Layer 1:
+├── Layer N (×3):
 │   ├── LayerNorm  → layernorm_part1 + part2 (Vector)
-│   ├── Q = x × W_q   (matmul, Cube)   [1,32,64]×[64,64]→[1,32,64]
+│   ├── Q = x × W_q   (matmul, Cube)   [1,32,192]×[192,192]→[1,32,192]
 │   ├── K = x × W_k   (matmul, Cube)
 │   ├── V = x × W_v   (matmul, Cube)
-│   ├── Q reshape [1,32,64]→[1,32,4,16] → transpose [1,4,32,16]
+│   ├── Q reshape [1,32,192]→[1,32,3,64] → transpose [1,3,32,64]
 │   ├── K reshape + transpose 同上
 │   ├── V reshape + transpose 同上
-│   ├── K^T = K.transpose(-2,-1)  (transpose_2d)  [1,4,16,32]
-│   ├── scores = Q × K^T  (matmul, Cube)  [1,4,32,32]
-│   ├── scores = scores × 0.25  (mul_scalar, Vector)  (1/sqrt(16))
+│   ├── scores = bmm(Q, K^T)  (matmul, Cube)  [1,3,32,64]×[1,3,64,32]→[1,3,32,32] (循环3头)
+│   ├── scores = scores × scale  (mul_scalar, Vector)  (1/sqrt(64))
+│   ├── scores = scores + mask (broadcast expand + add)
 │   ├── attn = softmax(scores)  → softmax_part1 + part2 (Vector)
-│   ├── context = attn × V  (matmul, Cube)  [1,4,32,16]
-│   ├── context transpose [1,32,4,16] → reshape [1,32,64]
+│   ├── context = bmm(attn, V)  (matmul, Cube)  (循环3头)
+│   ├── context transpose [1,32,3,64] → reshape [1,32,192]
 │   ├── output = context × W_o  (matmul, Cube)
 │   ├── output = output + input  (add, Vector, residual)
 │   ├── LayerNorm → layernorm_part1 + part2
-│   ├── ffn1 = x × W_ff1  (matmul, Cube)  [1,32,64]×[64,256]→[1,32,256]
+│   ├── ffn1 = x × W_ff1  (matmul, Cube)  [1,32,192]×[192,384]→[1,32,384]
 │   ├── ffn1 = gelu(ffn1)  (Vector)
-│   ├── ffn2 = ffn1 × W_ff2  (matmul, Cube)  [1,32,256]×[256,64]→[1,32,64]
+│   ├── ffn2 = ffn1 × W_ff2  (matmul, Cube)  [1,32,384]×[384,192]→[1,32,192]
 │   └── output = ffn2 + residual  (add, Vector)
 │
-├── Layer 2: 结构同Layer 1，不同权重
-│
-└── Output [1, 32, 64]
+└── Output [1, 32, 192]
 ```
+
+注：MHA使用显式bmm循环（每头独立matmul）而非拼接式多头，确保图中只出现已支持的算子。
+支持 mixed 精度（部分模块 fp32）和全 fp16 两种模式。
 
 ### 10.2 数据规模
 
@@ -1842,91 +1753,44 @@ Input [1, 32, 64]
 |------|-----|
 | batch_size | 1 |
 | seq_len | 32 |
-| hidden_size | 64 |
-| num_heads | 4 (head_dim=16, 对齐cube_size) |
-| ffn_intermediate | 256 |
-| 每层权重量 | ~100KB |
-| 总tensor量 | ~500KB |
+| d_model | 192 |
+| num_heads | 3 (head_dim=64) |
+| dim_ff | 384 |
+| num_layers | 3 |
+| mask_shape | [1, 1, 32, 32] |
 
-### 10.3 每层算子统计
+### 10.3 每层算子统计（参考，实际数量因 bmm 循环展开和 broadcast 插入而变化）
 
 | 算子 | 数量 | 计算单元 |
 |------|------|----------|
-| npu_layernorm_part1 | 2 | Vector |
-| npu_layernorm_part2 | 2 | Vector |
-| npu_matmul | 8 | Cube |
-| npu_reshape | 8 | Scalar |
-| npu_transpose | 4 | Vector |
-| npu_transpose_2d | 1 | Vector |
-| npu_mul_scalar | 1 | Vector |
-| npu_softmax_part1 | 1 | Vector |
-| npu_softmax_part2 | 1 | Vector |
-| npu_gelu | 1 | Vector |
-| npu_add | 2 | Vector |
-| **每层** | **31** | |
-| **2层** | **62** | |
+| vector_layernorm_part1 | 2 | Vector |
+| vector_layernorm_part2 | 2 | Vector |
+| cube_matmul / cube_matmul_bias | 8+ | Cube |
+| idma_reshape | 8+ | IDMA |
+| vector_transpose | 4 | Vector |
+| vector_mul_scalar | 1 | Vector |
+| vector_softmax_part1 | 1 | Vector |
+| vector_softmax_part2 | 1 | Vector |
+| vector_gelu | 1 | Vector |
+| vector_add | 2+ | Vector |
+| idma_broadcast | 1+ | IDMA |
+
+注：bmm 循环展开和 broadcast/expand 节点会增加实际算子数量。
 
 ---
 
-## 11. 多Agent并行开发方案
+## 11. 多Agent并行开发方案（已完成）
 
-### 11.1 Agent分配
+> 本节记录 MVP 开发时的并行策略，已全部执行完毕。
 
-| Agent | 负责模块 | 耗时 | 前置 |
-|-------|---------|------|------|
-| Agent 0 | common | 30min | 无 |
-| Agent 1 | graph_capture + op_mapping + op_decomposition | 1.5h | common |
-| Agent 2 | op_absorption + format_annotator + validator | 1.5h | common |
-| Agent 3 | memory_planner + scheduler | 1.5h | common |
-| Agent 4 | codegen | 2h | common |
-| Agent 0 | integration（串联+端到端测试） | 1h | 全部模块 |
-
-### 11.2 时间线
-
-```
-0:00 ─── Agent 0: 开发common ───────────────────── 0:30
-         │
-         ├─ 发布common给所有Agent ─┐
-         │                         │
-0:30 ─── Agent 1: capture+map+dec ─┼─ Agent 2: absorb+fmt+valid ─┼─ Agent 3: mem+sched ─┼─ Agent 4: codegen ─── 2:30
-         │                         │                              │                      │
-         └─────────────────────────┴──────────────────────────────┴──────────────────────┘
-                                                                                          │
-2:30 ─── Agent 0: integration 集成测试 ──────────────────────────────────────────────────── 3:30
-
-3:30 ─── 缓冲：修bug、补测试 ───────────────────────────────────────────────────────────── 4:00
-
-关键路径：0:30(common) + 2:00(最长并行) + 1:00(集成) + 0:30(buffer) = 4:00
-```
-
-### 11.3 Agent间契约
-
-每个Agent拿到的信息：
-
-1. common模块的完整代码（graph_ir.py / logger.py / config_loader.py / errors.py）
-2. 自己负责的模块的README.md（本文档第7节）
-3. Graph IR的JSON格式定义（本文档第5.2节）
-4. 自己模块文件夹中config/目录的配置文件内容
-
-每个Agent交付的产物：
-
-1. 模块代码文件（如op_mapping.py）
-2. 模块UT文件（如test_op_mapping.py）
-3. 局部demo文件（demo_input_graph.json + run_demo.py + expected_output.json）
-4. UT运行结果截图/日志（证明UT全部通过）
-
-### 11.4 集成验收标准
-
-Agent 0在集成阶段检查：
-
-| 检查项 | 方法 |
-|--------|------|
-| 所有模块UT通过 | `cd torch2c && pytest --tb=short` |
-| 端到端管线跑通 | `python integration/demo/run_full_demo.py` 无报错 |
-| 生成的C代码语法正确 | `gcc -fsyntax-only -include npu_mock.h output/src/model_graph.c` |
-| C侧UT通过 | `cd output && cmake . && make && ctest` |
-| 算子数量正确 | 检查model_graph.c中算子调用数 = 62 |
-| 日志完整 | 每个Pass有入口/出口INFO日志 |
+| Agent | 负责模块 | 前置 |
+|-------|---------|------|
+| Agent 0 | common + npu_cpu_mock | 无 |
+| Agent 1 | graph_capture + op_mapping + op_decomposition | common |
+| Agent 2 | op_absorption + format_annotator + validator | common |
+| Agent 3 | memory_planner + scheduler | common |
+| Agent 4 | codegen | common |
+| Agent 0 | integration（串联+端到端测试） | 全部模块 |
 
 ---
 
@@ -1975,18 +1839,19 @@ Agent 0在集成阶段检查：
 
 ## 14. 配置文件填写检查清单
 
-| 序号 | 文件 | 做什么 | 来源 | 耗时 |
-|------|------|--------|------|------|
-| 1 | direct_mappings.yaml | ATen→NPU 1对1映射 | C头文件 + torch.export | 1h |
-| 2 | decompositions.yaml | 裂解规则 | C接口文档 | 30min |
-| 3 | c_api_signatures.yaml | 函数签名 | C头文件 | 1-2h |
-| 4 | type_format_config.yaml | 枚举+算子format | C头文件enum | 1h |
-| 5 | hardware_config.yaml | 存储参数 | 芯片规格书 | 15min |
-| 6 | absorptions.yaml | 吸收规则 | C接口文档 | 30min |
-| 7 | model_config.yaml | 模型参数 | 模型定义 | 10min |
-| 8 | codegen_config.yaml | 输出选项 | 用默认值 | 5min |
+| 序号 | 文件 | 做什么 | 来源 |
+|------|------|--------|------|
+| 1 | direct_mappings.yaml | ATen→NPU 1对1映射 | C头文件 + torch.export |
+| 2 | decompositions.yaml | 裂解规则 | C接口文档 |
+| 3 | c_api_signatures.yaml | 函数签名与参数源映射 | C头文件 |
+| 4 | capture_rules.yaml | 参数重命名、输入重排 | torch.export 分析 |
+| 5 | hardware_config.yaml | 存储参数 | 芯片规格书 |
+| 6 | absorptions.yaml | 吸收规则 | C接口文档 |
+| 7 | model_config.yaml | 模型结构参数 | 模型定义 |
+| 8 | codegen_config.yaml | 输出选项 | 用默认值 |
+| 9 | debug.yaml | 调试开关 | 用默认值 |
 
-**总计约半天。** 1-4为核心配置。
+注：dtype/format 配置已从独立 YAML 迁移到模型 `@torch2c_config` 装饰器和 `npu()` 标注。
 
 ---
 
@@ -2047,16 +1912,19 @@ Agent 0在集成阶段检查：
 - **tensor.format语义**：表示该tensor在HBM中的存储格式。DMA load时按消费者需求转换到L1
 - **DMA随路转换**：同一tensor被不同format需求的算子消费时，不插入显式format_convert节点，由DMA搬运时自动完成格式转换
 - **format_annotation扩展**：输入format/dtype、计算dtype、输出format/dtype 均可不同
+- **npu()装饰器**：在模型定义中通过 `npu(module, input=NpuSpec, output=NpuSpec, weight=NpuSpec, compute_dtype=...)` 逐模块指定
+- **reformat_inserter（⑤a）**：当中间 tensor 的 format 与消费者要求不匹配时，自动插入 `dma_reformat` 节点
+- **storage_assigner（⑤b）**：根据 `allowed_pairs` 配置，将符合条件的中间 tensor 标记为 `local` 或 `pipe` 存储（跳过 HBM）
 
 ```python
 node.format_annotation = {
-    "inputs":  [{"format": "nz", "dtype": "fp16"}],   # 每个输入可有独立的format和dtype
-    "outputs": [{"format": "nd", "dtype": "fp32"}],    # 输出format/dtype可与输入不同
-    "compute_dtype": "fp32",                            # 计算精度，可与输入输出均不同
-    "supports_format_convert": True,
-    "supports_dtype_cast": True
+    "inputs":  [{"format": "nz", "dtype": "fp16"}],
+    "outputs": [{"format": "nd", "dtype": "fp32"}],
+    "compute_dtype": "fp32",
 }
 ```
+
+compute_dtype 优先级：per-op > per-compute_unit > global default
 
 ### 16.4 算子接口更新
 
@@ -2087,4 +1955,6 @@ npu_transpose:
 
 ### 16.7 Absorption
 
-- Demo模型加入attention mask后，`add(scores, mask) → softmax_part1` 的pattern可被匹配，absorption模块能端到端验证
+- Demo模型加入attention mask后，`add(scores, mask) → softmax_part1` 的pattern可被匹配
+- 当前 `integration/config/absorptions.yaml` 为空（`npu_cpu_mock` 不支持融合算子），absorption 模块通过但不实际吸收
+- 模块级测试中使用非空吸收规则验证逻辑正确性
