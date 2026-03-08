@@ -33,6 +33,8 @@ htmlcov/
 
 # Generated output
 output/
+**/demo/demo_output/
+**/demo/captured_graph.json
 
 # Claude
 .claude/
