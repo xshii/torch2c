@@ -15,49 +15,8 @@ from __future__ import annotations
 import os
 import sys
 
-import torch
-
-from torch2c.common import DEFAULT_OUTPUT_DIR, INTEGRATION_CONFIG_DIR, setup_logging
-from torch2c.integration.demo.encoder_model import EncoderModel
-from torch2c.integration.pipeline import compile
-
-_CONFIG_DIR = str(INTEGRATION_CONFIG_DIR)
-
-
-def _run_one(precision: str, output_dir: str) -> bool:
-    """编译并验证单个精度模式，返回是否通过。"""
-    label = "混合精度" if precision == "mixed" else "全 FP16"
-    print(f"\n{'=' * 60}")
-    print(f"  {label} ({precision})")
-    print(f"{'=' * 60}")
-
-    model = EncoderModel(d_model=256, dim_ff=512, num_layers=2, precision=precision)
-    model.eval()
-
-    batch, seq, d_model = 1, 32, 256
-    dummy_input = torch.randn(batch, seq, d_model)
-    mask = torch.zeros(batch, seq, seq)
-
-    out = compile(
-        model=model,
-        dummy_input=dummy_input,
-        config_dir=_CONFIG_DIR,
-        output_dir=output_dir,
-        mask=mask,
-    )
-    print(f"编译完成：{os.path.abspath(out)}")
-
-    from torch2c.integration.demo.validate_output import validate
-    validate(out)
-
-    from torch2c.integration.demo.validate_c_output import validate_c
-    result = validate_c(out)
-    if result["passed"]:
-        print(f"  [{label}] C golden 比对通过!")
-    else:
-        print(f"  [{label}] C golden 比对失败! (exit {result['returncode']})")
-        print(result["stdout"])
-    return result["passed"]
+from torch2c.common import DEFAULT_OUTPUT_DIR, setup_logging
+from torch2c.integration.demo._runner import PRECISION_LABEL, compile_and_validate
 
 
 def main() -> None:
@@ -73,21 +32,31 @@ def main() -> None:
     if not modes:
         modes = ["mixed", "fp16"]
 
-    results: dict[str, bool] = {}
+    results: list[dict] = []
     for mode in modes:
         out_dir = os.path.join(base, mode) if len(modes) > 1 else base
-        results[mode] = _run_one(mode, out_dir)
+        label = PRECISION_LABEL[mode]
+        print(f"\n{'=' * 60}")
+        print(f"  {label} ({mode})")
+        print(f"{'=' * 60}")
+
+        r = compile_and_validate(mode, out_dir)
+        results.append(r)
+
+        print(f"编译完成：{r['output_dir']}")
+        status = "通过" if r["passed"] else "失败"
+        print(f"  [{label}] C golden 比对{status}!")
 
     # 汇总
     print(f"\n{'=' * 60}")
     print("  汇总")
     print(f"{'=' * 60}")
-    for mode, passed in results.items():
-        label = "混合精度" if mode == "mixed" else "全 FP16"
-        status = "PASS ✓" if passed else "FAIL ✗"
-        print(f"  {label:10s}  {status}")
+    for r in results:
+        label = PRECISION_LABEL[r["precision"]]
+        status = "PASS ✓" if r["passed"] else "FAIL ✗"
+        print(f"  {label:10s}  {status}  max_abs={r['max_abs']:.6f}  cosine={r['cosine']:.6f}")
 
-    if not all(results.values()):
+    if not all(r["passed"] for r in results):
         sys.exit(1)
 
 

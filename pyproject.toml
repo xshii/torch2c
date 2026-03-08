@@ -26,6 +26,7 @@ include = ["torch2c*"]
 
 [tool.pytest.ini_options]
 testpaths = ["torch2c"]
+norecursedirs = ["demo_st"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
