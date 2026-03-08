@@ -5,12 +5,11 @@ from __future__ import annotations
 import json
 import pathlib
 
-from ...common.config_loader import load_config
-from ...common.graph_ir import Graph
-from ..op_mapping import run
+from torch2c.common import INTEGRATION_CONFIG_DIR, Graph, load_config
+from torch2c.op_mapping import run
 
 _DIR = pathlib.Path(__file__).parent
-_CONFIG = pathlib.Path(__file__).parent.parent / "config" / "direct_mappings.yaml"
+_CONFIG = INTEGRATION_CONFIG_DIR / "direct_mappings.yaml"
 
 
 def main() -> None:

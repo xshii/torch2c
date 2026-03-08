@@ -7,8 +7,8 @@ import pathlib
 
 import torch
 
-from ..graph_capture import capture
-from .demo_model import DemoEncoder
+from torch2c.graph_capture import capture
+from torch2c.graph_capture.demo.demo_model import DemoEncoder
 
 
 def main() -> None:

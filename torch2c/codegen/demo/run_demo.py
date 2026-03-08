@@ -8,23 +8,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-# 确保项目根目录在 sys.path
-_project_root = str(Path(__file__).resolve().parents[3])
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
-
-from torch2c.codegen import (  # noqa: E402
-    c_emitter,
-    cmake_emitter,
-    mock_emitter,
-    utils_emitter,
-)
-from torch2c.common import get_logger  # noqa: E402
+from torch2c.codegen import c_emitter, cmake_emitter, mock_emitter, utils_emitter
+from torch2c.codegen._plan import CodegenPlan
+from torch2c.common import INTEGRATION_CONFIG_DIR, Graph, get_logger
+from torch2c.memory_planner._dma import DmaPlan
 
 logger = get_logger("codegen.demo")
 
 
-def generate_test_memory_c(plan: dict) -> str:
+def generate_test_memory_c(plan: CodegenPlan) -> str:
     """生成 test_memory_layout.c：检查 tensor 偏移不重叠。"""
     lines = [
         "#include <stdio.h>",
@@ -45,16 +37,16 @@ def generate_test_memory_c(plan: dict) -> str:
     ]
     # 生成偏移对齐测试
     lines.append("static void test_offsets_non_negative(void) {")
-    for tid in plan["tensors"]:
+    for tid in plan.tensors:
         safe = tid.upper()
         lines.append(f"    ASSERT_TRUE({safe}_HBM_OFFSET >= 0);")
     lines.append("}")
     lines.append("")
 
     lines.append("static void test_sizes_positive(void) {")
-    for tid, t in plan["tensors"].items():
+    for tid, t in plan.tensors.items():
         safe = tid.upper()
-        if t.get("hbm_size", 0):
+        if t.hbm_size:
             lines.append(f"    ASSERT_TRUE({safe}_HBM_SIZE > 0);")
     lines.append("}")
     lines.append("")
@@ -72,11 +64,15 @@ def main() -> None:
     demo_dir = Path(__file__).parent
     plan_path = demo_dir / "demo_input_plan.json"
     output_dir = demo_dir / "demo_output"
-    config_dir = str(demo_dir.parent / "config")
+    config_dir = str(INTEGRATION_CONFIG_DIR)
 
     logger.info("加载 plan: %s", plan_path)
     with open(plan_path, "r") as f:
-        plan = json.load(f)
+        data = json.load(f)
+
+    graph = Graph.from_dict(data)
+    dma_plans = [DmaPlan(**dp) for dp in data.get("dma_plans", [])]
+    plan = CodegenPlan(graph, dma_plans)
 
     # 生成各模块
     c_emitter.run(plan, str(output_dir), config_dir)

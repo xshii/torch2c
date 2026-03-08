@@ -7,7 +7,7 @@
       "outputs": ["tensor_out"],
       "params": {},
       "compute_unit": "cube",
-      "npu_op": "npu_matmul",
+      "npu_op": "cube_matmul",
       "is_mapped": true,
       "format_annotation": null,
       "schedule_order": null,
