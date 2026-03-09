@@ -36,7 +36,13 @@ pip install -e ".[dev]"
 .venv/bin/python torch2c/memory_planner/demo/viz_graph.py
 ```
 
-生成的 HTML 在各 demo 的 `demo_output/viz/` 目录下，用浏览器打开即可。
+生成的 HTML 在 `output/viz_demo/` 目录下，用浏览器打开即可。
+
+> 所有 demo 输出统一在项目根目录 `output/` 下：
+> - `output/graph_capture_demo/` — 图捕获 JSON
+> - `output/codegen_demo/` — C 工程
+> - `output/viz_demo/` — 可视化 HTML
+> - `output/<ModelClassName>/` — compile() 默认输出
 
 ### ST 场景测试
 

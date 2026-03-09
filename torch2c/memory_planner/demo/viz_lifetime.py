@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pathlib
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -81,7 +82,12 @@ def main() -> None:
     else:
         graph, _ = _build_demo_graph()
 
-    path = args.output or "lifetime.html"
+    if args.output:
+        path = args.output
+    else:
+        out_dir = pathlib.Path(__file__).resolve().parents[3] / "output" / "viz_demo"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = str(out_dir / "lifetime.html")
     html = _render_lifetime(graph, cube_size, hw_config=config)
     with open(path, "w") as f:
         f.write(html)

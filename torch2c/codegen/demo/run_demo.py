@@ -63,7 +63,7 @@ def generate_test_memory_c(plan: CodegenPlan) -> str:
 def main() -> None:
     demo_dir = Path(__file__).parent
     plan_path = demo_dir / "demo_input_plan.json"
-    output_dir = demo_dir / "demo_output"
+    output_dir = demo_dir.resolve().parents[2] / "output" / "codegen_demo"
     config_dir = str(INTEGRATION_CONFIG_DIR)
 
     logger.info("加载 plan: %s", plan_path)

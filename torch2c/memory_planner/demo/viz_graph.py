@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pathlib
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -144,10 +145,16 @@ def main() -> None:
     else:
         graph = _build_attention_graph()
 
+    if args.output == "graph.html":
+        out_dir = pathlib.Path(__file__).resolve().parents[3] / "output" / "viz_demo"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        output_path = str(out_dir / "graph.html")
+    else:
+        output_path = args.output
     chart = render_graph(graph, cube_size)
-    chart.render(args.output)
-    print(f"HTML 已生成: {args.output}")
-    print(f"用浏览器打开: open {args.output}")
+    chart.render(output_path)
+    print(f"HTML 已生成: {output_path}")
+    print(f"用浏览器打开: open {output_path}")
 
 
 if __name__ == "__main__":

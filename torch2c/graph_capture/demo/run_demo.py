@@ -20,7 +20,9 @@ def main() -> None:
 
     graph = capture(model, dummy_input, mask=mask)
 
-    out_path = pathlib.Path(__file__).parent / "captured_graph.json"
+    out_dir = pathlib.Path(__file__).resolve().parents[3] / "output" / "graph_capture_demo"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "captured_graph.json"
     out_path.write_text(json.dumps(graph.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"已保存到 {out_path}")
     print(graph.summary())
