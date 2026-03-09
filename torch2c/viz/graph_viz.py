@@ -121,6 +121,12 @@ def _schedule_tiled_op(
         dep_ready = max(dep_ready, op_end["__bulk_load__"])
 
     prev_store_nid = None
+    # 跟踪整个 tiled op 的时间范围
+    first_load_start = None
+    first_comp_start = None
+    last_store_end = None
+    last_comp_end = None
+
     for ti in range(num_tiles):
         tile_dep = dep_ready if ti == 0 else op_end.get(prev_store_nid, dep_ready)
 
@@ -138,6 +144,8 @@ def _schedule_tiled_op(
                 lane="dma", lane_idx=_LANE_INDEX["dma"],
                 start=start, end=end, duration=dur, tid=0, deps=ldeps,
             ))
+            if first_load_start is None:
+                first_load_start = start
 
         # compute
         comp_nid = f"{nid}_t{ti}" if num_tiles > 1 else nid
@@ -154,6 +162,9 @@ def _schedule_tiled_op(
             start=start, end=end, duration=per_tile_cost,
             tid=node.task_id, deps=cdeps,
         ))
+        if first_comp_start is None:
+            first_comp_start = start
+        last_comp_end = end
 
         # store
         store_nid = f"__dma_store_{nid}_t{ti}"
@@ -169,14 +180,54 @@ def _schedule_tiled_op(
                 start=start, end=end, duration=dur, tid=0, deps=[comp_nid],
             ))
             prev_store_nid = store_nid
+            last_store_end = end
         else:
             prev_store_nid = comp_nid
 
-    # 记录整个 tiled op 的结束时间
-    op_end[nid] = op_end.get(prev_store_nid, 0)
-    # DMA 虚拟节点 ID（供 lifetime_viz 使用）
-    op_end[f"__dma_load_{nid}"] = op_end.get(f"__dma_load_{nid}_t0", 0)
-    op_end[f"__dma_store_{nid}"] = op_end.get(prev_store_nid, 0)
+    # ── 添加 summary ScheduledOp 供 lifetime_viz 查找时间 ──
+    # 计算 summary：base nid 覆盖整个 tiled op 时间范围
+    op_start = first_load_start if first_load_start is not None else (first_comp_start or 0)
+    op_final = last_store_end if last_store_end is not None else (last_comp_end or 0)
+    op_end[nid] = op_final
+
+    # DMA load summary（从第一个 tile load 开始到第一个 tile load 结束）
+    if first_load_start is not None:
+        first_load_end = op_end.get(f"__dma_load_{nid}_t0", first_load_start)
+        summary_load_nid = f"__dma_load_{nid}"
+        op_end[summary_load_nid] = first_load_end
+        scheduled.append(ScheduledOp(
+            nid=summary_load_nid, op=f"dma_load (×{num_tiles})",
+            lane="dma", lane_idx=_LANE_INDEX["dma"],
+            start=first_load_start, end=first_load_end,
+            duration=first_load_end - first_load_start, tid=0,
+        ))
+
+    # DMA store summary（最后一个 tile store）
+    if last_store_end is not None:
+        last_tile = num_tiles - 1
+        last_store_nid = f"__dma_store_{nid}_t{last_tile}"
+        last_store_start = op_end.get(last_store_nid, last_store_end) - (last_store_end - op_end.get(last_store_nid, last_store_end))
+        summary_store_nid = f"__dma_store_{nid}"
+        # 找最后 tile store 的 start time
+        for sop in reversed(scheduled):
+            if sop.nid == last_store_nid:
+                last_store_start = sop.start
+                break
+        op_end[summary_store_nid] = last_store_end
+        scheduled.append(ScheduledOp(
+            nid=summary_store_nid, op=f"dma_store (×{num_tiles})",
+            lane="dma", lane_idx=_LANE_INDEX["dma"],
+            start=last_store_start, end=last_store_end,
+            duration=last_store_end - last_store_start, tid=0,
+        ))
+
+    # Compute summary（覆盖所有 tile 的计算范围）
+    scheduled.append(ScheduledOp(
+        nid=nid, op=f"{node.npu_op or node.op_type} (×{num_tiles})",
+        lane=cu, lane_idx=_LANE_INDEX[cu],
+        start=first_comp_start or 0, end=last_comp_end or 0,
+        duration=(last_comp_end or 0) - (first_comp_start or 0), tid=node.task_id,
+    ))
 
 
 def _schedule_ops(

@@ -177,7 +177,10 @@ def _build_eviction_l1_blocks(
     op_timing: dict[str, tuple[int, int]],
     dma_plans: list,
 ) -> list[MemBlock]:
-    """Eviction 模式：按 per-op l1_layout 生成 L1 块，每个算子独立时间段。"""
+    """Eviction 模式：按 per-op l1_layout 生成 L1 块，每个算子独立时间段。
+
+    对于 tiled 算子，展开为 N 个 per-tile 块以体现分片执行。
+    """
     blocks: list[MemBlock] = []
     for dp in dma_plans:
         if dp.node_id in ("__bulk_load__", "__bulk_store__"):
@@ -187,37 +190,73 @@ def _build_eviction_l1_blocks(
         nid = dp.node_id
         if nid not in op_timing:
             continue
-        start_c, end_c = op_timing[nid]
-        # 考虑 DMA load/store 的时间
-        dma_load_nid = f"__dma_load_{nid}"
-        dma_store_nid = f"__dma_store_{nid}"
-        if dma_load_nid in op_timing:
-            start_c = min(start_c, op_timing[dma_load_nid][0])
-        if dma_store_nid in op_timing:
-            end_c = max(end_c, op_timing[dma_store_nid][1])
 
         tile_info = dp.tile_info
-        for tid, l1_off in dp.l1_layout.items():
-            t = graph.tensors.get(tid)
-            if not t:
-                continue
-            # 计算此算子中该 tensor 的 L1 大小（考虑 tiling）
-            if tile_info and tid in tile_info.get("tiled_tensors", {}):
-                dim_idx = tile_info["tiled_tensors"][tid]
-                tiled_shape = list(t.shape)
-                tiled_shape[dim_idx] = tile_info["tile_size"]
-                size = calc_padded_size(tiled_shape, t.dtype, t.format, cube_size)
-            else:
+        num_tiles = tile_info.get("num_tiles", 1) if tile_info else 1
+
+        if num_tiles > 1:
+            # ── tiled：为每个 tile 生成独立的 L1 块 ──
+            for ti in range(num_tiles):
+                load_nid = f"__dma_load_{nid}_t{ti}"
+                store_nid = f"__dma_store_{nid}_t{ti}"
+                comp_nid = f"{nid}_t{ti}"
+                # 从 per-tile ScheduledOp 获取时间范围
+                tile_start = None
+                tile_end = None
+                for k in (load_nid, comp_nid, store_nid):
+                    if k in op_timing:
+                        s, e = op_timing[k]
+                        tile_start = min(tile_start, s) if tile_start is not None else s
+                        tile_end = max(tile_end, e) if tile_end is not None else e
+                if tile_start is None:
+                    continue
+
+                for tid, l1_off in dp.l1_layout.items():
+                    t = graph.tensors.get(tid)
+                    if not t:
+                        continue
+                    if tile_info and tid in tile_info.get("tiled_tensors", {}):
+                        dim_idx = tile_info["tiled_tensors"][tid]
+                        tiled_shape = list(t.shape)
+                        tiled_shape[dim_idx] = tile_info["tile_size"]
+                        size = calc_padded_size(tiled_shape, t.dtype, t.format, cube_size)
+                        shape_label = shape_str(tiled_shape)
+                    else:
+                        size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+                        shape_label = shape_str(t.shape)
+                    blocks.append(MemBlock(
+                        tid=f"{tid}@{nid}_t{ti}", offset=l1_off, size=size,
+                        start_cycle=tile_start, end_cycle=tile_end,
+                        storage=t.storage,
+                        is_weight=t.is_weight, is_input=t.is_model_input,
+                        is_output=t.is_model_output,
+                        shape=shape_label, dtype=t.dtype or "?",
+                        fmt=t.format or "nd",
+                    ))
+        else:
+            # ── 非 tiled：整个算子一个块 ──
+            start_c, end_c = op_timing[nid]
+            dma_load_nid = f"__dma_load_{nid}"
+            dma_store_nid = f"__dma_store_{nid}"
+            if dma_load_nid in op_timing:
+                start_c = min(start_c, op_timing[dma_load_nid][0])
+            if dma_store_nid in op_timing:
+                end_c = max(end_c, op_timing[dma_store_nid][1])
+
+            for tid, l1_off in dp.l1_layout.items():
+                t = graph.tensors.get(tid)
+                if not t:
+                    continue
                 size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
-            blocks.append(MemBlock(
-                tid=f"{tid}@{nid}", offset=l1_off, size=size,
-                start_cycle=start_c, end_cycle=end_c,
-                storage=t.storage,
-                is_weight=t.is_weight, is_input=t.is_model_input,
-                is_output=t.is_model_output,
-                shape=shape_str(t.shape), dtype=t.dtype or "?",
-                fmt=t.format or "nd",
-            ))
+                blocks.append(MemBlock(
+                    tid=f"{tid}@{nid}", offset=l1_off, size=size,
+                    start_cycle=start_c, end_cycle=end_c,
+                    storage=t.storage,
+                    is_weight=t.is_weight, is_input=t.is_model_input,
+                    is_output=t.is_model_output,
+                    shape=shape_str(t.shape), dtype=t.dtype or "?",
+                    fmt=t.format or "nd",
+                ))
     blocks.sort(key=lambda b: (b.start_cycle, b.offset))
     return blocks
 
