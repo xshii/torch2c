@@ -23,6 +23,7 @@ class DmaInstruction:
     src_format: str
     dst_format: str
     dtype: str = "fp16"
+    tile_stride: int | None = None  # tiled DMA 每 tile 的 HBM 字节步长
 
 
 @dataclass
@@ -32,6 +33,8 @@ class DmaPlan:
     node_id: str
     loads: list[DmaInstruction] = field(default_factory=list)
     stores: list[DmaInstruction] = field(default_factory=list)
+    tile_info: dict | None = None  # 非 None 时表示此算子需要 tiled 执行
+    l1_layout: dict[str, int] | None = None  # per-op L1 layout (eviction 模式)
 
 
 def _get_dst_format(node, tensor_id: str, tensor) -> str:

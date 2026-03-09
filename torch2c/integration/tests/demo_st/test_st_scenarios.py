@@ -44,13 +44,16 @@ def _make_config_dir(l1_size: int = _L1_1M) -> str:
 
 
 def _compile_and_validate(model: nn.Module, dummy_input: torch.Tensor, output_dir: str,
-                          config_dir: str) -> dict:
+                          config_dir: str, *, atol: float = 1e-2) -> dict:
     """编译 + C golden 验证，返回结果 dict。"""
     out = compile(
         model=model,
         dummy_input=dummy_input,
         config_dir=config_dir,
         output_dir=output_dir,
+        target_dtype="fp16",
+        target_format="nd",
+        atol=atol,
     )
     c_result = validate_c(out)
     import re
@@ -166,25 +169,20 @@ class TestST2_MixedPrecisionE2E:
             assert r["passed"], f"C golden 失败: {r['stdout']}"
 
 
-# ── ST3: embedding+bias 超 L1 → MemoryPlanError ─────────────
+# ── ST3: embedding+bias 超 L1 → tiled 策略自动切分 ─────────────
 
 
-class TestST3_EmbeddingBiasOverflowE2E:
-    """ST3: input[1,256,512] × W[512,512], total≈1025KB > 1M。"""
+class TestST3_EmbeddingBiasTiledE2E:
+    """ST3: input[1,256,512] × W[512,512], total≈1025KB > 1M → tiled 成功。"""
 
-    def test_compile_raises_memory_error(self):
+    def test_compile_and_golden(self):
         model = EmbeddingBiasModel(k=512, n=512)
         model.eval()
         dummy = torch.randn(1, 256, 512)
         config_dir = _make_config_dir()
         with tempfile.TemporaryDirectory() as tmpdir:
-            with pytest.raises(MemoryPlanError, match="L1 溢出"):
-                compile(
-                    model=model,
-                    dummy_input=dummy,
-                    config_dir=config_dir,
-                    output_dir=tmpdir,
-                )
+            r = _compile_and_validate(model, dummy, tmpdir, config_dir)
+            assert r["passed"], f"C golden 失败: {r['stdout']}"
 
 
 # ── ST4: 2 层 MLP 全放下 → bulk，C golden 通过 ──────────────
@@ -213,7 +211,6 @@ class TestST5_2LayerMLPPerOpE2E:
     per-op codegen 有 struct 指针碰撞 bug，C golden 暂时无法通过。
     """
 
-    @pytest.mark.xfail(reason="per-op codegen struct 指针碰撞 bug 未修复", strict=False)
     def test_compile_and_golden(self):
         model = TwoLayerMLP(d=256)
         model.eval()
@@ -224,25 +221,22 @@ class TestST5_2LayerMLPPerOpE2E:
             assert r["passed"], f"C golden 失败: {r['stdout']}"
 
 
-# ── ST6: MHA Q/K 投影溢出 → MemoryPlanError ─────────────────
+# ── ST6: MHA Q/K 投影 → tiled 策略自动切分 ─────────────────
 
 
-class TestST6_MHAOverflowE2E:
-    """ST6: Q/K 投影，input[1,640,256]。
+class TestST6_MHATiledE2E:
+    """ST6: Q/K 投影 + attn, input[1,640,256]。
 
-    q_proj peak=769KB < 1M，k_proj peak=1089KB > 1M（Q 仍存活）。
+    per-op 溢出 → tiled 策略：attn 节点 M 维切分 640→2×320。
     """
 
-    def test_compile_raises_memory_error(self):
+    def test_compile_and_golden(self):
         model = SimpleQKModel(d=256)
         model.eval()
         dummy = torch.randn(1, 640, 256)
         config_dir = _make_config_dir()
+        # atol=0.05: Q@K^T with d=256 in FP16 produces ~0.03 quantization error
         with tempfile.TemporaryDirectory() as tmpdir:
-            with pytest.raises(MemoryPlanError, match="L1 溢出"):
-                compile(
-                    model=model,
-                    dummy_input=dummy,
-                    config_dir=config_dir,
-                    output_dir=tmpdir,
-                )
+            r = _compile_and_validate(model, dummy, tmpdir, config_dir, atol=0.05)
+            assert r["passed"], f"C golden 失败: {r['stdout']}"
+            assert r["cosine"] > 0.999, f"cosine={r['cosine']}"

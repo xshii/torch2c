@@ -342,19 +342,25 @@ class TestST2_EmbeddingBiasMixedPrecision:
 
 
 class TestST3_EmbeddingBiasOverflow:
-    """ST3: embedding+bias，输入输出权重 L1 放不下 → MemoryPlanError。
+    """ST3: embedding+bias，输入输出权重 L1 放不下。
 
     graph: input[1,256,512] × W[512,512] + b → output[1,256,512]
     sizes: input=256KB + weight=512KB + bias=1KB + output=256KB = 1025KB > 1M
-    单算子，bulk/per-op 都超 → MemoryPlanError
+    单算子，bulk/per-op 都超 → tiled 策略自动切分成功。
     """
 
-    def test_overflow(self):
-        """单算子总 tensor > 1M → MemoryPlanError。"""
+    def test_tiling_succeeds(self):
+        """单算子总 tensor > 1M → tiled 策略 M 维切分成功。"""
         g = _build_embedding_bias(m=256, k=512, n=512)
         config = _config_1m()
-        with pytest.raises(MemoryPlanError, match="L1 溢出"):
-            run(g, config)
+        g, dma_plans = run(g, config)
+        # tiled 策略成功，验证 tile_info 已设置
+        node = g.nodes["mm0"]
+        assert "_tile_info" in node.params
+        ti = node.params["_tile_info"]
+        assert ti["original_size"] == 256
+        assert ti["tile_size"] * ti["num_tiles"] == 256
+        assert post_validate(g) == []
 
     def test_size_calculation(self):
         """验证 tensor 大小计算正确。"""
@@ -506,8 +512,8 @@ class TestST5_2LayerMLPPerOp:
 # ── ST6: 2 头 MHA，Q 放下 K 放不下 → MemoryPlanError ────────
 
 
-class TestST6_MHAOverflow:
-    """ST6: 2 头 MHA 的 Q/K 投影，Q 单独放下，K 投影时 Q 仍存活导致溢出。
+class TestST6_MHATiled:
+    """ST6: 2 头 MHA 的 Q/K 投影 + attn。
 
     graph: input[1,640,256] → q_proj → Q → attn
                             → k_proj → K → attn
@@ -515,23 +521,42 @@ class TestST6_MHAOverflow:
     sizes:
       activation: 640×256×2 = 320KB each
       weight: 256×256×2 = 128KB each
-      q_proj peak: input(320K) + Wq(128K) + Q(320K) = 768K < 1M ✓
-      k_proj peak: input(320K) + Q(320K, alive) + Wk(128K) + K(320K) = 1088K > 1M ✗
+      q_proj per-op peak: 768K < 1M ✓（eviction 模式）
+      k_proj per-op peak: 768K < 1M ✓（eviction 模式，Q 已释放）
+      attn per-op peak: Q(320K)+K(320K)+scores(800K) = 1440K > 1M ✗ → tiled
+    策略: bulk 失败 → per-op 失败 → tiled 成功（attn 节点 M 维切分）
     """
 
-    def test_overflow_at_k_proj(self):
-        """K 投影时 Q 仍存活，累积 L1 峰值超 1M → MemoryPlanError。"""
+    def _build(self):
         g = _build_2head_mha_projections(seq=640, d=256)
         config = _config_1m()
-        with pytest.raises(MemoryPlanError, match="L1 溢出"):
-            run(g, config)
+        return run(g, config)
+
+    def test_tiled_succeeds(self):
+        """tiled 策略成功通过，attn 节点被切分。"""
+        g, dma_plans = self._build()
+        assert post_validate(g) == []
+
+    def test_attn_has_tile_info(self):
+        """attn 节点包含 _tile_info。"""
+        g, _ = self._build()
+        attn = g.nodes["attn"]
+        assert "_tile_info" in attn.params
+        ti = attn.params["_tile_info"]
+        assert ti["original_size"] == 640
+        assert ti["tile_size"] == 320
+        assert ti["num_tiles"] == 2
+
+    def test_projections_not_tiled(self):
+        """q_proj / k_proj 不需要 tiling（eviction 足够）。"""
+        g, _ = self._build()
+        assert "_tile_info" not in g.nodes["q_proj"].params
+        assert "_tile_info" not in g.nodes["k_proj"].params
 
     def test_q_proj_alone_fits(self):
         """单独 Q 投影可以放下（验证不是 Q 本身太大）。"""
-        # 构造只有 Q 投影的图
         g = _build_embedding_bias(m=640, k=256, n=256)
         config = _config_1m()
-        # 应该不报错
         g, _ = run(g, config)
         assert post_validate(g) == []
 
@@ -540,7 +565,21 @@ class TestST6_MHAOverflow:
         act_size = calc_padded_size([1, 640, 256], "fp16", "nd", _CUBE_SIZE)
         wt_size = calc_padded_size([256, 256], "fp16", "nd", _CUBE_SIZE)
         bias_size = calc_padded_size([256], "fp16", "nd", _CUBE_SIZE)
-        q_peak = act_size + wt_size + bias_size + act_size  # input + Wq + bq + Q
-        k_peak = act_size + act_size + wt_size + bias_size + act_size  # input + Q + Wk + bk + K
+        q_peak = act_size + wt_size + bias_size + act_size
+        k_peak = act_size + act_size + wt_size + bias_size + act_size
         assert q_peak < _L1_1M, f"Q peak {q_peak} should < 1M"
         assert k_peak > _L1_1M, f"K peak {k_peak} should > 1M"
+
+    def test_tiled_dma_plan(self):
+        """attn 节点的 DMA 计划包含 tiled 指令。"""
+        g, dma_plans = self._build()
+        # 找到 attn 的 DMA plan
+        attn_plan = [p for p in dma_plans if p.node_id == "attn"]
+        assert len(attn_plan) == 1
+        plan = attn_plan[0]
+        assert plan.tile_info is not None
+        # 至少有 tiled load 和 tiled store
+        tiled_loads = [i for i in plan.loads if i.tile_stride is not None]
+        tiled_stores = [i for i in plan.stores if i.tile_stride is not None]
+        assert len(tiled_loads) > 0
+        assert len(tiled_stores) > 0

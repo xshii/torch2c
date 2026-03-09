@@ -1,5 +1,0 @@
-shape: 1,32,256
-dtype: fp16
-format: nd
-byte_order: little_endian
-total_bytes: 16384

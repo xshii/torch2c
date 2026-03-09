@@ -113,20 +113,27 @@ def _apply_npu_annotations(
 
 
 def _resolve_negative_dims(graph: Graph) -> None:
-    """将 dim 参数的负索引转正，并将 softmax 的 dim 从索引转为维度大小。"""
+    """将 dim/dim0/dim1 参数的负索引转正，并将 softmax 的 dim 从索引转为维度大小。"""
     for node in graph.nodes.values():
-        dim_val = node.params.get("dim")
-        if dim_val is None or not isinstance(dim_val, int):
-            continue
         if not node.inputs:
             continue
         t = graph.get_tensor(node.inputs[0])
         if t is None or not t.shape:
             continue
         ndim = len(t.shape)
-        if dim_val < 0:
-            dim_val = dim_val + ndim
-        if node.op_type in DIM_TO_SIZE_OPS:
-            node.params["dim"] = t.shape[dim_val]
-        else:
-            node.params["dim"] = dim_val
+
+        # dim 参数（softmax 等）
+        dim_val = node.params.get("dim")
+        if dim_val is not None and isinstance(dim_val, int):
+            if dim_val < 0:
+                dim_val = dim_val + ndim
+            if node.op_type in DIM_TO_SIZE_OPS:
+                node.params["dim"] = t.shape[dim_val]
+            else:
+                node.params["dim"] = dim_val
+
+        # dim0/dim1 参数（transpose）
+        for key in ("dim0", "dim1"):
+            val = node.params.get(key)
+            if val is not None and isinstance(val, int) and val < 0:
+                node.params[key] = val + ndim

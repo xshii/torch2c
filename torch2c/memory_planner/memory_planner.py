@@ -1,8 +1,10 @@
 """memory_planner — Pass⑧：内存编排。
 
-策略选择：
+策略选择（按优先级）：
   1. strategy_bulk  — 所有 tensor 同时放 L1，bulk DMA
   2. strategy_perop — L1 liveness 复用 + per-op DMA
+  3. strategy_spill — selective eviction + 按需 tiling
+  4. strategy_tiled — 全量 eviction + M 维切分（最后手段）
 
 策略实现见 _strategy.py，HBM/L1 分配见 _hbm_alloc.py / _l1_alloc.py，
 DMA 计划见 _dma.py，工具函数见 _utils.py。
@@ -13,7 +15,7 @@ from __future__ import annotations
 from torch2c.common import Graph, get_logger, memory_layout_enabled
 
 from ._dma import DmaPlan
-from ._strategy import strategy_bulk, strategy_perop
+from ._strategy import strategy_bulk, strategy_perop, strategy_spill, strategy_tiled
 from ._utils import calc_padded_size
 
 logger = get_logger("memory_planner")
@@ -92,10 +94,24 @@ def run(graph: Graph, config: dict) -> tuple[Graph, list[DmaPlan]]:
     if not graph.execution_order:
         graph.execution_order = graph.topo_sort()
 
+    def _reset_offsets() -> None:
+        for t in graph.tensors.values():
+            t.hbm_offset = None
+            t.hbm_size = None
+            t.l1_offset = None
+
     # 依次尝试策略，第一个成功的生效
     ok, dma_plans = strategy_bulk(graph, l1_align, l1_cap, hbm_align, cube_size)
     if not ok:
-        ok, dma_plans = strategy_perop(graph, l1_align, l1_cap, hbm_align, cube_size)
+        try:
+            ok, dma_plans = strategy_perop(graph, l1_align, l1_cap, hbm_align, cube_size)
+        except Exception:
+            _reset_offsets()
+            try:
+                ok, dma_plans = strategy_spill(graph, l1_align, l1_cap, hbm_align, cube_size)
+            except Exception:
+                _reset_offsets()
+                ok, dma_plans = strategy_tiled(graph, l1_align, l1_cap, hbm_align, cube_size)
 
     allocated = sum(1 for t in graph.tensors.values() if t.hbm_offset is not None)
     logger.info("Pass 完成。HBM 分配: %d 个张量, DMA 计划: %d 条", allocated, len(dma_plans))

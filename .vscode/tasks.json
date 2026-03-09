@@ -16,10 +16,39 @@
       "group": "test"
     },
     {
-      "label": "run:demo",
+      "label": "demo:e2e",
       "type": "shell",
       "command": "${workspaceFolder}/.venv/bin/python",
-      "args": ["-m", "torch2c.main"]
+      "args": ["torch2c/codegen/demo/run_demo.py"],
+      "detail": "完整编译链 demo（graph_capture → codegen）",
+      "group": "none"
+    },
+    {
+      "label": "demo:st",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/pytest",
+      "args": [
+        "torch2c/integration/tests/demo_st/test_st_scenarios.py",
+        "-v", "--tb=short"
+      ],
+      "detail": "ST1-ST6 场景端到端测试（bulk/spill/tiling）",
+      "group": "test"
+    },
+    {
+      "label": "demo:viz",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["torch2c/memory_planner/demo/viz_lifetime.py"],
+      "detail": "生成统一 HBM+L1 内存 lifetime 图（viz/lifetime.html）",
+      "group": "none"
+    },
+    {
+      "label": "demo:module",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["torch2c/${input:demoModule}/demo/run_demo.py"],
+      "detail": "运行指定模块的 demo",
+      "group": "none"
     },
     {
       "label": "install:dev",
@@ -33,6 +62,22 @@
       "id": "module",
       "type": "promptString",
       "description": "Module test path, e.g. torch2c/common/tests/"
+    },
+    {
+      "id": "demoModule",
+      "type": "pickString",
+      "description": "选择要运行 demo 的模块",
+      "options": [
+        "graph_capture",
+        "op_mapping",
+        "op_decomposition",
+        "op_absorption",
+        "format_annotator",
+        "validator",
+        "memory_planner",
+        "scheduler",
+        "codegen"
+      ]
     }
   ]
 }

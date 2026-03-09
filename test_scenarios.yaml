@@ -1,7 +1,7 @@
 # 系统级测试场景 (ST)
 # L1 = 1M (1,048,576 bytes)，所有场景统一
-# UT: torch2c/memory_planner/tests/test_st_scenarios.py (25 tests, all passed)
-# ST: torch2c/integration/demo/demo_st/test_st_scenarios.py (6 passed, 1 xfail)
+# UT: torch2c/memory_planner/tests/test_st_scenarios.py (57 tests, all passed)
+# ST: torch2c/integration/tests/demo_st/test_st_scenarios.py (7 passed)
 
 - id: ST1
   desc: embedding+bias，输入输出权重完全放得下，golden通过
@@ -34,16 +34,16 @@
   st: TestST2_MixedPrecisionE2E (1 test) ✅ compile + C golden
 
 - id: ST3
-  desc: embedding+bias，单算子全部 tensor 超 L1 → 报错
+  desc: embedding+bias，单算子超 L1 → tiled 策略自动切分
   graph: input[1,256,512] × W[512,512] + b → output[1,256,512]
   sizes: input=256KB + weight=512KB + bias=1KB + output=256KB = 1025KB > 1M
-  strategy: bulk 失败 → per-op 也失败（单算子就超限）
+  strategy: bulk 失败 → per-op 失败 → spill（selective eviction + M 维切分）
   verify:
-    - 抛出 MemoryPlanError("L1 溢出")
-    - 无自动化 tiling
-  expect: MemoryPlanError
-  ut: TestST3_EmbeddingBiasOverflow (2 tests) ✅
-  st: TestST3_EmbeddingBiasOverflowE2E (1 test) ✅ compile → MemoryPlanError
+    - spill 策略成功编译（Belady's optimal eviction + tiling）
+    - C golden 通过
+  expect: pass
+  ut: TestST3_EmbeddingBiasTiled (2 tests) ✅
+  st: TestST3_EmbeddingBiasTiledE2E (1 test) ✅ compile + C golden
 
 - id: ST4
   desc: matmul+bias × 2（2层MLP），全部 tensor L1 放得下
@@ -64,30 +64,37 @@
   graph: input[1,600,256] → mm0(W[256,256]+b) → mid → mm1(W[256,256]+b) → output
   sizes: activation=300KB×3 + weight=128KB×2 + bias≈1KB = 1157KB > 1M
   per-op-peak: input(300K)+W(128K)+b+output(300K) = 729KB < 1M
-  strategy: bulk 失败 → per-op 成功（liveness 复用 L1）
+  strategy: bulk 失败 → per-op 失败 → spill（selective eviction + per-op L1 复用）
   verify:
-    - per-op DMA（每个算子独立 DMA plan）
-    - L1 offset 有复用（unique < total）
-    - 同一算子内 tensor L1 不重叠
-    - 每个算子 L1 峰值 < 1M
-    - HBM lifetime 复用
-    - post_validate 通过
+    - spill 策略成功（Belady's optimal eviction，per-op 单算子放得下无需 tiling）
+    - C golden 通过
   expect: pass
   ut: TestST5_2LayerMLPPerOp (6 tests) ✅
-  st: TestST5_2LayerMLPPerOpE2E (1 test) ⚠️ xfail — per-op codegen struct 指针碰撞 bug
+  st: TestST5_2LayerMLPPerOpE2E (1 test) ✅ compile + C golden
 
 - id: ST6
-  desc: 2头MHA Q/K投影，Q放得下但K投影时Q仍存活导致溢出
-  graph: input[1,640,256] → q_proj(W[256,256]+b) → Q → attn
-         input → k_proj(W[256,256]+b) → K → attn → scores
+  desc: Q/K 投影 + 注意力打分，per-op 溢出 → tiled 策略
+  graph: |
+    input[1,640,256] → q_proj(W[256,256]+b) → Q[1,640,256]
+    input → k_proj(W[256,256]+b) → K[1,640,256]
+    Q → reformat(ND→NZ) → Q_NZ
+    K → transpose → K^T[1,256,640] → reformat(ND→NZ) → K^T_NZ
+    Q_NZ @ K^T_NZ → scores[1,640,640]
   sizes: activation=320KB, weight=128KB
-  q_proj-peak: input(320K)+Wq(128K)+bq+Q(320K) = 769KB < 1M ✓
-  k_proj-peak: input(320K)+Q(320K,alive)+Wk(128K)+bk+K(320K) = 1089KB > 1M ✗
-  strategy: bulk 失败 → per-op 在 k_proj 处溢出
+  tiling:
+    - node_0 (q_proj): M 维 640→2×320
+    - node_1 (k_proj): M 维 640→2×320
+    - reformat_t_7: M 维 256→2×128
+    - node_3 (attn): M 维 640→5×128
+  strategy: bulk 失败 → per-op 失败 → spill（selective eviction + M 维切分）
   verify:
-    - 抛出 MemoryPlanError("L1 溢出")
-    - 单独 Q 投影可以通过（验证不是 Q 本身太大）
-    - 峰值计算：Q 769KB < 1M, K 1089KB > 1M
-  expect: MemoryPlanError
-  ut: TestST6_MHAOverflow (3 tests) ✅
-  st: TestST6_MHAOverflowE2E (1 test) ✅ compile → MemoryPlanError
+    - spill 策略：Belady's optimal eviction + 4 个节点需要 M 维 tiling
+    - tiled 节点 local tensor 降级为 hbm，独立 L1 layout
+    - inline tensor descriptor（绕过 struct 指针碰撞）
+    - negative dim 解析：transpose dim0=-1,dim1=-2 → dim0=2,dim1=1
+    - C golden 通过（atol=0.05，FP16 256-dim dot product 量化误差 ~0.03）
+    - cosine > 0.999
+  expect: pass
+  precision: max_abs≈0.034, cosine=1.000（FP16 inherent quantization error for d=256）
+  ut: TestST6_MHATiled (6 tests) ✅
+  st: TestST6_MHATiledE2E (1 test) ✅ compile + C golden (atol=0.05)

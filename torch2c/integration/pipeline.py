@@ -301,7 +301,7 @@ def compile(
     model: nn.Module,
     dummy_input: torch.Tensor,
     config_dir: str,
-    output_dir: str = "output",
+    output_dir: str | None = None,
     mask: torch.Tensor | None = None,
     *,
     target_dtype: str | None = None,
@@ -312,7 +312,13 @@ def compile(
     static_golden: bool = False,
     debug_dump: bool = False,
 ) -> str:
-    """完整编译流水线：9 Pass 从 PyTorch 模型到 C 工程。返回输出目录路径。"""
+    """完整编译流水线：9 Pass 从 PyTorch 模型到 C 工程。返回输出目录路径。
+
+    output_dir 默认为 output/<ModelClassName>。
+    """
+    if output_dir is None:
+        model_name = type(model).__name__
+        output_dir = os.path.join("output", model_name)
     logger.info("=== 编译管线开始 ===")
 
     configs = _resolve_compile_configs(
