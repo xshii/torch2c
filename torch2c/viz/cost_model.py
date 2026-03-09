@@ -184,15 +184,20 @@ def estimate_cost(node: Node, graph: Graph, hw_config: dict | None = None) -> in
 
 
 def estimate_all(graph: Graph, hw_config: dict | None = None) -> dict[str, int]:
-    """估算图中所有节点的执行周期。返回 {node_id: cycles}。"""
+    """估算图中所有节点的执行周期（tiled 算子自动乘 num_tiles）。"""
     hw = HwParams.from_config(hw_config)
     result: dict[str, int] = {}
     for nid, node in graph.nodes.items():
         op = node.npu_op or node.op_type
         if op in COST_FORMULAS:
-            result[nid] = COST_FORMULAS[op](node, graph, hw)
+            cost = COST_FORMULAS[op](node, graph, hw)
         else:
             cu = (node.compute_unit or "vector").lower()
             fallback = _GENERIC_FALLBACK.get(cu, _vector_elementwise_cost)
-            result[nid] = fallback(node, graph, hw)
+            cost = fallback(node, graph, hw)
+        # tiled 算子：单 tile compute cost × num_tiles
+        tile_info = node.params.get("_tile_info") if node.params else None
+        if tile_info:
+            cost = cost * tile_info.get("num_tiles", 1)
+        result[nid] = cost
     return result

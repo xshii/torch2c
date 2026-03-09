@@ -44,6 +44,141 @@ def _estimate_dma_cost(size_bytes: int) -> int:
     return max(1, (size_bytes // 1024) * _DMA_CYCLES_PER_KB)
 
 
+def _schedule_single_op(
+    scheduled: list, lane_end: dict, op_end: dict,
+    node, nid: str, cu: str, dp, costs: dict,
+    bulk_load,
+) -> None:
+    """调度单个非 tiled 算子（load → compute → store）。"""
+    load_nid = None
+    if dp and dp.loads:
+        load_nid = f"__dma_load_{nid}"
+        total_size = sum(inst.size_bytes for inst in dp.loads)
+        dur = _estimate_dma_cost(total_size)
+        dep_ready = max((op_end.get(d, 0) for d in node.dependencies), default=0)
+        start = max(lane_end["dma"], dep_ready)
+        end = start + dur
+        lane_end["dma"] = end
+        op_end[load_nid] = end
+        scheduled.append(ScheduledOp(
+            nid=load_nid, op=f"dma_load ({len(dp.loads)})",
+            lane="dma", lane_idx=_LANE_INDEX["dma"],
+            start=start, end=end, duration=dur, tid=0,
+            deps=list(node.dependencies),
+        ))
+
+    duration = costs.get(nid, 1)
+    dep_ready = max((op_end.get(d, 0) for d in node.dependencies), default=0)
+    if bulk_load and "__bulk_load__" in op_end:
+        dep_ready = max(dep_ready, op_end["__bulk_load__"])
+    if load_nid and load_nid in op_end:
+        dep_ready = max(dep_ready, op_end[load_nid])
+    start = max(lane_end[cu], dep_ready)
+    end = start + duration
+    lane_end[cu] = end
+    op_end[nid] = end
+
+    compute_deps = list(node.dependencies)
+    if load_nid:
+        compute_deps.append(load_nid)
+    elif bulk_load:
+        compute_deps.append("__bulk_load__")
+    scheduled.append(ScheduledOp(
+        nid=nid, op=node.npu_op or node.op_type,
+        lane=cu, lane_idx=_LANE_INDEX[cu],
+        start=start, end=end, duration=duration,
+        tid=node.task_id, deps=compute_deps,
+    ))
+
+    if dp and dp.stores:
+        store_nid = f"__dma_store_{nid}"
+        total_size = sum(inst.size_bytes for inst in dp.stores)
+        dur = _estimate_dma_cost(total_size)
+        start = max(lane_end["dma"], op_end[nid])
+        end = start + dur
+        lane_end["dma"] = end
+        op_end[store_nid] = end
+        scheduled.append(ScheduledOp(
+            nid=store_nid, op=f"dma_store ({len(dp.stores)})",
+            lane="dma", lane_idx=_LANE_INDEX["dma"],
+            start=start, end=end, duration=dur, tid=0,
+            deps=[nid],
+        ))
+
+
+def _schedule_tiled_op(
+    scheduled: list, lane_end: dict, op_end: dict,
+    node, nid: str, cu: str, dp, costs: dict,
+    num_tiles: int, bulk_load,
+) -> None:
+    """调度 tiled 算子：每个 tile 独立 load → compute → store。"""
+    per_tile_cost = max(1, costs.get(nid, 1) // num_tiles)
+    load_size = sum(inst.size_bytes for inst in dp.loads) if dp and dp.loads else 0
+    store_size = sum(inst.size_bytes for inst in dp.stores) if dp and dp.stores else 0
+
+    dep_ready = max((op_end.get(d, 0) for d in node.dependencies), default=0)
+    if bulk_load and "__bulk_load__" in op_end:
+        dep_ready = max(dep_ready, op_end["__bulk_load__"])
+
+    prev_store_nid = None
+    for ti in range(num_tiles):
+        tile_dep = dep_ready if ti == 0 else op_end.get(prev_store_nid, dep_ready)
+
+        # load
+        load_nid = f"__dma_load_{nid}_t{ti}"
+        if load_size > 0:
+            dur = _estimate_dma_cost(load_size)
+            start = max(lane_end["dma"], tile_dep)
+            end = start + dur
+            lane_end["dma"] = end
+            op_end[load_nid] = end
+            ldeps = list(node.dependencies) if ti == 0 else [prev_store_nid]
+            scheduled.append(ScheduledOp(
+                nid=load_nid, op=f"tile{ti}_load",
+                lane="dma", lane_idx=_LANE_INDEX["dma"],
+                start=start, end=end, duration=dur, tid=0, deps=ldeps,
+            ))
+
+        # compute
+        comp_nid = f"{nid}_t{ti}" if num_tiles > 1 else nid
+        comp_dep = op_end.get(load_nid, tile_dep) if load_size > 0 else tile_dep
+        start = max(lane_end[cu], comp_dep)
+        end = start + per_tile_cost
+        lane_end[cu] = end
+        op_end[comp_nid] = end
+        cdeps = [load_nid] if load_size > 0 else []
+        op_label = f"{node.npu_op or node.op_type} [t{ti}/{num_tiles}]"
+        scheduled.append(ScheduledOp(
+            nid=comp_nid, op=op_label,
+            lane=cu, lane_idx=_LANE_INDEX[cu],
+            start=start, end=end, duration=per_tile_cost,
+            tid=node.task_id, deps=cdeps,
+        ))
+
+        # store
+        store_nid = f"__dma_store_{nid}_t{ti}"
+        if store_size > 0:
+            dur = _estimate_dma_cost(store_size)
+            start = max(lane_end["dma"], op_end[comp_nid])
+            end = start + dur
+            lane_end["dma"] = end
+            op_end[store_nid] = end
+            scheduled.append(ScheduledOp(
+                nid=store_nid, op=f"tile{ti}_store",
+                lane="dma", lane_idx=_LANE_INDEX["dma"],
+                start=start, end=end, duration=dur, tid=0, deps=[comp_nid],
+            ))
+            prev_store_nid = store_nid
+        else:
+            prev_store_nid = comp_nid
+
+    # 记录整个 tiled op 的结束时间
+    op_end[nid] = op_end.get(prev_store_nid, 0)
+    # DMA 虚拟节点 ID（供 lifetime_viz 使用）
+    op_end[f"__dma_load_{nid}"] = op_end.get(f"__dma_load_{nid}_t0", 0)
+    op_end[f"__dma_store_{nid}"] = op_end.get(prev_store_nid, 0)
+
+
 def _schedule_ops(
     graph: Graph, costs: dict[str, int], dma_plans: list | None = None,
 ) -> list[ScheduledOp]:
@@ -84,70 +219,21 @@ def _schedule_ops(
             cu = "vector"
 
         dp = dma_map.get(nid)
+        tile_info = dp.tile_info if dp else None
+        num_tiles = tile_info.get("num_tiles", 1) if tile_info else 1
 
-        # ── per-op DMA loads ──
-        load_nid = None
-        if dp and dp.loads:
-            load_nid = f"__dma_load_{nid}"
-            total_size = sum(inst.size_bytes for inst in dp.loads)
-            dur = _estimate_dma_cost(total_size)
-            dep_ready = max((op_end.get(d, 0) for d in node.dependencies), default=0)
-            start = max(lane_end["dma"], dep_ready)
-            end = start + dur
-            lane_end["dma"] = end
-            op_end[load_nid] = end
-            scheduled.append(ScheduledOp(
-                nid=load_nid,
-                op=f"dma_load ({len(dp.loads)})",
-                lane="dma", lane_idx=_LANE_INDEX["dma"],
-                start=start, end=end, duration=dur, tid=0,
-                deps=list(node.dependencies),
-            ))
-
-        # ── compute op ──
-        duration = costs.get(nid, 1)
-        dep_ready = max((op_end.get(d, 0) for d in node.dependencies), default=0)
-        # bulk load 完成后才能开始计算
-        if bulk_load and "__bulk_load__" in op_end:
-            dep_ready = max(dep_ready, op_end["__bulk_load__"])
-        # per-op load 完成后才能计算
-        if load_nid and load_nid in op_end:
-            dep_ready = max(dep_ready, op_end[load_nid])
-        start = max(lane_end[cu], dep_ready)
-        end = start + duration
-
-        lane_end[cu] = end
-        op_end[nid] = end
-
-        compute_deps = list(node.dependencies)
-        if load_nid:
-            compute_deps.append(load_nid)
-        elif bulk_load:
-            compute_deps.append("__bulk_load__")
-
-        scheduled.append(ScheduledOp(
-            nid=nid, op=node.npu_op or node.op_type,
-            lane=cu, lane_idx=_LANE_INDEX[cu],
-            start=start, end=end, duration=duration,
-            tid=node.task_id, deps=compute_deps,
-        ))
-
-        # ── per-op DMA stores ──
-        if dp and dp.stores:
-            store_nid = f"__dma_store_{nid}"
-            total_size = sum(inst.size_bytes for inst in dp.stores)
-            dur = _estimate_dma_cost(total_size)
-            start = max(lane_end["dma"], op_end[nid])
-            end = start + dur
-            lane_end["dma"] = end
-            op_end[store_nid] = end
-            scheduled.append(ScheduledOp(
-                nid=store_nid,
-                op=f"dma_store ({len(dp.stores)})",
-                lane="dma", lane_idx=_LANE_INDEX["dma"],
-                start=start, end=end, duration=dur, tid=0,
-                deps=[nid],
-            ))
+        if num_tiles > 1:
+            # ── tiled op: 重复 load → compute → store × num_tiles ──
+            _schedule_tiled_op(
+                scheduled, lane_end, op_end, node, nid, cu, dp, costs,
+                num_tiles, bulk_load,
+            )
+        else:
+            # ── 非 tiled: 单次 load → compute → store ──
+            _schedule_single_op(
+                scheduled, lane_end, op_end, node, nid, cu, dp, costs,
+                bulk_load,
+            )
 
     # ── bulk store ──
     if bulk_store and bulk_store.stores:

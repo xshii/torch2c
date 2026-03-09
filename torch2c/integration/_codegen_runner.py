@@ -162,6 +162,26 @@ def _export_weights_and_golden(
         )
 
 
+def _copy_npu_mock(output_dir: str) -> None:
+    """将 npu_cpu_mock 源码复制到 output_dir/npu_cpu_mock/，使交付件自包含。"""
+    import shutil
+    from torch2c.common import NPU_CPU_MOCK_DIR
+
+    src = str(NPU_CPU_MOCK_DIR)
+    dst = os.path.join(output_dir, "npu_cpu_mock")
+    if os.path.exists(dst):
+        shutil.rmtree(dst)
+    # 只复制 include/ 和 src/（不含 build/tests 等）
+    os.makedirs(os.path.join(dst, "include"), exist_ok=True)
+    os.makedirs(os.path.join(dst, "src"), exist_ok=True)
+    for f in os.listdir(os.path.join(src, "include")):
+        shutil.copy2(os.path.join(src, "include", f), os.path.join(dst, "include", f))
+    for f in os.listdir(os.path.join(src, "src")):
+        if f.endswith(".c"):
+            shutil.copy2(os.path.join(src, "src", f), os.path.join(dst, "src", f))
+    logger.info("npu_cpu_mock 已复制到 %s", dst)
+
+
 def _run_codegen(
     model: nn.Module,
     dummy_input: torch.Tensor,
@@ -176,7 +196,7 @@ def _run_codegen(
     *,
     static_golden: bool = False,
 ) -> None:
-    """Pass ⑨：C 代码生成 + 权重导出 + golden 数据。"""
+    """Pass ⑨：C 代码生成 + 权重导出 + golden 数据 + mock 源码。"""
     logger.info("Pass ⑨ codegen 开始")
     plan = _build_codegen_plan(graph, dma_plans)
     # static 模式用首个输出 dtype 来决定 elem_size
@@ -190,4 +210,5 @@ def _run_codegen(
     _export_weights_and_golden(
         model, dummy_input, mask, graph, output_dir, static_golden,
     )
+    _copy_npu_mock(output_dir)
     logger.info("Pass ⑨ 完成")

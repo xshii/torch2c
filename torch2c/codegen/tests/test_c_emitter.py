@@ -280,10 +280,13 @@ class TestSyntaxCheck:
     """生成的 C 代码通过 gcc 语法检查。"""
 
     def test_syntax_check(self):
+        from torch2c.integration._codegen_runner import _copy_npu_mock
+
         plan = _load_plan()
         with tempfile.TemporaryDirectory() as tmpdir:
             c_emitter.run(plan, tmpdir, _CONFIG_DIR)
             mock_emitter.run(tmpdir, _CONFIG_DIR)
+            _copy_npu_mock(tmpdir)
 
             weights_h = os.path.join(tmpdir, "src", "model_weights.h")
             with open(weights_h, "w") as f:
@@ -295,6 +298,7 @@ class TestSyntaxCheck:
 
             model_c = os.path.join(tmpdir, "src", "model_graph.c")
             mock_h = os.path.join(tmpdir, "npu_mock.h")
+            mock_inc = os.path.join(tmpdir, "npu_cpu_mock", "include")
             cmd = [
                 "gcc",
                 "-fsyntax-only",
@@ -302,6 +306,7 @@ class TestSyntaxCheck:
                 f"-include{mock_h}",
                 f"-I{os.path.join(tmpdir, 'src')}",
                 f"-I{tmpdir}",
+                f"-I{mock_inc}",
                 model_c,
             ]
             result = subprocess.run(cmd, capture_output=True, text=True)

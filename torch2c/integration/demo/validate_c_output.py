@@ -2,36 +2,14 @@
 
 from __future__ import annotations
 
+import glob
 import os
 import shutil
 import subprocess
 
-from torch2c.common import NPU_CPU_MOCK_DIR, c_mock_compile_level, get_logger
+from torch2c.common import c_mock_compile_level, get_logger
 
 logger = get_logger(__name__)
-
-_NPU_MOCK_DIR = NPU_CPU_MOCK_DIR
-
-# npu_cpu_mock 的所有源文件
-_MOCK_SOURCES = [
-    "src/npu_dtype_utils.c",
-    "src/npu_debug.c",
-    "src/npu_compute_elementwise.c",
-    "src/npu_compute_matmul.c",
-    "src/npu_compute_norm.c",
-    "src/npu_compute_rmsnorm.c",
-    "src/npu_compute_softmax.c",
-    "src/npu_compute_transpose.c",
-    "src/npu_dma.c",
-]
-
-_NPU_MOCK_SHIM = """\
-/* npu_mock.h — redirect to npu_api.h for CPU mock validation */
-#ifndef NPU_MOCK_H
-#define NPU_MOCK_H
-#include "npu_api.h"
-#endif
-"""
 
 
 def _find_cc() -> str | None:
@@ -45,14 +23,10 @@ def _find_cc() -> str | None:
 def validate_c(output_dir: str, *, c_debug_level: int | None = None) -> dict:
     """编译并运行生成的 C 工程，比对 golden 数据。
 
-    Args:
-        output_dir: compile() 的输出目录。
+    使用 output_dir/npu_cpu_mock/ 中的本地 mock 源码（自包含交付件）。
 
     Returns:
         包含 passed, stdout, stderr 的结果 dict。
-
-    Raises:
-        RuntimeError: 编译或运行失败。
     """
     cc = _find_cc()
     if cc is None:
@@ -61,18 +35,12 @@ def validate_c(output_dir: str, *, c_debug_level: int | None = None) -> dict:
     if c_debug_level is None:
         c_debug_level = c_mock_compile_level()
 
-    mock_dir = str(_NPU_MOCK_DIR)
+    mock_dir = os.path.join(output_dir, "npu_cpu_mock")
     if not os.path.isdir(mock_dir):
         raise RuntimeError(f"npu_cpu_mock 目录不存在: {mock_dir}")
 
-    # 用 npu_api.h 包装替换 npu_mock.h（仅覆盖 stub 声明头文件）
-    mock_h_path = os.path.join(output_dir, "npu_mock.h")
-    logger.info("替换 npu_mock.h 为 npu_api.h 包装")
-    with open(mock_h_path, "w") as f:
-        f.write(_NPU_MOCK_SHIM)
-
     # 构建编译命令
-    mock_sources = [os.path.join(mock_dir, src) for src in _MOCK_SOURCES]
+    mock_sources = glob.glob(os.path.join(mock_dir, "src", "*.c"))
     project_sources = [
         "main.c",
         "src/model_graph.c",
@@ -114,8 +82,7 @@ def validate_c(output_dir: str, *, c_debug_level: int | None = None) -> dict:
     logger.info("编译成功")
 
     # 运行
-    exe_path = os.path.join(output_dir, exe_name)
-    logger.info("运行 C 工程: %s", exe_path)
+    logger.info("运行 C 工程: %s/%s", output_dir, exe_name)
     run = subprocess.run(
         [f"./{exe_name}"],
         cwd=output_dir,
@@ -135,6 +102,7 @@ def validate_c(output_dir: str, *, c_debug_level: int | None = None) -> dict:
     if passed:
         logger.info("C golden 比对通过!\n%s", run.stdout)
     else:
-        logger.error("C golden 比对失败 (exit %d):\n%s\n%s", run.returncode, run.stdout, run.stderr)
+        logger.error("C golden 比对失败 (exit %d):\n%s\n%s",
+                     run.returncode, run.stdout, run.stderr)
 
     return result
