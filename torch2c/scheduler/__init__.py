@@ -1,4 +1,4 @@
-"""scheduler — Pass⑧：计算单元调度与依赖生成。"""
+"""scheduler — Pass⑦：计算单元调度与依赖生成。"""
 
 from .scheduler import post_validate, run
 

@@ -25,14 +25,6 @@ def _build_codegen_plan(graph: Graph, dma_plans: list) -> CodegenPlan:
     return CodegenPlan(graph, dma_plans)
 
 
-def _infer_golden_dtype(graph: Graph) -> type:
-    """从 graph 的 model_input tensor 推断 golden 数据精度（向后兼容）。"""
-    for t in graph.tensors.values():
-        if t.is_model_input and t.dtype:
-            return dtype_numpy(t.dtype)
-    return np.float16
-
-
 def _infer_io_dtypes(
     graph: Graph,
 ) -> tuple[list[type], list[type]]:

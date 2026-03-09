@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -9,9 +10,9 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
-from torch2c.viz import emit_graph_ascii, emit_graph_dot, emit_lifetime_ascii
+from torch2c.viz import emit_graph_html, emit_lifetime_html
 from torch2c.common import (
-    CompilerError, DiagnosticCollector, Graph,
+    CompilerError, DiagnosticCollector, Graph, graph_diff,
     get_logger, get_model_config, load_config, load_debug_config,
 )
 from torch2c.integration._codegen_runner import _run_codegen
@@ -45,13 +46,16 @@ class _PassDesc:
     viz_hook: Callable | None = None
 
 
-def _emit_graph_viz(graph: Graph, output_dir: str, cube_size: int) -> None:
-    """storage_assigner 后生成算子依赖图（DOT + ASCII）。"""
-    emit_graph_dot(graph, output_dir, cube_size)
-    emit_graph_ascii(graph, output_dir, cube_size)
+def _emit_schedule_viz(
+    graph: Graph, output_dir: str, cube_size: int,
+    hw_config: dict | None = None, dma_plans: list | None = None,
+) -> None:
+    """memory_planner 后生成 Pipeline Schedule 甘特图（HTML），含 DMA 搬运。"""
+    emit_graph_html(graph, output_dir, cube_size, hw_config, dma_plans)
 
 
-_MIDDLE_PASSES: list[_PassDesc] = [
+# Phase 2: Graph Optimization (②-④)
+_OPTIMIZATION_PASSES: list[_PassDesc] = [
     _PassDesc("op_mapping", "②", op_mapping.run, "mapping", op_mapping.post_validate),
     _PassDesc(
         "op_decomposition",
@@ -61,6 +65,10 @@ _MIDDLE_PASSES: list[_PassDesc] = [
         op_decomposition.post_validate,
     ),
     _PassDesc("op_absorption", "④", op_absorption.run, "absorption", op_absorption.post_validate),
+]
+
+# Phase 3: Backend Annotation (⑤-⑤b)
+_ANNOTATION_PASSES: list[_PassDesc] = [
     _PassDesc(
         "format_annotator",
         "⑤",
@@ -81,7 +89,6 @@ _MIDDLE_PASSES: list[_PassDesc] = [
         storage_assigner.run,
         "storage",
         storage_assigner.post_validate,
-        _emit_graph_viz,
     ),
 ]
 
@@ -147,19 +154,44 @@ def _run_post_validation(
         logger.warning("Pass %s 校验: %s", phase, msg)
 
 
-def _run_middle_passes(
+def _dump_pass_snapshot(
     graph: Graph,
+    before: dict,
+    output_dir: str,
+    number: str,
+    name: str,
+) -> None:
+    """保存 Pass 快照和 diff 到 debug 目录。"""
+    debug_dir = os.path.join(output_dir, "debug")
+    os.makedirs(debug_dir, exist_ok=True)
+    after = graph.to_dict()
+    prefix = f"pass_{number}_{name}"
+    with open(os.path.join(debug_dir, f"{prefix}.json"), "w") as f:
+        json.dump(after, f, indent=2, ensure_ascii=False)
+    diff = graph_diff(before, after)
+    with open(os.path.join(debug_dir, f"{prefix}_diff.json"), "w") as f:
+        json.dump(diff, f, indent=2, ensure_ascii=False, default=str)
+    logger.debug("debug_dump: %s written", prefix)
+
+
+def _run_pass_list(
+    graph: Graph,
+    passes: list[_PassDesc],
     configs: dict,
     collector: DiagnosticCollector,
     output_dir: str,
     cube_size: int,
+    debug_dump: bool = False,
 ) -> Graph:
-    """Pass ②-⑤：声明式中间 Pass 循环。"""
-    for p in _MIDDLE_PASSES:
+    """声明式 Pass 循环。"""
+    for p in passes:
         logger.info("Pass %s %s 开始", p.number, p.name)
         if p.config_key is None:
             raise CompilerError(f"Pass {p.name} 缺少 config_key")
+        before = graph.to_dict() if debug_dump else None
         graph = p.run_fn(graph, configs[p.config_key])
+        if debug_dump:
+            _dump_pass_snapshot(graph, before, output_dir, p.number, p.name)
         if p.validate_fn:
             _run_post_validation(collector, p.name, graph, p.validate_fn)
         if p.viz_hook:
@@ -168,35 +200,66 @@ def _run_middle_passes(
     return graph
 
 
+def _run_phase_checkpoint(
+    collector: DiagnosticCollector,
+    phase_name: str,
+    graph: Graph,
+    debug_dump: bool,
+) -> None:
+    """Phase 边界校验检查点（仅 debug_dump 模式下执行）。"""
+    if not debug_dump:
+        return
+    errors = graph.validate()
+    if errors:
+        for msg in errors:
+            collector.warn(phase_name, msg)
+            logger.warning("Phase %s 边界校验: %s", phase_name, msg)
+    else:
+        logger.debug("Phase %s 边界校验通过", phase_name)
+
+
 def _run_late_passes(
     graph: Graph,
     configs: dict,
     collector: DiagnosticCollector,
     output_dir: str,
     cube_size: int,
+    debug_dump: bool = False,
+    model_name: str | None = None,
 ) -> tuple[Graph, list]:
-    """Pass ⑥ validator → ⑦ memory_planner → ⑧ scheduler。"""
+    """Pass ⑥ validator → ⑦ scheduler → ⑧ memory_planner。"""
     # Pass ⑥ validator
     logger.info("Pass ⑥ validator 开始")
     validator_cfg = _build_validator_config(configs["signatures"])
+    before = graph.to_dict() if debug_dump else None
     try:
         graph = validator.run(graph, validator_cfg)
     except CompilerError as exc:
         collector.error("validator", str(exc))
         raise
+    if debug_dump:
+        _dump_pass_snapshot(graph, before, output_dir, "⑥", "validator")
     logger.info("Pass ⑥ 完成")
 
-    # Pass ⑦ memory_planner
-    logger.info("Pass ⑦ memory_planner 开始")
-    graph, dma_plans = memory_planner.run(graph, configs["hardware"])
-    _run_post_validation(collector, "memory_planner", graph, memory_planner.post_validate)
-    emit_lifetime_ascii(graph, output_dir, cube_size)
+    # Pass ⑦ scheduler（先确定执行顺序，再分配内存）
+    logger.info("Pass ⑦ scheduler 开始")
+    before = graph.to_dict() if debug_dump else None
+    graph = scheduler.run(graph)
+    if debug_dump:
+        _dump_pass_snapshot(graph, before, output_dir, "⑦", "scheduler")
+    _run_post_validation(collector, "scheduler", graph, scheduler.post_validate)
     logger.info("Pass ⑦ 完成")
 
-    # Pass ⑧ scheduler
-    logger.info("Pass ⑧ scheduler 开始")
-    graph = scheduler.run(graph)
-    _run_post_validation(collector, "scheduler", graph, scheduler.post_validate)
+    # Pass ⑧ memory_planner（基于 scheduler 确定的执行顺序分配内存）
+    logger.info("Pass ⑧ memory_planner 开始")
+    before = graph.to_dict() if debug_dump else None
+    graph, dma_plans = memory_planner.run(graph, configs["hardware"])
+    if debug_dump:
+        _dump_pass_snapshot(graph, before, output_dir, "⑧", "memory_planner")
+    _run_post_validation(collector, "memory_planner", graph, memory_planner.post_validate)
+    _emit_schedule_viz(graph, output_dir, cube_size, configs.get("hardware"), dma_plans)
+    emit_lifetime_html(graph, output_dir, cube_size, configs.get("hardware"),
+                       dma_plans=dma_plans, title=model_name)
     logger.info("Pass ⑧ 完成")
 
     return graph, dma_plans
@@ -247,6 +310,7 @@ def compile(
     atol: float = 1e-2,
     cosine_tol: float = 0.999,
     static_golden: bool = False,
+    debug_dump: bool = False,
 ) -> str:
     """完整编译流水线：9 Pass 从 PyTorch 模型到 C 工程。返回输出目录路径。"""
     logger.info("=== 编译管线开始 ===")
@@ -262,12 +326,22 @@ def compile(
     _run_post_validation(collector, "graph_capture", graph, graph_capture.post_validate)
     logger.info("Pass ① 完成: %s", graph.summary())
 
-    # Pass ②-⑤ 声明式循环
     cube_size = configs["hardware"]["fractal"]["cube_size"]
-    graph = _run_middle_passes(graph, configs, collector, output_dir, cube_size)
+    model_name = type(model).__name__
 
-    # Pass ⑥-⑧
-    graph, dma_plans = _run_late_passes(graph, configs, collector, output_dir, cube_size)
+    # Phase 2: Graph Optimization (②-④)
+    graph = _run_pass_list(graph, _OPTIMIZATION_PASSES, configs, collector,
+                           output_dir, cube_size, debug_dump)
+    _run_phase_checkpoint(collector, "optimization", graph, debug_dump)
+
+    # Phase 3: Backend Annotation (⑤-⑤b)
+    graph = _run_pass_list(graph, _ANNOTATION_PASSES, configs, collector,
+                           output_dir, cube_size, debug_dump)
+    _run_phase_checkpoint(collector, "annotation", graph, debug_dump)
+
+    # Phase 4-5: Validation + Backend (⑥-⑧)
+    graph, dma_plans = _run_late_passes(graph, configs, collector, output_dir, cube_size,
+                                        debug_dump, model_name=model_name)
 
     logger.info(collector.summary())
     if collector.has_errors():

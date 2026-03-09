@@ -1,4 +1,4 @@
-"""memory_planner — Pass⑦：内存编排。"""
+"""memory_planner — Pass⑧：内存编排。"""
 
 from ._dma import DmaInstruction, DmaPlan
 from ._utils import align_up, calc_padded_size

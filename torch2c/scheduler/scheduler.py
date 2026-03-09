@@ -1,4 +1,4 @@
-"""scheduler — Pass⑧：计算单元调度与依赖生成。"""
+"""scheduler — Pass⑦：计算单元调度与依赖生成。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def run(graph: Graph, config: dict | None = None) -> Graph:
     """调度主函数：确定执行顺序，生成依赖关系。
 
     Args:
-        graph: 已完成内存编排的 Graph IR。
+        graph: 已完成校验的 Graph IR（内存尚未分配）。
         config: 可选配置（当前未使用）。
 
     Returns:
@@ -27,10 +27,8 @@ def run(graph: Graph, config: dict | None = None) -> Graph:
     """
     logger.info("Pass 开始，输入图: %d 个节点", len(graph.nodes))
 
-    # 1. 拓扑排序确定基本执行顺序
+    # 1. 拓扑排序确定执行顺序（后续 memory_planner 将基于此顺序分配内存）
     topo_order = graph.topo_sort()
-
-    # 更新 execution_order、schedule_order 和 task_id
     graph.execution_order = topo_order
     for idx, nid in enumerate(topo_order):
         graph.nodes[nid].schedule_order = idx

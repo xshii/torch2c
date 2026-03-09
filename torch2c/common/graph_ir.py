@@ -63,7 +63,7 @@ class Tensor:
     is_model_input: bool = False
     is_model_output: bool = False
     name: str | None = None
-    storage: str = "hbm"  # "hbm" | "l2" | "local" | "pipe"
+    storage: str = "hbm"  # "hbm" | "local" | "pipe"
     producer_node_id: str | None = None
     consumer_node_ids: list[str] = field(default_factory=list)
 
@@ -150,12 +150,12 @@ class Graph:
                     adj[pred].append(nid)
                     in_degree[nid] += 1
 
-        queue = deque(nid for nid, d in in_degree.items() if d == 0)
+        queue = deque(sorted(nid for nid, d in in_degree.items() if d == 0))
         result: list[str] = []
         while queue:
             nid = queue.popleft()
             result.append(nid)
-            for succ in adj[nid]:
+            for succ in sorted(adj[nid]):
                 in_degree[succ] -= 1
                 if in_degree[succ] == 0:
                     queue.append(succ)
@@ -270,3 +270,50 @@ class Graph:
             sections.append("\n".join(input_lines))
 
         return "\n\n".join(sections)
+
+
+# ---- Graph diff ----
+
+
+def graph_diff(before: dict, after: dict) -> dict:
+    """比较两个 graph.to_dict() 快照，返回差异。
+
+    Returns:
+        {"nodes_added": [...], "nodes_removed": [...],
+         "nodes_changed": {nid: {field: (old, new)}},
+         "tensors_added": [...], "tensors_removed": [...],
+         "tensors_changed": {tid: {field: (old, new)}}}
+    """
+
+    def _diff_section(before_items: dict, after_items: dict) -> tuple[list, list, dict]:
+        before_keys = set(before_items)
+        after_keys = set(after_items)
+        added = sorted(after_keys - before_keys)
+        removed = sorted(before_keys - after_keys)
+        changed: dict[str, dict] = {}
+        for key in before_keys & after_keys:
+            old, new = before_items[key], after_items[key]
+            field_diffs = {}
+            all_fields = set(old) | set(new)
+            for f in all_fields:
+                oval, nval = old.get(f), new.get(f)
+                if oval != nval:
+                    field_diffs[f] = (oval, nval)
+            if field_diffs:
+                changed[key] = field_diffs
+        return added, removed, changed
+
+    n_added, n_removed, n_changed = _diff_section(
+        before.get("nodes", {}), after.get("nodes", {}),
+    )
+    t_added, t_removed, t_changed = _diff_section(
+        before.get("tensors", {}), after.get("tensors", {}),
+    )
+    return {
+        "nodes_added": n_added,
+        "nodes_removed": n_removed,
+        "nodes_changed": n_changed,
+        "tensors_added": t_added,
+        "tensors_removed": t_removed,
+        "tensors_changed": t_changed,
+    }

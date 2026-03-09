@@ -1,307 +1,453 @@
-"""graph_viz — 算子依赖关系图（DOT + ASCII）。
+"""graph_viz — Pipeline Schedule 甘特图（MindSpore 风格，ECharts 交互式 HTML）。
 
-节点使用 C API 算子名（npu_op），pipe 边绿色高亮。
-绑定到 idma（⑤b）之后自动生成。
+横轴时间（cycles），纵轴 4 条泳道（cube / vector / dma / idma）。
+每个算子是一个水平色块，DMA 搬运显示在 DMA 泳道，依赖用箭头连线。
+绑定到 memory_planner（⑧）之后自动生成。
 """
 
 from __future__ import annotations
 
+import json
 import os
+from dataclasses import dataclass, field
 
 from torch2c.common import Graph, get_logger
-from torch2c.memory_planner._utils import calc_padded_size
-from torch2c.viz._utils import (
-    BOLD, BLUE, CU_COLOR, CU_DOT_COLOR, DIM, GRAY, GREEN, GREEN_BG,
-    RESET, STORAGE_EDGE, WHITE,
-    ensure_viz_dir, human_size, shape_str, strip_ansi,
-)
+from torch2c.viz._utils import CU_COLOR, ensure_viz_dir, shape_str
+from torch2c.viz.cost_model import estimate_all
 
 logger = get_logger(__name__)
 
+_LANES = ["cube", "vector", "dma", "idma"]
+_LANE_INDEX = {name: i for i, name in enumerate(_LANES)}
 
-_DEP_KEYS = {
-    "_tid_dep_cube": "dep:cube",
-    "_tid_dep_vector": "dep:vector",
-    "_tid_dep_dma": "dep:dma",
-    "_tid_dep_idma": "dep:idma",
-}
+# DMA 搬运的估算代价（cycles per KB）
+_DMA_CYCLES_PER_KB = 2
 
 
-def _build_tid_to_nid(graph: Graph) -> dict[int, str]:
-    """task_id → node_id 的映射表。"""
-    return {n.task_id: nid for nid, n in graph.nodes.items() if n.task_id}
+@dataclass
+class ScheduledOp:
+    """调度后的算子。"""
+
+    nid: str
+    op: str
+    lane: str
+    lane_idx: int
+    start: int
+    end: int
+    duration: int
+    tid: int
+    deps: list[str] = field(default_factory=list)
 
 
-def _emit_dep_edges(graph: Graph, lines: list[str]) -> None:
-    """向 DOT lines 追加 task-dependency 虚线红边。"""
-    tid_map = _build_tid_to_nid(graph)
-    for nid, node in graph.nodes.items():
-        for key, label in _DEP_KEYS.items():
-            dep_tid = node.params.get(key, 0)
-            if dep_tid and dep_tid in tid_map:
-                src_nid = tid_map[dep_tid]
-                lines.append(
-                    f'  "{src_nid}" -> "{nid}" '
-                    f'[label="{label}", style=dashed, color="#CC0000", '
-                    f'fontcolor="#CC0000", penwidth=1.0, constraint=false];'
-                )
+def _estimate_dma_cost(size_bytes: int) -> int:
+    """估算 DMA 搬运代价。"""
+    return max(1, (size_bytes // 1024) * _DMA_CYCLES_PER_KB)
 
 
-# ── DOT ───────────────────────────────────────────────────
+def _schedule_ops(
+    graph: Graph, costs: dict[str, int], dma_plans: list | None = None,
+) -> list[ScheduledOp]:
+    """贪心流水线调度，含 DMA 搬运。"""
+    lane_end = {lane: 0 for lane in _LANES}
+    op_end: dict[str, int] = {}
+    scheduled: list[ScheduledOp] = []
 
+    # 构建 node_id → DmaPlan 索引
+    dma_map: dict[str, object] = {}
+    if dma_plans:
+        for dp in dma_plans:
+            dma_map[dp.node_id] = dp
 
-def render_dot(graph: Graph, cube_size: int) -> str:
-    """生成 DOT 格式的算子依赖图。"""
-    lines = [
-        'digraph NPUGraph {',
-        '  rankdir=TB;',
-        '  fontname="Helvetica";',
-        '  node [fontname="Helvetica", fontsize=11];',
-        '  edge [fontname="Helvetica", fontsize=9];',
-        '  bgcolor="#FAFAFA";',
-        '',
-    ]
+    # bulk DMA 在最前面
+    bulk_load = dma_map.pop("__bulk_load__", None)
+    bulk_store = dma_map.pop("__bulk_store__", None)
 
-    input_tids = [tid for tid, t in graph.tensors.items() if t.is_model_input]
-    absorbed_set = {v for n in graph.nodes.values() for v in n.absorbed_inputs.values()}
-    weight_tids = [tid for tid, t in graph.tensors.items()
-                   if t.is_weight and tid not in absorbed_set]
-    output_tids = [tid for tid, t in graph.tensors.items() if t.is_model_output]
-
-    for tid in input_tids:
-        t = graph.tensors[tid]
-        label = f"{tid}\\n{shape_str(t.shape)} {t.dtype}"
-        lines.append(f'  "{tid}" [label="{label}", shape=ellipse, '
-                     f'style=filled, fillcolor="#C8E6C9"];')
-
-    for tid in weight_tids:
-        t = graph.tensors[tid]
-        label = f"{tid}\\n{shape_str(t.shape)} {t.dtype} {t.format}"
-        lines.append(f'  "{tid}" [label="{label}", shape=ellipse, '
-                     f'style=filled, fillcolor="#FFF9C4"];')
-
-    lines.append('')
+    # ── bulk load ──
+    if bulk_load and bulk_load.loads:
+        total_size = sum(inst.size_bytes for inst in bulk_load.loads)
+        dur = _estimate_dma_cost(total_size)
+        start = lane_end["dma"]
+        end = start + dur
+        lane_end["dma"] = end
+        op_end["__bulk_load__"] = end
+        tids = [inst.tensor_id for inst in bulk_load.loads]
+        scheduled.append(ScheduledOp(
+            nid="__bulk_load__", op=f"bulk_load ({len(bulk_load.loads)} tensors)",
+            lane="dma", lane_idx=_LANE_INDEX["dma"],
+            start=start, end=end, duration=dur, tid=0,
+        ))
 
     for nid in graph.execution_order:
         node = graph.nodes[nid]
-        cu = node.compute_unit or "?"
-        op_name = node.npu_op or node.op_type
-        fill = CU_DOT_COLOR.get(cu, "#EEEEEE")
+        cu = (node.compute_unit or "vector").lower()
+        if cu not in _LANE_INDEX:
+            cu = "vector"
 
-        absorbed_labels = []
-        for param, atid in sorted(node.absorbed_inputs.items()):
-            at = graph.tensors.get(atid)
-            if at:
-                absorbed_labels.append(f"+{param}: {shape_str(at.shape)}")
+        dp = dma_map.get(nid)
 
-        label = f"{op_name}\\n[{cu} tid={node.task_id}]"
-        if absorbed_labels:
-            label += "\\n" + "\\n".join(absorbed_labels)
+        # ── per-op DMA loads ──
+        load_nid = None
+        if dp and dp.loads:
+            load_nid = f"__dma_load_{nid}"
+            total_size = sum(inst.size_bytes for inst in dp.loads)
+            dur = _estimate_dma_cost(total_size)
+            dep_ready = max((op_end.get(d, 0) for d in node.dependencies), default=0)
+            start = max(lane_end["dma"], dep_ready)
+            end = start + dur
+            lane_end["dma"] = end
+            op_end[load_nid] = end
+            scheduled.append(ScheduledOp(
+                nid=load_nid,
+                op=f"dma_load ({len(dp.loads)})",
+                lane="dma", lane_idx=_LANE_INDEX["dma"],
+                start=start, end=end, duration=dur, tid=0,
+                deps=list(node.dependencies),
+            ))
 
-        border_color = "#2E8B57" if any(
-            graph.tensors.get(tid) and graph.tensors[tid].storage == "pipe"
-            for tid in node.outputs
-        ) else "#333333"
+        # ── compute op ──
+        duration = costs.get(nid, 1)
+        dep_ready = max((op_end.get(d, 0) for d in node.dependencies), default=0)
+        # bulk load 完成后才能开始计算
+        if bulk_load and "__bulk_load__" in op_end:
+            dep_ready = max(dep_ready, op_end["__bulk_load__"])
+        # per-op load 完成后才能计算
+        if load_nid and load_nid in op_end:
+            dep_ready = max(dep_ready, op_end[load_nid])
+        start = max(lane_end[cu], dep_ready)
+        end = start + duration
 
-        lines.append(
-            f'  "{nid}" [label="{label}", shape=box, style="filled,rounded", '
-            f'fillcolor="{fill}", color="{border_color}", penwidth=2];'
-        )
+        lane_end[cu] = end
+        op_end[nid] = end
 
-    lines.append('')
+        compute_deps = list(node.dependencies)
+        if load_nid:
+            compute_deps.append(load_nid)
+        elif bulk_load:
+            compute_deps.append("__bulk_load__")
 
-    for tid in output_tids:
-        t = graph.tensors[tid]
-        label = f"{tid}\\n{shape_str(t.shape)} {t.dtype}"
-        lines.append(f'  "{tid}" [label="{label}", shape=ellipse, '
-                     f'style=filled, fillcolor="#FFCDD2"];')
+        scheduled.append(ScheduledOp(
+            nid=nid, op=node.npu_op or node.op_type,
+            lane=cu, lane_idx=_LANE_INDEX[cu],
+            start=start, end=end, duration=duration,
+            tid=node.task_id, deps=compute_deps,
+        ))
 
-    lines.append('')
+        # ── per-op DMA stores ──
+        if dp and dp.stores:
+            store_nid = f"__dma_store_{nid}"
+            total_size = sum(inst.size_bytes for inst in dp.stores)
+            dur = _estimate_dma_cost(total_size)
+            start = max(lane_end["dma"], op_end[nid])
+            end = start + dur
+            lane_end["dma"] = end
+            op_end[store_nid] = end
+            scheduled.append(ScheduledOp(
+                nid=store_nid,
+                op=f"dma_store ({len(dp.stores)})",
+                lane="dma", lane_idx=_LANE_INDEX["dma"],
+                start=start, end=end, duration=dur, tid=0,
+                deps=[nid],
+            ))
 
-    for tid, t in graph.tensors.items():
-        storage = t.storage or "hbm"
-        edge_attrs = STORAGE_EDGE.get(storage, STORAGE_EDGE["hbm"])
-        size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+    # ── bulk store ──
+    if bulk_store and bulk_store.stores:
+        total_size = sum(inst.size_bytes for inst in bulk_store.stores)
+        dur = _estimate_dma_cost(total_size)
+        # bulk store 需要等所有计算完成
+        all_done = max(op_end.values()) if op_end else 0
+        start = max(lane_end["dma"], all_done)
+        end = start + dur
+        lane_end["dma"] = end
+        op_end["__bulk_store__"] = end
+        # 依赖最后一个计算节点
+        last_compute = graph.execution_order[-1] if graph.execution_order else None
+        scheduled.append(ScheduledOp(
+            nid="__bulk_store__", op=f"bulk_store ({len(bulk_store.stores)} tensors)",
+            lane="dma", lane_idx=_LANE_INDEX["dma"],
+            start=start, end=end, duration=dur, tid=0,
+            deps=[last_compute] if last_compute else [],
+        ))
 
-        label_parts = [f"{shape_str(t.shape)}"]
-        if storage != "hbm":
-            label_parts.append(storage.upper())
-        label_parts.append(human_size(size))
-        edge_label = " ".join(label_parts)
-
-        attr_str = ", ".join(f'{k}="{v}"' for k, v in edge_attrs.items())
-        attr_str += f', label="{edge_label}"'
-        if storage == "pipe":
-            attr_str += ', fontcolor="#2E8B57", fontsize=10'
-
-        src = t.producer_node_id if t.producer_node_id else tid
-        for cid in t.consumer_node_ids:
-            if t.is_model_input or t.is_weight:
-                lines.append(f'  "{tid}" -> "{cid}" [{attr_str}];')
-            else:
-                lines.append(f'  "{src}" -> "{cid}" [{attr_str}];')
-
-        if t.is_model_output and t.producer_node_id:
-            lines.append(f'  "{t.producer_node_id}" -> "{tid}" [{attr_str}];')
-
-    lines.append('')
-
-    # dependency edges (dashed red)
-    _emit_dep_edges(graph, lines)
-
-    lines.append('')
-
-    lines.append('  subgraph cluster_legend {')
-    lines.append('    label="Legend"; fontsize=12; style=rounded; color="#999999";')
-    lines.append('    bgcolor="#F5F5F5";')
-    lines.append('    node [shape=plaintext, fontsize=10];')
-    lines.append('    legend [label=<')
-    lines.append('      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">')
-    lines.append('        <TR><TD BGCOLOR="#E8D0A9">Cube</TD>'
-                 '<TD BGCOLOR="#B8D4E3">Vector</TD>'
-                 '<TD BGCOLOR="#D4B8E3">Scalar</TD></TR>')
-    lines.append('        <TR><TD COLSPAN="3">')
-    lines.append('          <FONT COLOR="#2E8B57"><B>━━ Pipe</B></FONT>  '
-                 '<FONT COLOR="#4169E1">╌╌ Local</FONT>  '
-                 '<FONT COLOR="#666666">── HBM</FONT>')
-    lines.append('        </TD></TR>')
-    lines.append('        <TR><TD BGCOLOR="#C8E6C9">Input</TD>'
-                 '<TD BGCOLOR="#FFF9C4">Weight</TD>'
-                 '<TD BGCOLOR="#FFCDD2">Output</TD></TR>')
-    lines.append('      </TABLE>>];')
-    lines.append('  }')
-
-    lines.append('}')
-    return "\n".join(lines)
-
-
-# ── ASCII ─────────────────────────────────────────────────
+    return scheduled
 
 
-def render_ascii(graph: Graph, cube_size: int) -> str:
-    """纯终端 ASCII 依赖图渲染。"""
-    lines: list[str] = []
-    lines.append(f"{BOLD}NPU Graph — C API Op Dependency{RESET}")
-    lines.append("")
+def render_schedule(
+    graph: Graph, cube_size: int,
+    hw_config: dict | None = None,
+    dma_plans: list | None = None,
+) -> str:
+    """生成 MindSpore 风格 Pipeline Schedule HTML。"""
+    costs = estimate_all(graph, hw_config)
+    ops = _schedule_ops(graph, costs, dma_plans)
+    if not ops:
+        return "<html><body>No ops</body></html>"
 
-    node_inputs: dict[str, list] = {}
-    node_outputs: dict[str, list] = {}
+    max_time = max(o.end for o in ops)
+    op_map = {o.nid: o for o in ops}
 
-    for nid in graph.execution_order:
-        node = graph.nodes[nid]
-        ins = []
-        for tid in node.inputs:
-            t = graph.tensors.get(tid)
-            if not t:
-                continue
-            storage = t.storage or "hbm"
-            src = t.producer_node_id
-            src_label = graph.nodes[src].npu_op if src and src in graph.nodes else tid
-            ins.append((tid, src_label, storage, t))
-        for param, atid in sorted(node.absorbed_inputs.items()):
-            at = graph.tensors.get(atid)
-            if at:
-                ins.append((atid, f"[absorbed:{param}]", at.storage or "hbm", at))
-        node_inputs[nid] = ins
+    def _tensor_desc(tid: str) -> str:
+        t = graph.tensors.get(tid)
+        if not t:
+            return tid
+        parts = [shape_str(t.shape), t.dtype or "?"]
+        if t.format and t.format != "nd":
+            parts.append(t.format)
+        return " ".join(parts)
 
-        outs = []
-        for tid in node.outputs:
-            t = graph.tensors.get(tid)
-            if t:
-                outs.append((tid, t.storage or "hbm", t))
-        node_outputs[nid] = outs
+    bars = []
+    for o in ops:
+        node = graph.nodes.get(o.nid)
+        if node:
+            ins = [{"id": tid, "desc": _tensor_desc(tid)} for tid in node.inputs]
+            outs = [{"id": tid, "desc": _tensor_desc(tid)} for tid in node.outputs]
+        else:
+            ins, outs = [], []
+        bars.append({
+            "s": o.start, "e": o.end, "d": o.duration,
+            "lane": o.lane_idx, "op": o.op, "tid": o.tid, "nid": o.nid,
+            "color": CU_COLOR.get(o.lane, "#999"),
+            "ins": ins, "outs": outs,
+        })
 
-    for idx, nid in enumerate(graph.execution_order):
-        node = graph.nodes[nid]
-        cu = node.compute_unit or "?"
-        op = node.npu_op or node.op_type
-        cu_color = CU_COLOR.get(cu, WHITE)
+    # 依赖线
+    deps = []
+    for o in ops:
+        for dep_nid in o.deps:
+            dep = op_map.get(dep_nid)
+            if dep:
+                deps.append({
+                    "x1": dep.end, "y1": dep.lane_idx,
+                    "x2": o.start, "y2": o.lane_idx,
+                })
 
-        for tid, src_label, storage, t in node_inputs[nid]:
-            size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
-            shape = shape_str(t.shape)
-            if storage == "pipe":
-                lines.append(f"  {GREEN}{BOLD}{'':>4s}┃ {src_label}{RESET}")
-                lines.append(f"{GREEN}  ║ pipe  {shape} {t.dtype} ({human_size(size)}){RESET}")
-            elif storage == "local":
-                lines.append(f"  {BLUE}{'':>4s}┃ {src_label}{RESET}")
-                lines.append(f"{BLUE}  ┆ local {shape} {t.dtype} ({human_size(size)}){RESET}")
-            else:
-                src_tag = ""
-                if t.is_model_input:
-                    src_tag = " [INPUT]"
-                elif t.is_weight:
-                    src_tag = " [WEIGHT]"
-                lines.append(f"  {GRAY}{'':>4s}│ {src_label}{src_tag}{RESET}")
-                lines.append(f"{GRAY}  │ hbm   {shape} {t.dtype} {t.format} ({human_size(size)}){RESET}")
+    bars_json = json.dumps(bars, ensure_ascii=False)
+    deps_json = json.dumps(deps)
+    lanes_json = json.dumps([l.upper() for l in _LANES])
+    colors_json = json.dumps([CU_COLOR.get(l, "#999") for l in _LANES])
 
-        absorbed_str = ""
-        if node.absorbed_inputs:
-            parts = []
-            for p, atid in sorted(node.absorbed_inputs.items()):
-                at = graph.tensors.get(atid)
-                parts.append(f"+{p}:{shape_str(at.shape)}" if at else f"+{p}")
-            absorbed_str = f" {DIM}({', '.join(parts)}){RESET}"
+    return f"""<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>NPU Pipeline Schedule</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+  body {{ margin:0; padding:16px; font-family:sans-serif; background:#fafafa; }}
+  #chart {{ width:100%; height:90vh; }}
+</style>
+</head><body>
+<div id="chart"></div>
+<script>
+var chart = echarts.init(document.getElementById('chart'));
+var bars = {bars_json};
+var deps = {deps_json};
+var lanes = {lanes_json};
+var laneColors = {colors_json};
+var maxTime = {max_time};
+var laneH = 60;   // 每条泳道像素高度
+var laneGap = 20;  // 泳道间距
+var nLanes = lanes.length;
 
-        has_pipe_out = any(s == "pipe" for _, s, _ in node_outputs[nid])
-        pipe_badge = f" {GREEN_BG}{BOLD} PIPE {RESET}" if has_pipe_out else ""
+function renderItem(params, api) {{
+    var s = api.value(0);  // start
+    var lane = api.value(1); // lane_idx
+    var dur = api.value(2); // duration
 
-        lines.append(f"  {'':>4s}┌{'─' * 50}┐")
-        tid_label = f"{cu} tid={node.task_id}"
-        lines.append(f"  {BOLD}t={idx:<3d}{RESET}│ {cu_color}{BOLD}{op:^30s}{RESET} [{tid_label}]{absorbed_str}{pipe_badge}")
-        lines.append(f"  {'':>4s}└{'─' * 50}┘")
+    var x0 = api.coord([s, 0])[0];
+    var x1 = api.coord([s + dur, 0])[0];
+    var barW = Math.max(x1 - x0, 2);
 
-        for tid, storage, t in node_outputs[nid]:
-            size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
-            shape = shape_str(t.shape)
-            out_tag = " [OUTPUT]" if t.is_model_output else ""
-            if storage == "pipe":
-                lines.append(f"  {GREEN}{BOLD}{'':>4s}┃ {tid} pipe {shape} ({human_size(size)}){RESET}")
-            elif storage == "local":
-                lines.append(f"  {BLUE}{'':>4s}┆ {tid} local {shape} ({human_size(size)}){RESET}")
-            else:
-                lines.append(f"  {GRAY}{'':>4s}│ {tid} hbm {shape} ({human_size(size)}){out_tag}{RESET}")
+    var chartH = api.getHeight();
+    var gridTop = 70;
+    var gridBot = 50;
+    var usable = chartH - gridTop - gridBot;
+    var totalH = nLanes * laneH + (nLanes - 1) * laneGap;
+    var yOff = gridTop + (usable - totalH) / 2;
 
-        if idx < len(graph.execution_order) - 1:
-            lines.append("")
+    var y = yOff + lane * (laneH + laneGap);
 
-    lines.append("")
-    lines.append(f"{BOLD}Summary:{RESET}")
-    n_pipe = sum(1 for t in graph.tensors.values() if t.storage == "pipe")
-    n_local = sum(1 for t in graph.tensors.values() if t.storage == "local")
-    n_hbm = sum(1 for t in graph.tensors.values() if t.storage == "hbm")
-    lines.append(f"  Nodes: {len(graph.nodes)}  Tensors: {len(graph.tensors)}")
-    lines.append(f"  {GREEN}pipe: {n_pipe}{RESET}  "
-                 f"{BLUE}local: {n_local}{RESET}  "
-                 f"{GRAY}hbm: {n_hbm}{RESET}")
+    var rect = echarts.graphic.clipRectByRect(
+        {{ x: x0, y: y + 4, width: barW, height: laneH - 8 }},
+        {{ x: params.coordSys.x, y: params.coordSys.y,
+           width: params.coordSys.width, height: params.coordSys.height }}
+    );
 
-    saved = sum(
-        calc_padded_size(t.shape, t.dtype, t.format, cube_size)
-        for t in graph.tensors.values() if t.storage in ("pipe", "local")
-    )
-    lines.append(f"  HBM bandwidth saved: ~{human_size(saved)} "
-                 f"(pipe+local skip DMA round-trip)")
+    return rect && {{
+        type: 'rect',
+        shape: {{ x: rect.x, y: rect.y, width: rect.width, height: rect.height, r: 3 }},
+        style: api.style(),
+        textContent: {{
+            style: {{
+                text: barW > 30 ? api.value(3) : '',
+                fill: '#333',
+                fontSize: 9,
+                overflow: 'truncate',
+                width: barW - 4
+            }}
+        }},
+        textConfig: {{ position: 'inside' }}
+    }};
+}}
 
-    return "\n".join(lines)
+// 泳道背景 + 标签
+var bgGraphics = [];
+(function() {{
+    var gridTop = 70, gridBot = 50;
+    function calcY(chartH) {{
+        var usable = chartH - gridTop - gridBot;
+        var totalH = nLanes * laneH + (nLanes - 1) * laneGap;
+        return gridTop + (usable - totalH) / 2;
+    }}
+
+    for (var i = 0; i < nLanes; i++) {{
+        // 泳道背景条
+        bgGraphics.push({{
+            type: 'rect', z: -10,
+            shape: {{ x: 0, y: 0, width: 0, height: laneH }},
+            style: {{ fill: laneColors[i] + '15' }},
+            _lane: i, _type: 'bg'
+        }});
+        // 泳道标签
+        bgGraphics.push({{
+            type: 'text', z: 10,
+            style: {{
+                text: lanes[i], x: 10, y: 0,
+                fontSize: 13, fontWeight: 'bold',
+                fill: laneColors[i]
+            }},
+            _lane: i, _type: 'label'
+        }});
+    }}
+}})();
+
+var option = {{
+    title: {{
+        text: 'NPU Pipeline Schedule',
+        subtext: bars.length + ' ops, ~' + maxTime + ' cycles',
+        left: 'center'
+    }},
+    tooltip: {{
+        formatter: function(p) {{
+            if (!p.value) return '';
+            var b = p.data._bar;
+            var s = '<b>' + p.value[3] + '</b> <span style="color:#888">(' + b.nid + ')</span><br/>'
+                + 'Lane: ' + lanes[p.value[1]] + '&ensp;TID: ' + p.value[4] + '<br/>'
+                + 'Time: ' + p.value[0] + ' → ' + (p.value[0]+p.value[2]) + ' (' + p.value[2] + ' cycles)<br/>';
+            if (b.ins && b.ins.length) {{
+                s += '<br/><b>Inputs:</b><br/>';
+                b.ins.forEach(function(t) {{ s += '&ensp;' + t.id + ' <span style="color:#666">' + t.desc + '</span><br/>'; }});
+            }}
+            if (b.outs && b.outs.length) {{
+                s += '<b>Outputs:</b><br/>';
+                b.outs.forEach(function(t) {{ s += '&ensp;' + t.id + ' <span style="color:#666">' + t.desc + '</span><br/>'; }});
+            }}
+            return s;
+        }}
+    }},
+    grid: {{ left: 80, right: 30, top: 70, bottom: 50 }},
+    xAxis: {{
+        type: 'value', name: 'Cycles', min: 0, max: maxTime,
+        splitLine: {{ lineStyle: {{ color: '#eee' }} }}
+    }},
+    yAxis: {{ show: false, min: 0, max: 1 }},
+    dataZoom: [
+        {{ type: 'slider', xAxisIndex: 0, bottom: 10, start: 0, end: 100 }},
+        {{ type: 'inside', xAxisIndex: 0 }}
+    ],
+    graphic: bgGraphics,
+    series: [{{
+        type: 'custom',
+        renderItem: renderItem,
+        encode: {{ x: [0], tooltip: [0,1,2,3,4] }},
+        data: bars.map(function(b) {{
+            return {{
+                value: [b.s, b.lane, b.d, b.op, b.tid],
+                itemStyle: {{ color: b.color }},
+                _bar: b
+            }};
+        }})
+    }}]
+}};
+
+chart.setOption(option);
+
+// 定位泳道背景和标签（需要在渲染后获取坐标系尺寸）
+function updateLayout() {{
+    var chartW = chart.getWidth();
+    var chartH = chart.getHeight();
+    var gridTop = 70, gridBot = 50;
+    var usable = chartH - gridTop - gridBot;
+    var totalH = nLanes * laneH + (nLanes - 1) * laneGap;
+    var yOff = gridTop + (usable - totalH) / 2;
+
+    var newGraphic = [];
+    for (var i = 0; i < bgGraphics.length; i++) {{
+        var g = bgGraphics[i];
+        var lane = g._lane;
+        var y = yOff + lane * (laneH + laneGap);
+        if (g._type === 'bg') {{
+            newGraphic.push({{
+                type: 'rect', z: -10,
+                shape: {{ x: 80, y: y, width: chartW - 110, height: laneH }},
+                style: {{ fill: laneColors[lane] + '18' }}
+            }});
+        }} else {{
+            newGraphic.push({{
+                type: 'text', z: 10,
+                style: {{
+                    text: lanes[lane], x: 8, y: y + laneH/2 - 8,
+                    fontSize: 13, fontWeight: 'bold', fill: laneColors[lane]
+                }}
+            }});
+        }}
+    }}
+
+    // 依赖连线
+    deps.forEach(function(d) {{
+        var px1 = chart.convertToPixel('grid', [d.x1, 0]);
+        var px2 = chart.convertToPixel('grid', [d.x2, 0]);
+        if (!px1 || !px2) return;
+        var y1 = yOff + d.y1 * (laneH + laneGap) + laneH / 2;
+        var y2 = yOff + d.y2 * (laneH + laneGap) + laneH / 2;
+        newGraphic.push({{
+            type: 'line', z: 5,
+            shape: {{ x1: px1[0], y1: y1, x2: px2[0], y2: y2 }},
+            style: {{ stroke: 'rgba(180,0,0,0.25)', lineWidth: 1 }}
+        }});
+        // 小箭头
+        var angle = Math.atan2(y2 - y1, px2[0] - px1[0]);
+        var sz = 4;
+        newGraphic.push({{
+            type: 'polygon', z: 5,
+            shape: {{ points: [
+                [px2[0], y2],
+                [px2[0] - sz*Math.cos(angle-0.5), y2 - sz*Math.sin(angle-0.5)],
+                [px2[0] - sz*Math.cos(angle+0.5), y2 - sz*Math.sin(angle+0.5)]
+            ] }},
+            style: {{ fill: 'rgba(180,0,0,0.25)' }}
+        }});
+    }});
+
+    chart.setOption({{ graphic: newGraphic }});
+}}
+
+setTimeout(updateLayout, 300);
+chart.on('dataZoom', function() {{ setTimeout(updateLayout, 100); }});
+window.addEventListener('resize', function() {{ chart.resize(); setTimeout(updateLayout, 100); }});
+</script>
+</body></html>"""
 
 
-# ── 对外接口（pipeline 调用）──────────────────────────────
+# ── 对外接口 ──────────────────────────────────────────────
 
-def emit_graph_dot(graph: Graph, output_dir: str, cube_size: int) -> str:
-    """生成 DOT 文件到 output_dir/viz/graph.dot，返回文件路径。"""
+
+def emit_graph_html(graph: Graph, output_dir: str, cube_size: int,
+                    hw_config: dict | None = None,
+                    dma_plans: list | None = None) -> str:
+    """生成 Pipeline Schedule HTML，返回文件路径。"""
     viz_dir = ensure_viz_dir(output_dir)
-    path = os.path.join(viz_dir, "graph.dot")
+    path = os.path.join(viz_dir, "schedule.html")
+    html = render_schedule(graph, cube_size, hw_config, dma_plans)
     with open(path, "w") as f:
-        f.write(render_dot(graph, cube_size))
-    logger.info("依赖图 DOT 已写入: %s", path)
-    return path
-
-
-def emit_graph_ascii(graph: Graph, output_dir: str, cube_size: int) -> str:
-    """生成 ASCII 依赖图到 output_dir/viz/graph.txt，返回文件路径。"""
-    viz_dir = ensure_viz_dir(output_dir)
-    path = os.path.join(viz_dir, "graph.txt")
-    with open(path, "w") as f:
-        f.write(strip_ansi(render_ascii(graph, cube_size)))
-    logger.info("依赖图 ASCII 已写入: %s", path)
+        f.write(html)
+    logger.info("Pipeline Schedule HTML 已写入: %s", path)
     return path

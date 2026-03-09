@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from torch2c.common import Graph, MemoryPlanError, get_logger
 
-from ._utils import align_up, calc_padded_size
+from ._utils import align_up, best_fit_alloc, calc_padded_size
 
 logger = get_logger("memory_planner.l1")
 
@@ -25,11 +25,12 @@ def _analyze_l1_lifetimes(graph: Graph) -> dict[str, tuple[int, int]]:
             continue
         if t.storage == "local":
             first = order_map.get(t.producer_node_id, 0) if t.producer_node_id else 0
-            if t.consumer_node_ids:
-                last = max(order_map[c] for c in t.consumer_node_ids if c in order_map)
-            else:
-                first = order_map.get(t.producer_node_id, 0) if t.producer_node_id else 0
-                last = first
+            consumers = [order_map[c] for c in t.consumer_node_ids if c in order_map]
+            # absorbed_inputs 也是消费者
+            for nid, node in graph.nodes.items():
+                if tid in node.absorbed_inputs.values() and nid in order_map:
+                    consumers.append(order_map[nid])
+            last = max(consumers) if consumers else first
             lifetimes[tid] = (first, last)
         else:
             ops: set[int] = set()
@@ -47,44 +48,22 @@ def _analyze_l1_lifetimes(graph: Graph) -> dict[str, tuple[int, int]]:
 
 
 def collect_op_tensors(graph: Graph, node_id: str) -> list[str]:
-    """收集单个算子需要的所有 tensor id（输入 + absorbed + 输出）。"""
+    """收集单个算子需要的所有 tensor id（非权重输入 → 权重输入 → absorbed → 输出）。"""
     node = graph.nodes[node_id]
-    tids: list[str] = []
+    non_weights: list[str] = []
+    weights: list[str] = []
     for tid in node.inputs:
         t = graph.tensors.get(tid)
-        if t and not t.is_weight:
-            tids.append(tid)
-    for tid in node.inputs:
-        t = graph.tensors.get(tid)
-        if t and t.is_weight:
-            tids.append(tid)
+        if not t:
+            continue
+        (weights if t.is_weight else non_weights).append(tid)
+    tids = non_weights + weights
     for _, atid in sorted(node.absorbed_inputs.items()):
         if atid not in tids:
             tids.append(atid)
     for tid in node.outputs:
         tids.append(tid)
     return tids
-
-
-def _best_fit_alloc(free_blocks: list[list[int]], aligned_size: int) -> int | None:
-    """从 free_blocks 找最优空闲块，返回 offset 或 None。"""
-    best_idx = -1
-    best_fit_size = float("inf")
-    for i, (_, sz) in enumerate(free_blocks):
-        if sz >= aligned_size and sz < best_fit_size:
-            best_idx = i
-            best_fit_size = sz
-
-    if best_idx < 0:
-        return None
-
-    blk_off, blk_sz = free_blocks[best_idx]
-    remaining = blk_sz - aligned_size
-    if remaining > 0:
-        free_blocks[best_idx] = [blk_off + aligned_size, remaining]
-    else:
-        free_blocks.pop(best_idx)
-    return blk_off
 
 
 def allocate_l1_global(
@@ -133,7 +112,7 @@ def allocate_l1_global(
             size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
             aligned_size = align_up(size, l1_alignment)
 
-            offset = _best_fit_alloc(free_blocks, aligned_size)
+            offset = best_fit_alloc(free_blocks, aligned_size)
             if offset is not None:
                 live[tid] = offset
                 result[tid] = offset

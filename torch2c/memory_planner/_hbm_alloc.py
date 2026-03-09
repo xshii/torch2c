@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from torch2c.common import Graph, get_logger
 
-from ._utils import align_up, calc_padded_size
+from ._utils import align_up, best_fit_alloc, calc_padded_size
 
 logger = get_logger("memory_planner.hbm")
 
@@ -71,34 +71,15 @@ def _release_expired(
             freed_set.add(other_tid)
 
 
-def _best_fit_alloc(free_blocks: list[list[int]], aligned_size: int) -> int | None:
-    """从 free_blocks 找最优空闲块，返回 offset 或 None。"""
-    best_idx = -1
-    best_fit_size = float("inf")
-    for i, (_, sz) in enumerate(free_blocks):
-        if sz >= aligned_size and sz < best_fit_size:
-            best_idx = i
-            best_fit_size = sz
-
-    if best_idx < 0:
-        return None
-
-    blk_off, blk_sz = free_blocks[best_idx]
-    remaining = blk_sz - aligned_size
-    if remaining > 0:
-        free_blocks[best_idx] = [blk_off + aligned_size, remaining]
-    else:
-        free_blocks.pop(best_idx)
-    return blk_off
-
-
 def allocate_hbm(
     graph: Graph,
     lifetimes: dict[str, tuple[int, int]],
     hbm_alignment: int,
     cube_size: int,
+    *,
+    allow_reuse: bool = True,
 ) -> int:
-    """Best-fit HBM 分配，支持空间复用。返回实际复用次数。"""
+    """Best-fit HBM 分配。allow_reuse=True 时支持空间复用。返回实际复用次数。"""
     sorted_tids = sorted(lifetimes.keys(), key=lambda t: lifetimes[t][0])
     free_blocks: list[list[int]] = []
     freed_set: set[str] = set()
@@ -111,9 +92,12 @@ def allocate_hbm(
         t.hbm_size = size
         aligned_size = align_up(size, hbm_alignment)
 
-        _release_expired(graph, sorted_tids, lifetimes, lifetimes[tid][0], freed_set, free_blocks, hbm_alignment)
+        if allow_reuse:
+            _release_expired(graph, sorted_tids, lifetimes, lifetimes[tid][0], freed_set, free_blocks, hbm_alignment)
+            offset = best_fit_alloc(free_blocks, aligned_size)
+        else:
+            offset = None
 
-        offset = _best_fit_alloc(free_blocks, aligned_size)
         if offset is not None:
             t.hbm_offset = offset
             reuse_count += 1

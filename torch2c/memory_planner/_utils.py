@@ -14,6 +14,27 @@ def align_up(offset: int, alignment: int) -> int:
     return ((offset + alignment - 1) // alignment) * alignment
 
 
+def best_fit_alloc(free_blocks: list[list[int]], aligned_size: int) -> int | None:
+    """从 free_blocks 找最优空闲块，返回 offset 或 None。"""
+    best_idx = -1
+    best_fit_size = float("inf")
+    for i, (_, sz) in enumerate(free_blocks):
+        if sz >= aligned_size and sz < best_fit_size:
+            best_idx = i
+            best_fit_size = sz
+
+    if best_idx < 0:
+        return None
+
+    blk_off, blk_sz = free_blocks[best_idx]
+    remaining = blk_sz - aligned_size
+    if remaining > 0:
+        free_blocks[best_idx] = [blk_off + aligned_size, remaining]
+    else:
+        free_blocks.pop(best_idx)
+    return blk_off
+
+
 def calc_padded_size(shape: list[int], dtype: str, fmt: str, cube_size: int) -> int:
     """计算 padding 后的字节数。
 
