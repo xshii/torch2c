@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "npu-compiler"
@@ -11,11 +11,13 @@ dependencies = [
     "torch>=2.0",
     "pyyaml>=6.0",
     "numpy>=1.24",
+    "pyecharts>=2.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+    "pytest-xdist>=3.0",
     "pytest-cov>=4.0",
     "ruff>=0.4",
     "mypy>=1.10",
@@ -27,6 +29,7 @@ include = ["torch2c*"]
 [tool.pytest.ini_options]
 testpaths = ["torch2c"]
 norecursedirs = ["demo_st"]
+addopts = "-n auto"
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]

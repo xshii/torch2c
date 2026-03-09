@@ -1,9 +1,9 @@
-"""生成类似 ONNX 的算子依赖关系图（DOT 格式 + ASCII fallback）。
+"""生成算子依赖关系图（pyecharts 交互式 HTML）。
 
 核心渲染逻辑位于 torch2c.viz.graph_viz，本文件为独立运行入口。
 
 用法:
-    python -m torch2c.memory_planner.demo.viz_graph [--dot graph.dot]
+    python -m torch2c.memory_planner.demo.viz_graph [-o graph.html]
     python -m torch2c.memory_planner.demo.viz_graph --json graph.json
 """
 
@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 from torch2c.common import HARDWARE_CONFIG_PATH, Graph, Node, Tensor, load_config
 from torch2c.storage_assigner import run as run_idma
-from torch2c.viz.graph_viz import render_ascii, render_dot
+from torch2c.viz.graph_viz import render_graph
 
 CONFIG_PATH = str(HARDWARE_CONFIG_PATH)
 
@@ -120,8 +120,8 @@ def _build_attention_graph() -> Graph:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="生成算子依赖图")
-    parser.add_argument("--dot", type=str, default=None,
-                        help="输出 DOT 文件路径（不指定则 ASCII 输出）")
+    parser.add_argument("-o", "--output", type=str, default="graph.html",
+                        help="输出 HTML 文件路径（默认 graph.html）")
     parser.add_argument("--json", type=str, default=None,
                         help="输入 graph JSON 文件（默认用 attention 示例）")
     parser.add_argument("--pipe-pairs", type=str, default=None,
@@ -144,15 +144,10 @@ def main() -> None:
     else:
         graph = _build_attention_graph()
 
-    if args.dot:
-        dot = render_dot(graph, cube_size)
-        with open(args.dot, "w") as f:
-            f.write(dot)
-        print(f"DOT file written to: {args.dot}")
-        print(f"Render with: dot -Tsvg {args.dot} -o graph.svg")
-        print(f"         or: dot -Tpng {args.dot} -o graph.png")
-    else:
-        print(render_ascii(graph, cube_size))
+    chart = render_graph(graph, cube_size)
+    chart.render(args.output)
+    print(f"HTML 已生成: {args.output}")
+    print(f"用浏览器打开: open {args.output}")
 
 
 if __name__ == "__main__":

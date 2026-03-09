@@ -495,8 +495,7 @@ torch2c/
 │   │   └── debug.yaml
 │   ├── demo/
 │   │   ├── encoder_model.py
-│   │   ├── run_full_demo.py
-│   │   ├── validate_output.py
+│   │   ├── _runner.py
 │   │   └── demo_st/                  系统级端到端测试
 │   └── tests/
 │       ├── test_pipeline.py

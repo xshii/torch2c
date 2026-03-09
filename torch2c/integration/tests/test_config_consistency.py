@@ -6,9 +6,11 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
-from torch2c.common import INTEGRATION_CONFIG_DIR, load_config
+from torch2c.common import INTEGRATION_CONFIG_DIR, NPU_CPU_MOCK_DIR, load_config
 
 
 @pytest.fixture(scope="module")
@@ -90,3 +92,49 @@ class TestSignatureConfigCompleteness:
                 assert "name" in param, f"{op_name} param[{i}] 缺少 name"
                 assert "type" in param, f"{op_name} param[{i}] 缺少 type"
                 assert "source" in param, f"{op_name} param[{i}] 缺少 source"
+
+
+# ---- C mock 一致性 ----
+
+# npu_api.h 中的工具函数，不需要在 signatures 中定义
+_C_MOCK_UTILITY_FUNCTIONS = {
+    "npu_dtype_size",
+    "npu_read_as_float",
+    "npu_write_from_float",
+    "npu_round_to_dtype",
+}
+
+
+def _c_mock_functions() -> set[str]:
+    """从 npu_api.h 提取所有非 static/inline 导出函数名。"""
+    header = NPU_CPU_MOCK_DIR / "include" / "npu_api.h"
+    text = header.read_text()
+    # 匹配行首 void/size_t/float func_name( 形式的函数声明
+    pattern = r"^(?:void|size_t|float)\s+(\w+)\s*\("
+    return set(re.findall(pattern, text, re.MULTILINE))
+
+
+class TestSignaturesVsCMock:
+    """c_api_signatures 与 npu_api.h C mock 的一致性。"""
+
+    def test_signature_ops_in_c_mock(self, configs):
+        """signatures 中的所有算子必须在 C mock header 中有声明。"""
+        sig_ops = _signature_ops(configs)
+        c_funcs = _c_mock_functions()
+        missing = sig_ops - c_funcs
+        assert not missing, (
+            f"c_api_signatures 中的算子在 npu_api.h 中无声明: {sorted(missing)}\n"
+            f"请在 npu_cpu_mock/include/npu_api.h 中添加这些函数。"
+        )
+
+    def test_c_mock_ops_in_signatures(self, configs):
+        """C mock 中的算子函数应在 signatures 中有定义（工具函数除外）。"""
+        sig_ops = _signature_ops(configs)
+        c_funcs = _c_mock_functions() - _C_MOCK_UTILITY_FUNCTIONS
+        missing = c_funcs - sig_ops
+        if missing:
+            import warnings
+            warnings.warn(
+                f"npu_api.h 中的函数在 c_api_signatures 中无定义: {sorted(missing)}",
+                stacklevel=1,
+            )

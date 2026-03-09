@@ -22,8 +22,9 @@ compute_ops:
       - { name: "out", type: "tensor_desc", source: "tensor.output_0" }
       - { name: "loop", type: "int",        source: "param.loop", default: 1 }
       - { name: "m",    type: "int",        source: "tensor.input_0.shape.-2" }
-      - { name: "n",    type: "int",        source: "tensor.input_1.shape.-1" }
+      - { name: "n",    type: "int",        source: "tensor.output_0.shape.-1" }
       - { name: "k",    type: "int",        source: "tensor.input_0.shape.-1" }
+      - { name: "transpose_b", type: "int", source: "param.transpose_b", default: 0 }
       - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   cube_matmul_bias:
@@ -35,8 +36,9 @@ compute_ops:
       - { name: "out",  type: "tensor_desc", source: "tensor.output_0" }
       - { name: "loop", type: "int",         source: "param.loop", default: 1 }
       - { name: "m",    type: "int",         source: "tensor.input_0.shape.-2" }
-      - { name: "n",    type: "int",         source: "tensor.input_1.shape.-1" }
+      - { name: "n",    type: "int",         source: "tensor.output_0.shape.-1" }
       - { name: "k",    type: "int",         source: "tensor.input_0.shape.-1" }
+      - { name: "transpose_b", type: "int",  source: "param.transpose_b", default: 0 }
       - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
   # ---- vector: arithmetic ----

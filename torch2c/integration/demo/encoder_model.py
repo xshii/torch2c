@@ -12,7 +12,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from torch2c.common import NpuSpec, npu, npu_input, torch2c_config  # noqa: F401
+from torch2c.common import NpuSpec, npu
 
 # 常用 spec 缩写
 _FP32 = NpuSpec("fp32", "nd")
@@ -141,39 +141,3 @@ class EncoderModel(nn.Module):
         for layer in self.layers:
             x = layer(x, mask)
         return x
-
-
-def make_demo_inputs(
-    d_model: int = 192,
-    seq_len: int = 32,
-    batch: int = 1,
-    *,
-    with_mask: bool = True,
-    weights_path: str | None = None,
-) -> dict:
-    """创建带标注的 demo 输入（激活 + mask + 权重路径）。"""
-    x = npu_input(torch.randn(batch, seq_len, d_model), dtype="fp16", format="nd")
-    mask = None
-    if with_mask:
-        mask = npu_input(torch.zeros(batch, seq_len, seq_len), dtype="fp16", format="nd")
-    return {"x": x, "mask": mask, "weights_path": weights_path}
-
-
-if __name__ == "__main__":
-    import sys
-
-    from torch2c.integration import compile, inspect
-    from torch2c.common import INTEGRATION_CONFIG_DIR
-
-    model = EncoderModel(d_model=192, dim_ff=384, num_layers=3, num_heads=3)
-    inputs = make_demo_inputs(weights_path="encoder_weights.pth")
-
-    inspect(model, inputs["x"], mask=inputs["mask"])
-
-    if "--compile" in sys.argv:
-        compile(
-            model, inputs["x"],
-            mask=inputs["mask"],
-            config_dir=str(INTEGRATION_CONFIG_DIR),
-            output_dir="output_demo",
-        )

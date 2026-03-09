@@ -94,8 +94,8 @@ class SourceResolver:
                 return _format_value(param["default"], param["type"])
             raise CodegenError(f"参数 {param_name} 未找到: node={self._node.id}")
         if param["type"] == "int" and isinstance(val, int) and val in self._dim_replace:
-            # 不替换维度索引参数（如 transpose 的 dim0/dim1），只替换维度大小
-            if param_name not in ("dim0", "dim1"):
+            # 不替换维度索引参数和布尔标志，只替换维度大小
+            if param_name not in ("dim0", "dim1", "transpose_b"):
                 return self._dim_replace[val]
         return _format_value(val, param["type"])
 
@@ -255,9 +255,12 @@ def emit_model_graph_c(plan, signatures: dict) -> str:
         signatures, c_names, dim_replace, sections, spec_macros)
     all_macros = "\n\n".join(
         m for m in [_gen_dim_macros(model_dims), _gen_spec_macro_defs(spec_macros)] if m)
+    global_ptrs = "static unsigned char *hbm, *l1;\n"
     return (f"{_C_INCLUDES}{all_macros}\n\n\n{struct_typedef}\n\n\n"
+            + global_ptrs + "\n\n"
             + "\n\n\n".join(func_secs) + "\n\n\n"
-            f"void model_run(unsigned char* hbm, unsigned char* l1) {{\n{main_body}\n}}\n")
+            f"void model_run(unsigned char* hbm_, unsigned char* l1_) {{\n"
+            f"    hbm = hbm_; l1 = l1_;\n{main_body}\n}}\n")
 
 def _emit_flat(nodes, tensors, order, dma_plans, signatures, c_names):
     """无模块信息时退化为平铺模式。"""

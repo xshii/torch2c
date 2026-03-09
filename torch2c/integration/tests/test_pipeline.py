@@ -80,10 +80,8 @@ class TestEndToEnd:
 
         # viz 产物
         viz = os.path.join(result_dir, "viz")
-        assert os.path.isfile(os.path.join(viz, "graph.dot"))
-        assert os.path.isfile(os.path.join(viz, "graph.txt"))
-        assert os.path.isfile(os.path.join(viz, "lifetime_l1.txt"))
-        assert os.path.isfile(os.path.join(viz, "lifetime_hbm.txt"))
+        assert os.path.isfile(os.path.join(viz, "schedule.html"))
+        assert os.path.isfile(os.path.join(viz, "lifetime.html"))
 
     def test_golden_data_exported(self, output_dir):
         """golden 数据正确导出。"""

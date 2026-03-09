@@ -15,7 +15,7 @@ from .errors import (
     Severity,
     ValidationError,
 )
-from .graph_ir import Graph, Node, Tensor
+from .graph_ir import Graph, Node, Tensor, graph_diff
 from .logger import get_logger, setup_logging
 from .compile_config import get_model_config, torch2c_config
 from .debug_config import (
@@ -67,6 +67,7 @@ __all__ = [
     "DiagnosticCollector",
     "DtypeInfo",
     "Graph",
+    "graph_diff",
     "HARDWARE_CONFIG_PATH",
     "INTEGRATION_CONFIG_DIR",
     "MappingError",

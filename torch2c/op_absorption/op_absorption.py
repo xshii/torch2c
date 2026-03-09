@@ -81,6 +81,66 @@ def _try_absorb(graph: Graph, rule: dict) -> tuple[int, int]:
     return len(nodes_to_remove), len(tensors_to_remove)
 
 
+_MATMUL_OPS = {"cube_matmul", "cube_matmul_bias"}
+
+
+def _absorb_weight_transposes(graph: Graph) -> int:
+    """吸收权重 transpose 节点。
+
+    当 vector_transpose_2d 的输入是权重 tensor 时，删除该节点，
+    消费者直接引用原始权重，并注入 transpose_b=1。
+    DMA 随路搬运的 ND→NZ format 转换自动处理转置。
+    """
+    nodes_to_remove: list[str] = []
+    tensors_to_remove: list[str] = []
+
+    for node in list(graph.nodes.values()):
+        if node.npu_op != "vector_transpose_2d" or len(node.inputs) != 1:
+            continue
+        weight_tid = node.inputs[0]
+        weight_t = graph.get_tensor(weight_tid)
+        if weight_t is None or not weight_t.is_weight:
+            continue
+        if len(node.outputs) != 1:
+            continue
+
+        out_tid = node.outputs[0]
+        out_t = graph.get_tensor(out_tid)
+        if out_t is None:
+            continue
+
+        # 将消费者的输入从 transpose 输出改为原始权重
+        for consumer_id in list(out_t.consumer_node_ids):
+            consumer = graph.get_node(consumer_id)
+            if consumer is None:
+                continue
+            for i, tid in enumerate(consumer.inputs):
+                if tid == out_tid:
+                    consumer.inputs[i] = weight_tid
+            if consumer_id not in weight_t.consumer_node_ids:
+                weight_t.consumer_node_ids.append(consumer_id)
+            # 消费者是 matmul 类算子时注入 transpose_b=1
+            if consumer.npu_op in _MATMUL_OPS:
+                consumer.params["transpose_b"] = 1
+
+        # 清理 transpose 节点的引用
+        if node.id in weight_t.consumer_node_ids:
+            weight_t.consumer_node_ids.remove(node.id)
+
+        nodes_to_remove.append(node.id)
+        tensors_to_remove.append(out_tid)
+
+    for nid in nodes_to_remove:
+        graph.remove_node(nid)
+    for tid in tensors_to_remove:
+        graph.remove_tensor(tid)
+
+    if nodes_to_remove:
+        logger.info("吸收了 %d 个权重 transpose（DMA ND→NZ 随路转置）", len(nodes_to_remove))
+
+    return len(nodes_to_remove)
+
+
 def post_validate(graph: Graph) -> list[str]:
     """op_absorption 后的校验：被吸收节点已清理，absorbed_inputs 引用的 tensor 存在。"""
     errors: list[str] = []
@@ -97,6 +157,11 @@ def run(graph: Graph, config: dict) -> Graph:
     """执行参数吸收 pass。"""
     total_absorbed = 0
     total_tensors = 0
+
+    # 权重 transpose 吸收（DMA ND→NZ 随路转置处理）
+    wt_absorbed = _absorb_weight_transposes(graph)
+    total_absorbed += wt_absorbed
+    total_tensors += wt_absorbed  # 每个吸收的 transpose 消除一个中间 tensor
 
     for rule in config.get("absorptions", []):
         a, t = _try_absorb(graph, rule)

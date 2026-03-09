@@ -13,7 +13,6 @@ from ..common.graph_ir import Graph, Node, Tensor
 from ..common.logger import get_logger
 from ._annotations import _apply_npu_annotations
 from ._constants import (
-    WEIGHT_TRANSPOSE_INPUT,
     dtype_str,
     is_tensor_overload,
     normalize_op_inputs,
@@ -187,35 +186,6 @@ def _create_call_outputs(
     return output_tids
 
 
-def _insert_weight_transpose(
-    graph: Graph, input_tids: list[str], weight_idx: int, tgen: _IdGen, ngen: _IdGen,
-) -> list[str]:
-    """为 linear weight [out,in] 插入 transpose 节点，转为 [in,out]。"""
-    weight_tid = input_tids[weight_idx]
-    weight_t = graph.get_tensor(weight_tid)
-    if weight_t is None or len(weight_t.shape) != 2:
-        return input_tids
-
-    tr_nid = ngen.next()
-    tr_out_tid = tgen.next()
-    transposed_shape = [weight_t.shape[1], weight_t.shape[0]]
-    tr_out = Tensor(
-        id=tr_out_tid, shape=transposed_shape, dtype=weight_t.dtype,
-        producer_node_id=tr_nid,
-    )
-    graph.add_tensor(tr_out)
-
-    weight_t.consumer_node_ids.append(tr_nid)
-    tr_node = Node(
-        id=tr_nid, op_type="aten.t.default",
-        inputs=[weight_tid], outputs=[tr_out_tid], params={},
-    )
-    graph.add_node(tr_node)
-
-    new_tids = list(input_tids)
-    new_tids[weight_idx] = tr_out_tid
-    return new_tids
-
 
 def _handle_call(
     graph: Graph, fx_node: torch.fx.Node, fx_map: _FxMap, tgen: _IdGen, ngen: _IdGen,
@@ -245,10 +215,10 @@ def _handle_call(
         if in_t and len(in_t.shape) == 3:
             params["loop"] = in_t.shape[0]
 
-    # linear 等算子需要对 weight 做转置
-    wt_idx = WEIGHT_TRANSPOSE_INPUT.get(op)
-    if wt_idx is not None and wt_idx < len(input_tids):
-        input_tids = _insert_weight_transpose(graph, input_tids, wt_idx, tgen, ngen)
+    # aten.linear.default 的 weight 始终为 [out, in]，需要 transpose_b=1
+    # （linear 语义为 x @ W.T + b，DMA ND→NZ 随路转置处理）
+    if op == "aten.linear.default":
+        params["transpose_b"] = 1
 
     output_tids = _create_call_outputs(graph, fx_node, fx_map, tgen, nid)
 

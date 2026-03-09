@@ -1,0 +1,93 @@
+# 系统级测试场景 (ST)
+# L1 = 1M (1,048,576 bytes)，所有场景统一
+# UT: torch2c/memory_planner/tests/test_st_scenarios.py (25 tests, all passed)
+# ST: torch2c/integration/demo/demo_st/test_st_scenarios.py (6 passed, 1 xfail)
+
+- id: ST1
+  desc: embedding+bias，输入输出权重完全放得下，golden通过
+  graph: input[1,32,128] × W[128,128] + b → output[1,32,128]
+  sizes: input=8KB, weight=32KB, bias=256B, output=8KB, total≈48KB
+  strategy: bulk（全放下，一次性 DMA）
+  verify:
+    - L1 offset 全部唯一（不复用）
+    - HBM 线性递增分配
+    - bulk DMA（__bulk_load__ + __bulk_store__）
+    - format_annotation 声明 nz 格式（DMA 硬件随路转换）
+    - cube_matmul_bias 融合（bias 在 absorbed_inputs）
+    - post_validate 通过
+  expect: pass
+  ut: TestST1_EmbeddingBiasBulk (6 tests) ✅
+  st: TestST1_EmbeddingBiasE2E (2 tests) ✅ compile + C golden + 精度
+
+- id: ST2
+  desc: embedding+bias，FP16 I/O + FP32 compute，全放得下，golden通过
+  graph: 同 ST1，compute_dtype="fp32"
+  sizes: 同 ST1（I/O fp16 不变）
+  strategy: bulk
+  verify:
+    - bulk DMA
+    - format_annotation.compute_dtype = "fp32"
+    - 输入输出 tensor dtype 仍为 fp16
+    - post_validate 通过
+  expect: pass
+  ut: TestST2_EmbeddingBiasMixedPrecision (4 tests) ✅
+  st: TestST2_MixedPrecisionE2E (1 test) ✅ compile + C golden
+
+- id: ST3
+  desc: embedding+bias，单算子全部 tensor 超 L1 → 报错
+  graph: input[1,256,512] × W[512,512] + b → output[1,256,512]
+  sizes: input=256KB + weight=512KB + bias=1KB + output=256KB = 1025KB > 1M
+  strategy: bulk 失败 → per-op 也失败（单算子就超限）
+  verify:
+    - 抛出 MemoryPlanError("L1 溢出")
+    - 无自动化 tiling
+  expect: MemoryPlanError
+  ut: TestST3_EmbeddingBiasOverflow (2 tests) ✅
+  st: TestST3_EmbeddingBiasOverflowE2E (1 test) ✅ compile → MemoryPlanError
+
+- id: ST4
+  desc: matmul+bias × 2（2层MLP），全部 tensor L1 放得下
+  graph: input[1,32,128] → mm0(W[128,128]+b) → mid → mm1(W[128,128]+b) → output
+  sizes: 3×8KB + 2×32KB + 2×256B ≈ 89KB
+  strategy: bulk
+  verify:
+    - bulk DMA
+    - 图包含 2 个 cube_matmul_bias 节点
+    - L1 offset 全部唯一
+    - post_validate 通过
+  expect: pass
+  ut: TestST4_2LayerMLPBulk (4 tests) ✅
+  st: TestST4_2LayerMLPBulkE2E (1 test) ✅ compile + C golden
+
+- id: ST5
+  desc: matmul+bias × 2（2层MLP），单层放得下，2层总量放不下
+  graph: input[1,600,256] → mm0(W[256,256]+b) → mid → mm1(W[256,256]+b) → output
+  sizes: activation=300KB×3 + weight=128KB×2 + bias≈1KB = 1157KB > 1M
+  per-op-peak: input(300K)+W(128K)+b+output(300K) = 729KB < 1M
+  strategy: bulk 失败 → per-op 成功（liveness 复用 L1）
+  verify:
+    - per-op DMA（每个算子独立 DMA plan）
+    - L1 offset 有复用（unique < total）
+    - 同一算子内 tensor L1 不重叠
+    - 每个算子 L1 峰值 < 1M
+    - HBM lifetime 复用
+    - post_validate 通过
+  expect: pass
+  ut: TestST5_2LayerMLPPerOp (6 tests) ✅
+  st: TestST5_2LayerMLPPerOpE2E (1 test) ⚠️ xfail — per-op codegen struct 指针碰撞 bug
+
+- id: ST6
+  desc: 2头MHA Q/K投影，Q放得下但K投影时Q仍存活导致溢出
+  graph: input[1,640,256] → q_proj(W[256,256]+b) → Q → attn
+         input → k_proj(W[256,256]+b) → K → attn → scores
+  sizes: activation=320KB, weight=128KB
+  q_proj-peak: input(320K)+Wq(128K)+bq+Q(320K) = 769KB < 1M ✓
+  k_proj-peak: input(320K)+Q(320K,alive)+Wk(128K)+bk+K(320K) = 1089KB > 1M ✗
+  strategy: bulk 失败 → per-op 在 k_proj 处溢出
+  verify:
+    - 抛出 MemoryPlanError("L1 溢出")
+    - 单独 Q 投影可以通过（验证不是 Q 本身太大）
+    - 峰值计算：Q 769KB < 1M, K 1089KB > 1M
+  expect: MemoryPlanError
+  ut: TestST6_MHAOverflow (3 tests) ✅
+  st: TestST6_MHAOverflowE2E (1 test) ✅ compile → MemoryPlanError

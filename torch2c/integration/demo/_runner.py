@@ -9,15 +9,11 @@ import torch
 from torch2c.common import INTEGRATION_CONFIG_DIR, get_logger
 from torch2c.integration.demo.encoder_model import EncoderModel
 from torch2c.integration.demo.validate_c_output import validate_c
-from torch2c.integration.demo.validate_output import validate
 from torch2c.integration.pipeline import compile
 
 logger = get_logger(__name__)
 
 _CONFIG_DIR = str(INTEGRATION_CONFIG_DIR)
-
-# 精度模式 → 中文标签
-PRECISION_LABEL = {"mixed": "混合精度", "fp16": "全 FP16"}
 
 
 def compile_and_validate(
@@ -54,7 +50,6 @@ def compile_and_validate(
         mask=mask,
     )
 
-    validate(out)
     c_result = validate_c(out)
 
     # 从 stdout 提取精度指标

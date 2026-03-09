@@ -135,7 +135,7 @@ jobs:
     - cd npu_cpu_mock && cmake -B build && cmake --build build
     - cd npu_cpu_mock/build && ctest -V
   system-test:
-    - pytest torch2c/integration/demo/demo_st/ -v
+    - pytest torch2c/integration/tests/demo_st/ -v
 ```
 
 ### 3.2 性能基线

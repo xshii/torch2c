@@ -42,21 +42,19 @@ def compile(model: nn.Module, dummy_input: torch.Tensor, config_dir: str) -> str
 
 ## demo/
 
-**encoder_model.py:** 2层Encoder Transformer模型定义
+**encoder_model.py:** Encoder Transformer 模型定义（多头注意力 + FFN + LayerNorm）
 
-**run_full_demo.py:** 执行完整编译流水线，生成C工程
+**validate_c_output.py:** 编译生成的 C 工程并运行 golden 比对
 
-**validate_output.py:** 验证生成的C工程正确性
+**_runner.py:** compile_and_validate 封装（供 ST 测试使用）
 
 ## 验收标准
 
 | 检查项 | 方法 |
 |--------|------|
 | 所有模块UT通过 | `pytest --tb=short` |
-| 端到端管线跑通 | `python integration/demo/run_full_demo.py` 无报错 |
+| ST 场景测试通过 | `pytest torch2c/integration/tests/demo_st/ -v` |
 | C代码语法正确 | `gcc -fsyntax-only -include npu_mock.h output/src/model_graph.c` |
-| C侧UT通过 | `cd output && cmake . && make && ctest` |
-| 算子数量正确 | model_graph.c中62个算子块 |
 | 日志完整 | 每个Pass有入口/出口INFO日志 |
 
 ## UT

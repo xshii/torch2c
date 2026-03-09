@@ -193,7 +193,7 @@ static int test_matmul_int8(void) {
     npu_write_from_float(L1_PTR(int8_t, OFF_B), 0, 4.0f, NPU_DTYPE_INT8);
     npu_write_from_float(L1_PTR(int8_t, OFF_B), 1, 6.0f, NPU_DTYPE_INT8);
     cube_matmul(TID0, TENSOR(OFF_A, NPU_DTYPE_INT8), TENSOR(OFF_B, NPU_DTYPE_INT8),
-                TENSOR(OFF_OUT, NPU_DTYPE_INT8), 1, 1, 1, 2, NPU_DTYPE_INT8);
+                TENSOR(OFF_OUT, NPU_DTYPE_INT8), 1, 1, 1, 2, 0, NPU_DTYPE_INT8);
     ASSERT_FLOAT_EQ(npu_read_as_float(L1_PTR(int8_t, OFF_OUT), 0, NPU_DTYPE_INT8), 42.0f, 0.0f);
     return 1;
 }

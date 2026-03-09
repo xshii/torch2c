@@ -3,7 +3,6 @@
   "expected_op_types": [
     "aten.native_layer_norm.default",
     "aten.addmm.default",
-    "aten.t.default",
     "aten.add.Tensor",
     "aten.mul.Tensor",
     "aten._softmax.default",

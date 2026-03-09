@@ -1,9 +1,10 @@
-"""可视化 L1 / HBM 内存生命周期。
+"""可视化 L1 / HBM 内存生命周期（pyecharts 交互式 HTML）。
 
 核心渲染逻辑位于 torch2c.viz.lifetime_viz，本文件为独立运行入口。
 
 用法:
-    python -m torch2c.memory_planner.demo.viz_lifetime [--hbm] [--json graph.json]
+    python -m torch2c.memory_planner.demo.viz_lifetime [-o lifetime.html]
+    python -m torch2c.memory_planner.demo.viz_lifetime --json graph.json
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 from torch2c.common import HARDWARE_CONFIG_PATH, Graph, Node, Tensor, load_config
 from torch2c.storage_assigner import run as run_idma
 from torch2c.memory_planner import run as run_memory_planner
-from torch2c.viz.lifetime_viz import render_ascii
+from torch2c.viz.lifetime_viz import render_lifetime as _render_lifetime
 
 CONFIG_PATH = str(HARDWARE_CONFIG_PATH)
 
@@ -64,9 +65,9 @@ def _build_demo_graph() -> tuple[Graph, list]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="可视化内存生命周期")
-    parser.add_argument("--hbm", action="store_true", help="显示 HBM（默认显示 L1）")
+    parser.add_argument("-o", "--output", type=str, default=None,
+                        help="输出 HTML 文件前缀（生成 _l1.html 和 _hbm.html）")
     parser.add_argument("--json", type=str, default=None, help="输入 graph JSON 文件")
-    parser.add_argument("--width", type=int, default=14, help="每列宽度")
     args = parser.parse_args()
 
     config = load_config(CONFIG_PATH)
@@ -80,12 +81,12 @@ def main() -> None:
     else:
         graph, _ = _build_demo_graph()
 
-    mode = "hbm" if args.hbm else "l1"
-    print(render_ascii(graph, cube_size, mode=mode, col_width=args.width))
-
-    other = "l1" if mode == "hbm" else "hbm"
-    print("\n" + "=" * 80 + "\n")
-    print(render_ascii(graph, cube_size, mode=other, col_width=args.width))
+    path = args.output or "lifetime.html"
+    html = _render_lifetime(graph, cube_size, hw_config=config)
+    with open(path, "w") as f:
+        f.write(html)
+    print(f"HTML 已生成: {path}")
+    print(f"用浏览器打开: open {path}")
 
 
 if __name__ == "__main__":

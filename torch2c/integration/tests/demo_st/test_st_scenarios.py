@@ -1,0 +1,248 @@
+"""ST 场景端到端测试 — 基于 test_scenarios.yaml 的 6 个场景。
+
+从 PyTorch 模型 → compile() → C golden 验证的完整流程。
+所有场景统一 L1 = 1M (1,048,576 bytes)。
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import tempfile
+
+import pytest
+import torch
+import torch.nn as nn
+import yaml
+
+from torch2c.common import INTEGRATION_CONFIG_DIR, NpuSpec, npu
+from torch2c.common.errors import MemoryPlanError
+from torch2c.integration.demo.validate_c_output import validate_c
+from torch2c.integration.pipeline import compile
+
+_L1_1M = 1_048_576
+_FP16 = NpuSpec("fp16", "nd")
+_FP16_NZ = NpuSpec("fp16", "nz")
+
+
+# ── 工具 ────────────────────────────────────────────────────
+
+
+def _make_config_dir(l1_size: int = _L1_1M) -> str:
+    """复制 integration/config 到临时目录，覆盖 L1 大小。"""
+    tmpdir = tempfile.mkdtemp(prefix="st_config_")
+    src = str(INTEGRATION_CONFIG_DIR)
+    for f in os.listdir(src):
+        shutil.copy2(os.path.join(src, f), tmpdir)
+    hw_path = os.path.join(tmpdir, "hardware_config.yaml")
+    with open(hw_path) as f:
+        hw = yaml.safe_load(f)
+    hw["memory"]["l1"]["total_size_bytes"] = l1_size
+    with open(hw_path, "w") as f:
+        yaml.dump(hw, f, default_flow_style=False)
+    return tmpdir
+
+
+def _compile_and_validate(model: nn.Module, dummy_input: torch.Tensor, output_dir: str,
+                          config_dir: str) -> dict:
+    """编译 + C golden 验证，返回结果 dict。"""
+    out = compile(
+        model=model,
+        dummy_input=dummy_input,
+        config_dir=config_dir,
+        output_dir=output_dir,
+    )
+    c_result = validate_c(out)
+    import re
+    m = re.search(r"max_abs=([0-9.]+).*?cosine=([0-9.]+)", c_result["stdout"])
+    max_abs, cosine = (float(m.group(1)), float(m.group(2))) if m else (-1.0, -1.0)
+    return {
+        "passed": c_result["passed"],
+        "max_abs": max_abs,
+        "cosine": cosine,
+        "stdout": c_result["stdout"],
+    }
+
+
+# ── 模型定义 ─────────────────────────────────────────────────
+
+
+class EmbeddingBiasModel(nn.Module):
+    """单层 linear：input × W + b → output。"""
+
+    def __init__(self, k: int, n: int, *, compute_dtype: str = "fp32"):
+        super().__init__()
+        self.linear = npu(
+            nn.Linear(k, n),
+            input=_FP16, output=_FP16, weight=_FP16_NZ,
+            compute_dtype=compute_dtype,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.linear(x)
+
+
+class TwoLayerMLP(nn.Module):
+    """2 层 MLP：input → linear1 → linear2 → output。"""
+
+    def __init__(self, d: int):
+        super().__init__()
+        self.linear1 = npu(
+            nn.Linear(d, d),
+            input=_FP16, output=_FP16, weight=_FP16_NZ,
+            compute_dtype="fp32",
+        )
+        self.linear2 = npu(
+            nn.Linear(d, d),
+            input=_FP16, output=_FP16, weight=_FP16_NZ,
+            compute_dtype="fp32",
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.linear2(self.linear1(x))
+
+
+class SimpleQKModel(nn.Module):
+    """Q/K 投影 + 注意力打分：Q = Wq(x), K = Wk(x), scores = Q @ K^T。"""
+
+    def __init__(self, d: int):
+        super().__init__()
+        self.q_proj = npu(
+            nn.Linear(d, d),
+            input=_FP16, output=_FP16, weight=_FP16_NZ,
+            compute_dtype="fp32",
+        )
+        self.k_proj = npu(
+            nn.Linear(d, d),
+            input=_FP16, output=_FP16, weight=_FP16_NZ,
+            compute_dtype="fp32",
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        Q = self.q_proj(x)
+        K = self.k_proj(x)
+        return torch.bmm(Q, K.transpose(-1, -2))
+
+
+# ── ST1: embedding+bias 全放下 → bulk，C golden 通过 ────────
+
+
+class TestST1_EmbeddingBiasE2E:
+    """ST1: input[1,32,128] × W[128,128] + b → output, total≈48KB << 1M。"""
+
+    def test_compile_and_golden(self):
+        model = EmbeddingBiasModel(k=128, n=128)
+        model.eval()
+        dummy = torch.randn(1, 32, 128)
+        config_dir = _make_config_dir()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = _compile_and_validate(model, dummy, tmpdir, config_dir)
+            assert r["passed"], f"C golden 失败: {r['stdout']}"
+
+    def test_precision(self):
+        model = EmbeddingBiasModel(k=128, n=128)
+        model.eval()
+        dummy = torch.randn(1, 32, 128)
+        config_dir = _make_config_dir()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = _compile_and_validate(model, dummy, tmpdir, config_dir)
+            assert r["max_abs"] < 0.02, f"max_abs={r['max_abs']}"
+            assert r["cosine"] > 0.999, f"cosine={r['cosine']}"
+
+
+# ── ST2: embedding+bias FP16 I/O + FP32 compute → bulk ──────
+
+
+class TestST2_MixedPrecisionE2E:
+    """ST2: 同 ST1 结构，compute_dtype=fp32。"""
+
+    def test_compile_and_golden(self):
+        model = EmbeddingBiasModel(k=128, n=128, compute_dtype="fp32")
+        model.eval()
+        dummy = torch.randn(1, 32, 128)
+        config_dir = _make_config_dir()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = _compile_and_validate(model, dummy, tmpdir, config_dir)
+            assert r["passed"], f"C golden 失败: {r['stdout']}"
+
+
+# ── ST3: embedding+bias 超 L1 → MemoryPlanError ─────────────
+
+
+class TestST3_EmbeddingBiasOverflowE2E:
+    """ST3: input[1,256,512] × W[512,512], total≈1025KB > 1M。"""
+
+    def test_compile_raises_memory_error(self):
+        model = EmbeddingBiasModel(k=512, n=512)
+        model.eval()
+        dummy = torch.randn(1, 256, 512)
+        config_dir = _make_config_dir()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with pytest.raises(MemoryPlanError, match="L1 溢出"):
+                compile(
+                    model=model,
+                    dummy_input=dummy,
+                    config_dir=config_dir,
+                    output_dir=tmpdir,
+                )
+
+
+# ── ST4: 2 层 MLP 全放下 → bulk，C golden 通过 ──────────────
+
+
+class TestST4_2LayerMLPBulkE2E:
+    """ST4: 2 层 MLP，d=128，total≈89KB << 1M。"""
+
+    def test_compile_and_golden(self):
+        model = TwoLayerMLP(d=128)
+        model.eval()
+        dummy = torch.randn(1, 32, 128)
+        config_dir = _make_config_dir()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = _compile_and_validate(model, dummy, tmpdir, config_dir)
+            assert r["passed"], f"C golden 失败: {r['stdout']}"
+
+
+# ── ST5: 2 层 MLP per-op → codegen 有 bug，暂 xfail ─────────
+
+
+class TestST5_2LayerMLPPerOpE2E:
+    """ST5: 2 层 MLP，d=256，input[1,600,256]。
+
+    total≈1157KB > 1M → per-op 策略。
+    per-op codegen 有 struct 指针碰撞 bug，C golden 暂时无法通过。
+    """
+
+    @pytest.mark.xfail(reason="per-op codegen struct 指针碰撞 bug 未修复", strict=False)
+    def test_compile_and_golden(self):
+        model = TwoLayerMLP(d=256)
+        model.eval()
+        dummy = torch.randn(1, 600, 256)
+        config_dir = _make_config_dir()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r = _compile_and_validate(model, dummy, tmpdir, config_dir)
+            assert r["passed"], f"C golden 失败: {r['stdout']}"
+
+
+# ── ST6: MHA Q/K 投影溢出 → MemoryPlanError ─────────────────
+
+
+class TestST6_MHAOverflowE2E:
+    """ST6: Q/K 投影，input[1,640,256]。
+
+    q_proj peak=769KB < 1M，k_proj peak=1089KB > 1M（Q 仍存活）。
+    """
+
+    def test_compile_raises_memory_error(self):
+        model = SimpleQKModel(d=256)
+        model.eval()
+        dummy = torch.randn(1, 640, 256)
+        config_dir = _make_config_dir()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with pytest.raises(MemoryPlanError, match="L1 溢出"):
+                compile(
+                    model=model,
+                    dummy_input=dummy,
+                    config_dir=config_dir,
+                    output_dir=tmpdir,
+                )

@@ -16,7 +16,7 @@ from .._helpers import load_template, write_file
 logger = get_logger("codegen.main_emitter")
 
 
-_DEFAULT_L1_BYTES = 16 * 1024 * 1024  # 16 MB
+_DEFAULT_L1_BYTES = 1258291  # 1.2 MB
 
 
 def _extract_io(plan) -> tuple[list[Tensor], list[Tensor], int]:

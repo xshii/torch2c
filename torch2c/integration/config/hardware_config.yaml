@@ -6,7 +6,7 @@ memory:
     total_size_bytes: 33554432
     alignment_bytes: 256
   l1:
-    total_size_bytes: 16777216
+    total_size_bytes: 1258291    # 1.2 MB
     alignment_bytes: 32
 
 fractal:

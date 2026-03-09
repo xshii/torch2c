@@ -18,7 +18,7 @@ static int test_matmul_identity_fp32(void) {
     memcpy(a, vals_a, sizeof(vals_a));
     memcpy(b, vals_b, sizeof(vals_b));
     cube_matmul(TID0, TENSOR(OFF_A, NPU_DTYPE_FP32), TENSOR(OFF_B, NPU_DTYPE_FP32),
-                TENSOR(OFF_OUT, NPU_DTYPE_FP32), 1, 2, 2, 3, NPU_DTYPE_FP32);
+                TENSOR(OFF_OUT, NPU_DTYPE_FP32), 1, 2, 2, 3, 0, NPU_DTYPE_FP32);
     float* out = L1_PTR(float, OFF_OUT);
     ASSERT_FLOAT_EQ(out[0], 1.0f, 1e-6f);
     ASSERT_FLOAT_EQ(out[1], 2.0f, 1e-6f);
@@ -36,7 +36,7 @@ static int test_matmul_2x2_fp32(void) {
     memcpy(a, vals_a, sizeof(vals_a));
     memcpy(b, vals_b, sizeof(vals_b));
     cube_matmul(TID0, TENSOR(OFF_A, NPU_DTYPE_FP32), TENSOR(OFF_B, NPU_DTYPE_FP32),
-                TENSOR(OFF_OUT, NPU_DTYPE_FP32), 1, 2, 2, 2, NPU_DTYPE_FP32);
+                TENSOR(OFF_OUT, NPU_DTYPE_FP32), 1, 2, 2, 2, 0, NPU_DTYPE_FP32);
     float* out = L1_PTR(float, OFF_OUT);
     ASSERT_FLOAT_EQ(out[0], 19.0f, 1e-6f);
     ASSERT_FLOAT_EQ(out[1], 22.0f, 1e-6f);
@@ -54,7 +54,7 @@ static int test_matmul_fp16(void) {
         npu_write_from_float(L1_PTR(uint16_t, OFF_B), i, fb[i], NPU_DTYPE_FP16);
     }
     cube_matmul(TID0, TENSOR(OFF_A, NPU_DTYPE_FP16), TENSOR(OFF_B, NPU_DTYPE_FP16),
-                TENSOR(OFF_OUT, NPU_DTYPE_FP16), 1, 2, 2, 2, NPU_DTYPE_FP16);
+                TENSOR(OFF_OUT, NPU_DTYPE_FP16), 1, 2, 2, 2, 0, NPU_DTYPE_FP16);
     ASSERT_FLOAT_EQ(npu_read_as_float(L1_PTR(uint16_t, OFF_OUT), 0, NPU_DTYPE_FP16), 19.0f, 1e-1f);
     ASSERT_FLOAT_EQ(npu_read_as_float(L1_PTR(uint16_t, OFF_OUT), 1, NPU_DTYPE_FP16), 22.0f, 1e-1f);
     ASSERT_FLOAT_EQ(npu_read_as_float(L1_PTR(uint16_t, OFF_OUT), 2, NPU_DTYPE_FP16), 43.0f, 1e-1f);
@@ -67,7 +67,7 @@ static int test_matmul_1x1(void) {
     *L1_PTR(float, OFF_A) = 3.0f;
     *L1_PTR(float, OFF_B) = 4.0f;
     cube_matmul(TID0, TENSOR(OFF_A, NPU_DTYPE_FP32), TENSOR(OFF_B, NPU_DTYPE_FP32),
-                TENSOR(OFF_OUT, NPU_DTYPE_FP32), 1, 1, 1, 1, NPU_DTYPE_FP32);
+                TENSOR(OFF_OUT, NPU_DTYPE_FP32), 1, 1, 1, 1, 0, NPU_DTYPE_FP32);
     ASSERT_FLOAT_EQ(*L1_PTR(float, OFF_OUT), 12.0f, 1e-6f);
     return 1;
 }
@@ -85,7 +85,7 @@ static int test_matmul_bias_int8_fp16(void) {
 
     cube_matmul_bias(TID0, TENSOR(OFF_A, NPU_DTYPE_INT8), TENSOR(OFF_B, NPU_DTYPE_INT8),
                      TENSOR(OFF_BIAS, NPU_DTYPE_FP16), TENSOR(OFF_OUT, NPU_DTYPE_INT8),
-                     1, 2, 2, 3, NPU_DTYPE_FP16);
+                     1, 2, 2, 3, 0, NPU_DTYPE_FP16);
 
     ASSERT_FLOAT_EQ(npu_read_as_float(L1_PTR(int8_t, OFF_OUT), 0, NPU_DTYPE_INT8), 14.0f, 0.0f);
     ASSERT_FLOAT_EQ(npu_read_as_float(L1_PTR(int8_t, OFF_OUT), 1, NPU_DTYPE_INT8), 25.0f, 0.0f);
@@ -104,7 +104,7 @@ static int test_matmul_bias_fp16_precision_loss(void) {
 
     cube_matmul_bias(TID0, TENSOR(OFF_A, NPU_DTYPE_INT8), TENSOR(OFF_B, NPU_DTYPE_INT8),
                      TENSOR(OFF_BIAS, NPU_DTYPE_FP16), TENSOR(OFF_OUT, NPU_DTYPE_INT8),
-                     1, 1, 1, 4, NPU_DTYPE_FP16);
+                     1, 1, 1, 4, 0, NPU_DTYPE_FP16);
 
     ASSERT_FLOAT_EQ(npu_read_as_float(L1_PTR(int8_t, OFF_OUT), 0, NPU_DTYPE_INT8), 127.0f, 0.0f);
     return 1;
@@ -123,7 +123,7 @@ static int test_matmul_bias_int8_fp32(void) {
 
     cube_matmul_bias(TID0, TENSOR(OFF_A, NPU_DTYPE_INT8), TENSOR(OFF_B, NPU_DTYPE_INT8),
                      TENSOR(OFF_BIAS, NPU_DTYPE_FP32), TENSOR(OFF_OUT, NPU_DTYPE_INT8),
-                     1, 2, 2, 3, NPU_DTYPE_FP32);
+                     1, 2, 2, 3, 0, NPU_DTYPE_FP32);
 
     ASSERT_FLOAT_EQ(npu_read_as_float(L1_PTR(int8_t, OFF_OUT), 0, NPU_DTYPE_INT8), 14.0f, 0.0f);
     ASSERT_FLOAT_EQ(npu_read_as_float(L1_PTR(int8_t, OFF_OUT), 1, NPU_DTYPE_INT8), 25.0f, 0.0f);
@@ -142,7 +142,7 @@ static int test_matmul_bias_fp16_io_fp16_compute(void) {
 
     cube_matmul_bias(TID0, TENSOR(OFF_A, NPU_DTYPE_FP16), TENSOR(OFF_B, NPU_DTYPE_FP16),
                      TENSOR(OFF_BIAS, NPU_DTYPE_FP16), TENSOR(OFF_OUT, NPU_DTYPE_FP16),
-                     1, 1, 1, 2, NPU_DTYPE_FP16);
+                     1, 1, 1, 2, 0, NPU_DTYPE_FP16);
 
     float result = npu_read_as_float(L1_PTR(uint16_t, OFF_OUT), 0, NPU_DTYPE_FP16);
     ASSERT_FLOAT_EQ(result, 24000.0f, 16.0f);

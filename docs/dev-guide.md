@@ -165,7 +165,7 @@ c_mock_trace:
 ```
 ┌────────────────────────────────────────┐
 │ ST (System Test)                       │  ← 端到端编译+C执行+精度比对
-│   integration/demo/demo_st/            │     pytest -m "not slow"
+│   integration/tests/demo_st/            │     pytest -m "not slow"
 ├────────────────────────────────────────┤
 │ IT (Integration Test)                  │  ← 多 Pass 串联语义验证
 │   integration/tests/test_pipeline.py   │
@@ -230,7 +230,7 @@ pytest torch2c/memory_planner/tests/ -v
 pytest torch2c/integration/tests/ -v
 
 # 系统测试
-pytest torch2c/integration/demo/demo_st/ -v
+pytest torch2c/integration/tests/demo_st/ -v
 
 # C mock 测试
 cd npu_cpu_mock && cmake -B build && cmake --build build && cd build && ctest -V

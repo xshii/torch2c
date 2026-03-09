@@ -76,8 +76,8 @@ static inline void npu_write_compute(void* buf, int index, float value,
 }
 
 /* ---- cube compute ops ---- */
-void cube_matmul(TidInfo tid, npu_tensor_t a, npu_tensor_t b, npu_tensor_t out, int loop, int m, int n, int k, npu_dtype_t compute_dtype);
-void cube_matmul_bias(TidInfo tid, npu_tensor_t a, npu_tensor_t b, npu_tensor_t bias, npu_tensor_t out, int loop, int m, int n, int k, npu_dtype_t compute_dtype);
+void cube_matmul(TidInfo tid, npu_tensor_t a, npu_tensor_t b, npu_tensor_t out, int loop, int m, int n, int k, int transpose_b, npu_dtype_t compute_dtype);
+void cube_matmul_bias(TidInfo tid, npu_tensor_t a, npu_tensor_t b, npu_tensor_t bias, npu_tensor_t out, int loop, int m, int n, int k, int transpose_b, npu_dtype_t compute_dtype);
 
 /* ---- vector: arithmetic ---- */
 void vector_add(TidInfo tid, npu_tensor_t a, npu_tensor_t b, npu_tensor_t out, int count, npu_dtype_t compute_dtype);

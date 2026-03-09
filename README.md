@@ -211,8 +211,8 @@ python -m torch2c.main
 # 1. 图捕获
 python -m torch2c.graph_capture.demo.run_demo
 
-# 2. 端到端流水线
-python -m torch2c.integration.demo.run_full_demo
+# 2. 端到端 ST 测试
+pytest torch2c/integration/tests/demo_st/ -v
 ```
 
 ### 验证生成的C工程
