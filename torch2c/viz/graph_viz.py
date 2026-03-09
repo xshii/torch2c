@@ -37,6 +37,7 @@ class ScheduledOp:
     duration: int
     tid: int
     deps: list[str] = field(default_factory=list)
+    is_summary: bool = False  # tiled op 的 summary 条，仅供 lifetime_viz 时间查找
 
 
 def _estimate_dma_cost(size_bytes: int) -> int:
@@ -200,6 +201,7 @@ def _schedule_tiled_op(
             lane="dma", lane_idx=_LANE_INDEX["dma"],
             start=first_load_start, end=first_load_end,
             duration=first_load_end - first_load_start, tid=0,
+            is_summary=True,
         ))
 
     # DMA store summary（最后一个 tile store）
@@ -219,6 +221,7 @@ def _schedule_tiled_op(
             lane="dma", lane_idx=_LANE_INDEX["dma"],
             start=last_store_start, end=last_store_end,
             duration=last_store_end - last_store_start, tid=0,
+            is_summary=True,
         ))
 
     # Compute summary（覆盖所有 tile 的计算范围）
@@ -227,6 +230,7 @@ def _schedule_tiled_op(
         lane=cu, lane_idx=_LANE_INDEX[cu],
         start=first_comp_start or 0, end=last_comp_end or 0,
         duration=(last_comp_end or 0) - (first_comp_start or 0), tid=node.task_id,
+        is_summary=True,
     ))
 
 
@@ -333,6 +337,8 @@ def render_schedule(
 
     bars = []
     for o in ops:
+        if o.is_summary:
+            continue  # summary 条仅供 lifetime_viz，不在甘特图中显示
         node = graph.nodes.get(o.nid)
         if node:
             ins = [{"id": tid, "desc": _tensor_desc(tid)} for tid in node.inputs]
@@ -411,7 +417,7 @@ function renderItem(params, api) {{
     return rect && {{
         type: 'rect',
         shape: {{ x: rect.x, y: rect.y, width: rect.width, height: rect.height, r: 3 }},
-        style: api.style(),
+        style: Object.assign({{}}, api.style(), {{ stroke: '#333', lineWidth: 0.5 }}),
         textContent: {{
             style: {{
                 text: barW > 30 ? api.value(3) : '',
