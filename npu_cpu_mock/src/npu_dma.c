@@ -127,3 +127,20 @@ void idma_concat(TidInfo tid, const npu_tensor_t* inputs, const int* counts,
 
     NPU_TRACE_END("idma_concat", tid, args, 1);
 }
+
+void idma_slice(TidInfo tid, npu_tensor_t input, npu_tensor_t out,
+                int dim, int start, int size) {
+    /* Simplified: assume contiguous slice on last dim or memcpy for now.
+       For dim=-1 or dim=last: copy 'size' elements starting from 'start'. */
+    int out_count = size;
+    npu_debug_tensor_arg_t args[] = {
+        NPU_DBG_T(input, input, out_count), NPU_DBG_T(out, out, out_count)
+    };
+    NPU_TRACE_BEGIN("idma_slice", tid, args, 2);
+
+    size_t elem_sz = npu_dtype_size(input.dtype);
+    const char* src = (const char*)npu_t_ptr(input) + (size_t)start * elem_sz;
+    memcpy(npu_t_ptr(out), src, (size_t)size * elem_sz);
+
+    NPU_TRACE_END("idma_slice", tid, args, 2);
+}

@@ -176,13 +176,35 @@ class TestParallelOpportunity:
         assert "node_a" not in g.nodes["node_b"].dependencies
 
 
-class TestSameUnitSerialized:
-    def test_same_unit_serialized(self):
-        """两个无依赖的相同 compute_unit 算子串行化。"""
+class TestSameUnitNoSharedTensor:
+    def test_same_unit_no_shared_parallel(self):
+        """同 compute_unit 但无共享 tensor → 可并行（无结构冒险）。"""
         g = _make_same_unit_graph()
         g = run(g)
 
-        # node_b 应依赖 node_a（同 compute_unit 串行）
+        # node_b 不依赖 node_a（无共享 tensor）
+        assert "node_a" not in g.nodes["node_b"].dependencies
+
+    def test_same_unit_shared_tensor_serialized(self):
+        """同 compute_unit + 共享 tensor → 结构冒险，需串行。"""
+        g = Graph()
+        shared = Tensor(id="shared", shape=[1, 32, 64], dtype="fp16",
+                        is_model_input=True, consumer_node_ids=["node_a", "node_b"])
+        g.add_tensor(shared)
+        g.add_tensor(Tensor(id="out_a", shape=[1, 32, 64], dtype="fp16",
+                            producer_node_id="node_a", is_model_output=True))
+        g.add_tensor(Tensor(id="out_b", shape=[1, 32, 64], dtype="fp16",
+                            producer_node_id="node_b", is_model_output=True))
+        g.add_node(Node(id="node_a", op_type="vector_add", inputs=["shared"],
+                        outputs=["out_a"], compute_unit="vector",
+                        npu_op="vector_add", is_mapped=True))
+        g.add_node(Node(id="node_b", op_type="vector_gelu", inputs=["shared"],
+                        outputs=["out_b"], compute_unit="vector",
+                        npu_op="vector_gelu", is_mapped=True))
+        g.execution_order = ["node_a", "node_b"]
+        g = run(g)
+
+        # node_b 应依赖 node_a（同 vector 单元 + 共享 shared tensor）
         assert "node_a" in g.nodes["node_b"].dependencies
 
 

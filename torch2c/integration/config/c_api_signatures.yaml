@@ -280,3 +280,12 @@ idma_ops:
       - { name: "counts", type: "int_array",         source: "tensor.input_counts" }
       - { name: "num_inputs", type: "int",            source: "tensor.num_inputs" }
       - { name: "out",   type: "tensor_desc",        source: "tensor.output_0" }
+
+  idma_slice:
+    unit: idma
+    params:
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "dim",   type: "int",         source: "param.dim" }
+      - { name: "start", type: "int",         source: "param.start" }
+      - { name: "size",  type: "int",         source: "param.slice_size" }

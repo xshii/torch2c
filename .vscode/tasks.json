@@ -35,6 +35,17 @@
       "group": "test"
     },
     {
+      "label": "demo:st6",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/pytest",
+      "args": [
+        "torch2c/integration/tests/demo_st/test_st_scenarios.py::TestST6_MHATiledE2E",
+        "-v", "--tb=short", "-s"
+      ],
+      "detail": "ST6 MHA tiled 场景单独运行",
+      "group": "test"
+    },
+    {
       "label": "demo:viz",
       "type": "shell",
       "command": "${workspaceFolder}/.venv/bin/python",

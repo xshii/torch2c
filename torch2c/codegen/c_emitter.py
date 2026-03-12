@@ -17,6 +17,7 @@ from ._struct_gen import (
     _gen_dim_macros, _gen_spec_macro_defs, _gen_tensor_struct_init,
     _gen_tensor_struct_typedef,
 )
+from ._tiled_emitter import gen_tiled_op_block
 
 logger = get_logger("codegen.c_emitter")
 _C_INCLUDES = (
@@ -121,7 +122,13 @@ class SourceResolver:
             return FORMAT_MAP.get(t.format or "nd", "NPU_FORMAT_ND")
         if field == "shape":
             shape = t.shape
-            return self._dim_replace.get(shape[int(extra[0])], str(shape[int(extra[0])])) if extra else str(shape)
+            if extra:
+                idx = int(extra[0])
+                if idx < -len(shape) or idx >= len(shape):
+                    raise CodegenError(
+                        f"shape 索引越界: {t.id}.shape[{idx}], shape={shape}")
+                return self._dim_replace.get(shape[idx], str(shape[idx]))
+            return str(shape)
         if field == "ndim":
             return str(len(t.shape))
         if field == "elem_count":
@@ -193,23 +200,6 @@ def _gen_dma_line(instr: dict) -> str:
 def _gen_dma_block(instructions: list[dict], indent: str = "    ") -> str:
     return "\n".join(f"{indent}{_gen_dma_line(i)}" for i in instructions)
 
-def _gen_tiled_dma_line(instr: dict, var: str = "_tile") -> str:
-    """生成 tiled DMA 调用：HBM 偏移随 tile 索引偏移。"""
-    dt = DTYPE_C_ENUM_MAP.get(instr.get("dtype", "fp16"), "NPU_DTYPE_FP16")
-    sf = FORMAT_MAP.get(instr.get("src_format", "nd"), "NPU_FORMAT_ND")
-    df = FORMAT_MAP.get(instr.get("dst_format", "nd"), "NPU_FORMAT_ND")
-    l1o, ho, sz = instr["l1_offset"], instr["hbm_offset"], instr["size_bytes"]
-    stride = instr["tile_stride"]
-    hbm_expr = f"hbm + {ho} + {var} * {stride}"
-    if instr["op"] == "load":
-        dst = f"(npu_tensor_t){{l1 + {l1o}, {dt}, {df}}}"
-        src = f"(npu_tensor_t){{{hbm_expr}, {dt}, {sf}}}"
-    else:
-        dst = f"(npu_tensor_t){{{hbm_expr}, {dt}, {df}}}"
-        src = f"(npu_tensor_t){{l1 + {l1o}, {dt}, {sf}}}"
-    return f"dma_move((TidInfo){{0}}, {dst}, {src}, {sz});"
-
-
 def gen_op_block(node: Node, tensors: dict[str, Tensor], dma_plan: dict,
                  signatures: dict, c_names=None, struct_prefix="",
                  dim_replace=None) -> str:
@@ -223,9 +213,10 @@ def gen_op_block(node: Node, tensors: dict[str, Tensor], dma_plan: dict,
     l1_layout = dma_plan.get("l1_layout")
 
     if tile_info:
-        return _gen_tiled_op_block(
+        return gen_tiled_op_block(
             node, tensors, dma_plan, sig, npu_op, tile_info,
             c_names, struct_prefix, dim_replace, l1_layout,
+            _gen_dma_line, _gen_op_call,
         )
 
     op_call = _gen_op_call(npu_op, sig, node, tensors, c_names, struct_prefix, dim_replace,
@@ -238,70 +229,6 @@ def gen_op_block(node: Node, tensors: dict[str, Tensor], dma_plan: dict,
     lines.append(f"    {op_call};")
     if stores:
         lines.append(stores)
-    return "\n".join(lines)
-
-
-def _gen_tiled_op_block(
-    node, tensors, dma_plan, sig, npu_op, tile_info,
-    c_names, struct_prefix, dim_replace, l1_layout=None,
-) -> str:
-    """生成 tiled 算子代码：untiled DMA → for 循环 { tiled DMA + op + tiled DMA }。"""
-    num_tiles = tile_info["num_tiles"]
-    tile_size = tile_info["tile_size"]
-    tiled_tids = set(tile_info.get("tiled_tensors", {}).keys())
-    indent, indent2 = "    ", "        "
-
-    # 分离 tiled / untiled DMA 指令
-    untiled_loads, tiled_loads = [], []
-    for instr in dma_plan.get("loads", []):
-        (tiled_loads if instr.get("tile_stride") else untiled_loads).append(instr)
-
-    untiled_stores, tiled_stores = [], []
-    for instr in dma_plan.get("stores", []):
-        (tiled_stores if instr.get("tile_stride") else untiled_stores).append(instr)
-
-    lines = [f"{indent}/* === {node.id}: {npu_op} ({node.compute_unit or '?'})"
-             f" tiled {tile_info['original_size']}→{num_tiles}×{tile_size} === */"]
-
-    # untiled loads (before loop)
-    for instr in untiled_loads:
-        lines.append(f"{indent}{_gen_dma_line(instr)}")
-
-    # 临时修改 tiled tensor 的 shape + hbm_size 以正确解析 op 参数
-    saved_attrs: dict[str, tuple[list[int], int | None]] = {}
-    for tid, dim_idx in tile_info.get("tiled_tensors", {}).items():
-        t = tensors.get(tid)
-        if t:
-            saved_attrs[tid] = (list(t.shape), t.hbm_size)
-            t.shape = list(t.shape)
-            t.shape[dim_idx] = tile_size
-            t.hbm_size = None  # 清除以触发从 shape 重新计算
-
-    op_call = _gen_op_call(npu_op, sig, node, tensors, c_names, struct_prefix, dim_replace,
-                           l1_layout)
-
-    # 恢复原始 shape + hbm_size
-    for tid, (shape, hbm_size) in saved_attrs.items():
-        tensors[tid].shape = shape
-        tensors[tid].hbm_size = hbm_size
-
-    # for loop
-    lines.append(f"{indent}for (int _tile = 0; _tile < {num_tiles}; _tile++) {{")
-
-    for instr in tiled_loads:
-        lines.append(f"{indent2}{_gen_tiled_dma_line(instr)}")
-
-    lines.append(f"{indent2}{op_call};")
-
-    for instr in tiled_stores:
-        lines.append(f"{indent2}{_gen_tiled_dma_line(instr)}")
-
-    lines.append(f"{indent}}}")
-
-    # untiled stores (after loop)
-    for instr in untiled_stores:
-        lines.append(f"{indent}{_gen_dma_line(instr)}")
-
     return "\n".join(lines)
 
 def _gen_bulk_dma(dma_plan: dict, label: str) -> str:

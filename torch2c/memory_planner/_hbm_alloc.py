@@ -21,6 +21,12 @@ def analyze_lifetimes(graph: Graph) -> dict[str, tuple[int, int]]:
         order_map[nid] = idx
     max_order = len(graph.execution_order) - 1
 
+    # 构建 tensor → 吸收它的节点 映射（absorbed tensor 也算消费者）
+    absorbed_consumers: dict[str, list[str]] = {}
+    for nid, node in graph.nodes.items():
+        for atid in node.absorbed_inputs.values():
+            absorbed_consumers.setdefault(atid, []).append(nid)
+
     lifetimes: dict[str, tuple[int, int]] = {}
     for tid, t in graph.tensors.items():
         if t.storage in ("local", "pipe"):
@@ -33,10 +39,13 @@ def analyze_lifetimes(graph: Graph) -> dict[str, tuple[int, int]]:
         else:
             first_use = 0
 
+        # 合并 consumer_node_ids 和 absorbed_inputs 中的消费者
+        all_consumers = list(t.consumer_node_ids) + absorbed_consumers.get(tid, [])
+
         if t.is_model_output:
             last_use = max_order
-        elif t.consumer_node_ids:
-            consumer_orders = [order_map[c] for c in t.consumer_node_ids if c in order_map]
+        elif all_consumers:
+            consumer_orders = [order_map[c] for c in all_consumers if c in order_map]
             if consumer_orders:
                 last_use = max(consumer_orders)
             else:

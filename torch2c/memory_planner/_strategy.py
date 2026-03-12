@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from torch2c.common import Graph, MemoryPlanError, get_logger
 
+from torch2c.common import dtype_bytes
+
 from ._dma import DmaPlan, DmaInstruction, build_dma_plan, build_bulk_dma
 from ._hbm_alloc import allocate_hbm, analyze_lifetimes
 from ._l1_alloc import allocate_l1_global, build_per_op_l1_layouts, collect_op_tensors
@@ -17,6 +19,29 @@ from ._tiling import analyze_tiling
 from ._utils import align_up, calc_padded_size
 
 logger = get_logger("memory_planner.strategy")
+
+
+def _set_tile_stride(instr: DmaInstruction, t, dim_idx: int, tile_size: int,
+                     cube_size: int) -> None:
+    """设置 tiled DMA 的步长信息，含 batch > 1 的 per-batch stride。"""
+    inner = 1
+    for d in t.shape[dim_idx + 1:]:
+        inner *= d
+    instr.tile_stride = tile_size * inner * dtype_bytes(t.dtype)
+
+    # batch > 1 且 tiled dim 不是 dim 0 → HBM 非连续，需 per-batch DMA
+    batch_count = 1
+    for d in t.shape[:dim_idx]:
+        batch_count *= d
+    if batch_count > 1:
+        per_batch_orig = list(t.shape[dim_idx:])
+        per_batch_tiled = list(per_batch_orig)
+        per_batch_tiled[0] = tile_size
+        instr.batch_count = batch_count
+        instr.hbm_batch_stride = calc_padded_size(
+            per_batch_orig, t.dtype, t.format, cube_size)
+        instr.l1_batch_stride = calc_padded_size(
+            per_batch_tiled, t.dtype, t.format, cube_size)
 
 
 # ── 策略 1：Bulk（全部 tensor 同时放 L1）──────────────────
@@ -107,6 +132,7 @@ def strategy_spill(
     l1_cap: int,
     hbm_align: int,
     cube_size: int,
+    tile_override: dict | None = None,
 ) -> tuple[bool, list[DmaPlan]]:
     """Selective spill: 只驱逐导致 L1 超限的 tensor，保留可复用的。
 
@@ -122,7 +148,7 @@ def strategy_spill(
     )
 
     # ③ 检查单算子是否仍超限 → tiling
-    tile_map = analyze_tiling(graph, l1_cap, l1_align, cube_size)
+    tile_map = analyze_tiling(graph, l1_cap, l1_align, cube_size, tile_override)
 
     # ③b 检查 overflow 但不可 tile 的节点（应抛错）
     for op_idx, nid in enumerate(graph.execution_order):
@@ -147,12 +173,14 @@ def strategy_spill(
         allocate_hbm(graph, lifetimes, hbm_align, cube_size)
         logger.info("降级 %d 个 local tensor 为 hbm: %s", len(demoted_tids), demoted_tids)
 
-    # ④ 对需要 tiling 的节点，重新构建独立 L1 layout
+    # ④ 对需要 tiling 的节点，重新构建独立 L1 layout（含多级缓冲）
     for nid in list(tile_map):
         op_idx = graph.execution_order.index(nid)
         tile_info = tile_map[nid]
         l1_offset = 0
         l1_layout: dict[str, int] = {}
+        # 记录每个 tiled tensor 的单份大小，用于分配额外缓冲
+        tiled_sizes: dict[str, int] = {}
         for tid in collect_op_tensors(graph, nid):
             t = graph.tensors.get(tid)
             if not t or t.storage == "pipe":
@@ -164,9 +192,21 @@ def strategy_spill(
                 tiled_shape = list(t.shape)
                 tiled_shape[dim_idx] = tile_info.tile_size
                 size = calc_padded_size(tiled_shape, t.dtype, t.format, cube_size)
+                tiled_sizes[tid] = align_up(size, l1_align)
             else:
                 size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
             l1_offset += align_up(size, l1_align)
+
+        # 分配额外缓冲副本（buf 1 = ping 已在上面分配，buf 2..N 追加）
+        extra_l1_offsets: list[dict[str, int]] = []
+        for buf_idx in range(1, tile_info.num_buffers):
+            buf_offsets: dict[str, int] = {}
+            for tid, sz in tiled_sizes.items():
+                l1_offset = align_up(l1_offset, l1_align)
+                buf_offsets[tid] = l1_offset
+                l1_offset += sz
+            extra_l1_offsets.append(buf_offsets)
+
         if l1_offset > l1_cap:
             raise MemoryPlanError(
                 f"L1 溢出: 节点 {nid} tiled 后仍超限 ({l1_offset} > {l1_cap})"
@@ -178,6 +218,8 @@ def strategy_spill(
             t = graph.tensors.get(tid)
             if t:
                 t.l1_offset = off
+        # 保存额外缓冲偏移供后续写入 tile_info
+        tile_info._extra_l1_offsets = extra_l1_offsets
 
     # ⑤ 生成 DMA 计划
     dma_plans: list[DmaPlan] = []
@@ -207,13 +249,17 @@ def strategy_spill(
         tile_info = tile_map.get(nid)
         if tile_info:
             node = graph.nodes[nid]
-            node.params["_tile_info"] = {
+            ti_dict: dict = {
                 "tile_dim": tile_info.tile_dim,
                 "tile_size": tile_info.tile_size,
                 "num_tiles": tile_info.num_tiles,
                 "original_size": tile_info.original_size,
                 "tiled_tensors": tile_info.tiled_tensors,
+                "num_buffers": tile_info.num_buffers,
             }
+            if tile_info.num_buffers > 1:
+                ti_dict["extra_l1_offsets"] = tile_info._extra_l1_offsets
+            node.params["_tile_info"] = ti_dict
             for instr in plan.loads + plan.stores:
                 if instr.tensor_id in tile_info.tiled_tensors:
                     t = graph.tensors[instr.tensor_id]
@@ -223,11 +269,7 @@ def strategy_spill(
                     instr.size_bytes = calc_padded_size(
                         tiled_shape, t.dtype, t.format, cube_size,
                     )
-                    inner = 1
-                    for d in t.shape[dim_idx + 1:]:
-                        inner *= d
-                    from torch2c.common import dtype_bytes
-                    instr.tile_stride = tile_info.tile_size * inner * dtype_bytes(t.dtype)
+                    _set_tile_stride(instr, t, dim_idx, tile_info.tile_size, cube_size)
             plan.tile_info = node.params["_tile_info"]
 
         dma_plans.append(plan)
@@ -251,6 +293,7 @@ def strategy_tiled(
     l1_cap: int,
     hbm_align: int,
     cube_size: int,
+    tile_override: dict | None = None,
 ) -> tuple[bool, list[DmaPlan]]:
     """Per-op eviction + M 维 tiling。
 
@@ -268,7 +311,7 @@ def strategy_tiled(
     allocate_hbm(graph, lifetimes, hbm_align, cube_size)
 
     # ② 分析需要 tiling 的节点
-    tile_map = analyze_tiling(graph, l1_cap, l1_align, cube_size)
+    tile_map = analyze_tiling(graph, l1_cap, l1_align, cube_size, tile_override)
 
     # ③ per-op eviction L1 分配 + DMA 计划
     dma_plans: list[DmaPlan] = []
@@ -279,6 +322,7 @@ def strategy_tiled(
         # 为当前算子构建独立 L1 layout（从 0 开始）
         l1_offset = 0
         l1_layout: dict[str, int] = {}
+        tiled_sizes: dict[str, int] = {}
         for tid in collect_op_tensors(graph, nid):
             t = graph.tensors.get(tid)
             if not t or t.storage == "pipe":
@@ -291,9 +335,21 @@ def strategy_tiled(
                 tiled_shape = list(t.shape)
                 tiled_shape[dim_idx] = tile_info.tile_size
                 size = calc_padded_size(tiled_shape, t.dtype, t.format, cube_size)
+                tiled_sizes[tid] = align_up(size, l1_align)
             else:
                 size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
             l1_offset += align_up(size, l1_align)
+
+        # 分配额外缓冲副本
+        extra_l1_offsets: list[dict[str, int]] = []
+        if tile_info and tile_info.num_buffers > 1:
+            for buf_idx in range(1, tile_info.num_buffers):
+                buf_offsets: dict[str, int] = {}
+                for tid, sz in tiled_sizes.items():
+                    l1_offset = align_up(l1_offset, l1_align)
+                    buf_offsets[tid] = l1_offset
+                    l1_offset += sz
+                extra_l1_offsets.append(buf_offsets)
 
         if l1_offset > l1_cap:
             raise MemoryPlanError(
@@ -312,13 +368,17 @@ def strategy_tiled(
 
         # 为 tiled 算子调整 DMA 指令的 size + 记录 tile_stride
         if tile_info:
-            node.params["_tile_info"] = {
+            ti_dict: dict = {
                 "tile_dim": tile_info.tile_dim,
                 "tile_size": tile_info.tile_size,
                 "num_tiles": tile_info.num_tiles,
                 "original_size": tile_info.original_size,
                 "tiled_tensors": tile_info.tiled_tensors,
+                "num_buffers": tile_info.num_buffers,
             }
+            if tile_info.num_buffers > 1:
+                ti_dict["extra_l1_offsets"] = extra_l1_offsets
+            node.params["_tile_info"] = ti_dict
             for instr in plan.loads + plan.stores:
                 if instr.tensor_id in tile_info.tiled_tensors:
                     t = graph.tensors[instr.tensor_id]
@@ -328,12 +388,7 @@ def strategy_tiled(
                     instr.size_bytes = calc_padded_size(
                         tiled_shape, t.dtype, t.format, cube_size,
                     )
-                    # tile_stride = 沿切分维度每个 tile 的 HBM 字节偏移
-                    inner = 1
-                    for d in t.shape[dim_idx + 1:]:
-                        inner *= d
-                    from torch2c.common import dtype_bytes
-                    instr.tile_stride = tile_info.tile_size * inner * dtype_bytes(t.dtype)
+                    _set_tile_stride(instr, t, dim_idx, tile_info.tile_size, cube_size)
             plan.tile_info = node.params["_tile_info"]
 
         dma_plans.append(plan)

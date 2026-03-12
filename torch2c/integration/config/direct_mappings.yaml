@@ -86,3 +86,9 @@ mappings:
   aten.clone.default:
     npu_op: idma_move
     compute_unit: idma
+  aten.slice.Tensor:
+    npu_op: idma_slice
+    compute_unit: idma
+  aten.cat.default:
+    npu_op: idma_concat
+    compute_unit: idma

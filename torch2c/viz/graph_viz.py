@@ -112,7 +112,15 @@ def _schedule_tiled_op(
     node, nid: str, cu: str, dp, costs: dict,
     num_tiles: int, bulk_load,
 ) -> None:
-    """调度 tiled 算子：每个 tile 独立 load → compute → store。"""
+    """调度 tiled 算子：每个 tile 独立 load → compute → store。
+
+    num_buffers > 1 时使用流水线依赖：load_t{i+1} 不等 store_t{i}，
+    而是等 load_t{i}（DMA lane 串行）+ 缓冲释放（store_t{i-num_buffers+1}）。
+    """
+    tile_info = dp.tile_info if dp else None
+    num_buffers = tile_info.get("num_buffers", 1) if tile_info else 1
+    pipelined = num_buffers > 1
+
     per_tile_cost = max(1, costs.get(nid, 1) // num_tiles)
     load_size = sum(inst.size_bytes for inst in dp.loads) if dp and dp.loads else 0
     store_size = sum(inst.size_bytes for inst in dp.stores) if dp and dp.stores else 0
@@ -127,9 +135,21 @@ def _schedule_tiled_op(
     first_comp_start = None
     last_store_end = None
     last_comp_end = None
+    # 流水线用：记录每个 tile 的 store nid，用于缓冲释放依赖
+    store_nids: list[str] = []
 
     for ti in range(num_tiles):
-        tile_dep = dep_ready if ti == 0 else op_end.get(prev_store_nid, dep_ready)
+        if pipelined:
+            # 流水线依赖：load_t{i} 只等 DMA lane + 缓冲释放
+            # 缓冲释放 = store_t{i - num_buffers + 1} 完成
+            buf_release_idx = ti - num_buffers + 1
+            if buf_release_idx >= 0 and buf_release_idx < len(store_nids):
+                tile_dep = op_end.get(store_nids[buf_release_idx], dep_ready)
+            else:
+                tile_dep = dep_ready
+        else:
+            # 单缓冲：load_t{i} 等 store_t{i-1}
+            tile_dep = dep_ready if ti == 0 else op_end.get(prev_store_nid, dep_ready)
 
         # load
         load_nid = f"__dma_load_{nid}_t{ti}"
@@ -139,7 +159,10 @@ def _schedule_tiled_op(
             end = start + dur
             lane_end["dma"] = end
             op_end[load_nid] = end
-            ldeps = list(node.dependencies) if ti == 0 else [prev_store_nid]
+            if pipelined:
+                ldeps = list(node.dependencies) if ti == 0 else [f"__dma_load_{nid}_t{ti-1}"]
+            else:
+                ldeps = list(node.dependencies) if ti == 0 else [prev_store_nid]
             scheduled.append(ScheduledOp(
                 nid=load_nid, op=f"tile{ti}_load",
                 lane="dma", lane_idx=_LANE_INDEX["dma"],
@@ -182,8 +205,10 @@ def _schedule_tiled_op(
             ))
             prev_store_nid = store_nid
             last_store_end = end
+            store_nids.append(store_nid)
         else:
             prev_store_nid = comp_nid
+            store_nids.append(comp_nid)
 
     # ── 添加 summary ScheduledOp 供 lifetime_viz 查找时间 ──
     # 计算 summary：base nid 覆盖整个 tiled op 时间范围
@@ -324,7 +349,13 @@ def render_schedule(
         return "<html><body>No ops</body></html>"
 
     max_time = max(o.end for o in ops)
-    op_map = {o.nid: o for o in ops}
+    # op_map: 非 summary 优先，summary 仅在无 per-tile 条目时补位
+    op_map: dict[str, ScheduledOp] = {}
+    for o in ops:
+        if o.is_summary:
+            op_map.setdefault(o.nid, o)  # 仅在 nid 不存在时填充
+        else:
+            op_map[o.nid] = o
 
     def _tensor_desc(tid: str) -> str:
         t = graph.tensors.get(tid)
@@ -352,9 +383,11 @@ def render_schedule(
             "ins": ins, "outs": outs,
         })
 
-    # 依赖线
+    # 依赖线（跳过 summary → summary，per-tile 箭头独立展示）
     deps = []
     for o in ops:
+        if o.is_summary:
+            continue  # summary 条不生成出向箭头
         for dep_nid in o.deps:
             dep = op_map.get(dep_nid)
             if dep:

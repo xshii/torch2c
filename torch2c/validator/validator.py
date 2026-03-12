@@ -21,7 +21,11 @@ def run(graph: Graph, config: dict) -> Graph:
 
     for node in graph.nodes.values():
         if node.npu_op not in supported:
-            unsupported.append(f"{node.id}: {node.op_type} (npu_op={node.npu_op})")
+            # 附加模型层路径以帮助定位源码
+            loc = f" [{node.module_path}]" if node.module_path else ""
+            unsupported.append(
+                f"{node.id}: {node.op_type} (npu_op={node.npu_op}){loc}"
+            )
 
     if unsupported:
         raise ValidationError(f"以下算子未映射: {unsupported}")

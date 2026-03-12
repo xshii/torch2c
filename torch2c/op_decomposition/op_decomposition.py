@@ -54,21 +54,45 @@ def run(graph: Graph, config: dict) -> Graph:
     return graph
 
 
+def _resolve_inter_shape(
+    step: dict, input_shape: list[int],
+) -> list[int]:
+    """解析 step 的 inter_shape 规则，返回中间 tensor 的实际 shape。
+
+    支持的规则格式:
+      - 省略 / null: 继承输入 shape（默认行为）
+      - "reduce_last": 最后一维变为 1（如 mean/variance）
+      - [1, -1, 1]: -1 表示继承输入对应维度
+    """
+    rule = step.get("inter_shape")
+    if rule is None:
+        return list(input_shape)
+    if rule == "reduce_last":
+        s = list(input_shape)
+        if s:
+            s[-1] = 1
+        return s
+    if isinstance(rule, list):
+        return [input_shape[i] if d == -1 else d for i, d in enumerate(rule)]
+    return list(input_shape)
+
+
 def _create_intermediates(
     graph: Graph, node: Node, steps: list[dict],
 ) -> tuple[list[str], list[int], str]:
     """创建中间 tensor（steps 之间各一个），返回 (intermediate_tids, inter_shape, inter_dtype)。"""
     first_input_tid = node.inputs[0] if node.inputs else None
     first_input = graph.get_tensor(first_input_tid) if first_input_tid else None
-    inter_shape = list(first_input.shape) if first_input else [1]
+    input_shape = list(first_input.shape) if first_input else [1]
     inter_dtype = first_input.dtype if first_input else "fp16"
 
     intermediates: list[str] = []
     for i in range(len(steps) - 1):
         tid = f"{node.id}_inter_{i}"
+        inter_shape = _resolve_inter_shape(steps[i], input_shape)
         graph.add_tensor(Tensor(id=tid, shape=list(inter_shape), dtype=inter_dtype))
         intermediates.append(tid)
-    return intermediates, inter_shape, inter_dtype
+    return intermediates, input_shape, inter_dtype
 
 
 def _build_step_nodes(

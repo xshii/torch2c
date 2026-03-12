@@ -12,7 +12,7 @@ DMA 计划见 _dma.py，工具函数见 _utils.py。
 
 from __future__ import annotations
 
-from torch2c.common import Graph, get_logger, memory_layout_enabled
+from torch2c.common import Graph, MemoryPlanError, get_logger, memory_layout_enabled
 
 from ._dma import DmaPlan
 from ._strategy import strategy_bulk, strategy_perop, strategy_spill, strategy_tiled
@@ -90,6 +90,7 @@ def run(graph: Graph, config: dict) -> tuple[Graph, list[DmaPlan]]:
     l1_align = mem["l1"]["alignment_bytes"]
     l1_cap = mem["l1"]["total_size_bytes"]
     cube_size = config["fractal"]["cube_size"]
+    tile_override = config.get("tile_override")
 
     if not graph.execution_order:
         graph.execution_order = graph.topo_sort()
@@ -99,19 +100,23 @@ def run(graph: Graph, config: dict) -> tuple[Graph, list[DmaPlan]]:
             t.hbm_offset = None
             t.hbm_size = None
             t.l1_offset = None
+        for n in graph.nodes.values():
+            n.params.pop("_tile_info", None)
 
     # 依次尝试策略，第一个成功的生效
     ok, dma_plans = strategy_bulk(graph, l1_align, l1_cap, hbm_align, cube_size)
     if not ok:
         try:
             ok, dma_plans = strategy_perop(graph, l1_align, l1_cap, hbm_align, cube_size)
-        except Exception:
+        except MemoryPlanError as exc:
+            logger.warning("strategy_perop 失败: %s，降级到 strategy_spill", exc)
             _reset_offsets()
             try:
-                ok, dma_plans = strategy_spill(graph, l1_align, l1_cap, hbm_align, cube_size)
-            except Exception:
+                ok, dma_plans = strategy_spill(graph, l1_align, l1_cap, hbm_align, cube_size, tile_override)
+            except MemoryPlanError as exc:
+                logger.warning("strategy_spill 失败: %s，降级到 strategy_tiled", exc)
                 _reset_offsets()
-                ok, dma_plans = strategy_tiled(graph, l1_align, l1_cap, hbm_align, cube_size)
+                ok, dma_plans = strategy_tiled(graph, l1_align, l1_cap, hbm_align, cube_size, tile_override)
 
     allocated = sum(1 for t in graph.tensors.values() if t.hbm_offset is not None)
     logger.info("Pass 完成。HBM 分配: %d 个张量, DMA 计划: %d 条", allocated, len(dma_plans))

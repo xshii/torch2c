@@ -134,7 +134,8 @@ def _parse_call_args(
                 input_tids.append(resolved[0])
         elif isinstance(arg, (int, float)) and tensor_overload and i > 0:
             scalar_tid = tgen.next()
-            scalar_t = Tensor(id=scalar_tid, shape=[1], dtype="fp32", is_weight=True)
+            scalar_t = Tensor(id=scalar_tid, shape=[1], dtype="fp32", is_weight=True,
+                              name=f"__scalar_{scalar_tid}")
             scalar_t.consumer_node_ids.append(nid)
             graph.add_tensor(scalar_t)
             input_tids.append(scalar_tid)

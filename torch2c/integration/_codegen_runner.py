@@ -182,6 +182,87 @@ def _copy_npu_mock(output_dir: str) -> None:
     logger.info("npu_cpu_mock 已复制到 %s", dst)
 
 
+def _compute_metrics(
+    fp32_arr: np.ndarray, fp16_arr: np.ndarray,
+) -> tuple[float, float]:
+    """Compute max_abs_diff and cosine similarity between FP32 and FP16 arrays."""
+    fp32_flat = fp32_arr.flatten().astype(np.float64)
+    fp16_flat = fp16_arr.flatten().astype(np.float64)
+    max_abs = float(np.max(np.abs(fp32_flat - fp16_flat)))
+    dot = np.dot(fp32_flat, fp16_flat)
+    norm_a = np.linalg.norm(fp32_flat)
+    norm_b = np.linalg.norm(fp16_flat)
+    cosine = float(dot / (norm_a * norm_b)) if norm_a > 0 and norm_b > 0 else 1.0
+    return max_abs, cosine
+
+
+def _build_module_to_node(graph: Graph) -> dict[str, str]:
+    """Build mapping from module_path to node_id."""
+    mapping: dict[str, str] = {}
+    for nid, node in graph.nodes.items():
+        if node.module_path:
+            mapping[node.module_path] = nid
+    return mapping
+
+
+def _dump_intermediates(
+    model: nn.Module,
+    dummy_input: torch.Tensor,
+    mask: torch.Tensor | None,
+    graph: Graph,
+    output_dir: str,
+) -> None:
+    """Dump per-node intermediate tensors for precision diagnostics.
+
+    Captures FP32 and FP16 intermediate outputs via forward hooks and
+    saves them as .npy files in debug/intermediates/.
+    """
+    mod_to_node = _build_module_to_node(graph)
+    if not mod_to_node:
+        logger.warning("No module_path found in graph nodes; skipping intermediates dump")
+        return
+
+    inter_dir = os.path.join(output_dir, "debug", "intermediates")
+    os.makedirs(inter_dir, exist_ok=True)
+
+    captured: dict[str, torch.Tensor] = {}
+    hooks = []
+
+    def _make_hook(mod_path: str):
+        def hook(_module, _input, output):
+            if isinstance(output, torch.Tensor):
+                captured[mod_path] = output.detach().cpu().float()
+        return hook
+
+    # Register hooks on named modules that match graph nodes
+    for name, mod in model.named_modules():
+        if name in mod_to_node:
+            hooks.append(mod.register_forward_hook(_make_hook(name)))
+
+    # Forward pass
+    model.eval()
+    with torch.no_grad():
+        _ = model(dummy_input, mask) if mask is not None else model(dummy_input)
+
+    # Remove hooks
+    for h in hooks:
+        h.remove()
+
+    # Export intermediates and log metrics
+    for mod_path, fp32_tensor in captured.items():
+        nid = mod_to_node[mod_path]
+        fp32_arr = fp32_tensor.numpy()
+        fp16_arr = fp32_arr.astype(np.float16)
+        np.save(os.path.join(inter_dir, f"{nid}.npy"), fp16_arr)
+        max_abs, cosine = _compute_metrics(fp32_arr, fp16_arr)
+        logger.info(
+            "node %-12s  max_abs_diff=%.6f  cosine=%.6f  (%s)",
+            nid, max_abs, cosine, mod_path,
+        )
+
+    logger.info("Intermediates dumped to %s (%d nodes)", inter_dir, len(captured))
+
+
 def _run_codegen(
     model: nn.Module,
     dummy_input: torch.Tensor,

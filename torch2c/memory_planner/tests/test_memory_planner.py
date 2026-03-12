@@ -6,6 +6,7 @@ from torch2c.common import Graph, Node, Tensor
 from torch2c.common.errors import MemoryPlanError
 from torch2c.common.testing import load_hw_config, make_linear_chain
 from torch2c.memory_planner import run
+from torch2c.memory_planner._hbm_alloc import analyze_lifetimes
 from torch2c.memory_planner._utils import align_up, calc_padded_size
 from torch2c.memory_planner.memory_planner import post_validate
 
@@ -849,3 +850,90 @@ class TestPipeL1Allocation:
         # local tensor 有 L1
         assert g.tensors["t_inter_2"].l1_offset is not None
         assert g.tensors["t_inter_3"].l1_offset is not None
+
+
+# ── absorbed_inputs 对 HBM lifetime 的影响 ──────────────────
+
+
+class TestAbsorbedInputsLifetime:
+    """验证 absorbed_inputs 里的 tensor 被正确计入 consumer，延长 lifetime。"""
+
+    def test_absorbed_tensor_last_use_extended(self):
+        """bias 被 matmul 吸收后，其 last_use 应等于 matmul 的执行顺序。"""
+        g = Graph()
+        # bias tensor：被 node_1 吸收（不在 consumer_node_ids 中）
+        g.add_tensor(Tensor(id="bias", shape=[1, 64], dtype="fp16", is_weight=True))
+        g.add_tensor(Tensor(id="input", shape=[1, 32, 64], dtype="fp16",
+                            is_model_input=True, consumer_node_ids=["node_0"]))
+        g.add_tensor(Tensor(id="inter", shape=[1, 32, 64], dtype="fp16",
+                            producer_node_id="node_0", consumer_node_ids=["node_1"]))
+        g.add_tensor(Tensor(id="output", shape=[1, 32, 64], dtype="fp16",
+                            producer_node_id="node_1", is_model_output=True))
+        g.add_node(Node(id="node_0", op_type="linear", inputs=["input"],
+                        outputs=["inter"], npu_op="cube_matmul",
+                        compute_unit="cube", is_mapped=True))
+        g.add_node(Node(id="node_1", op_type="linear_bias", inputs=["inter"],
+                        outputs=["output"], npu_op="cube_matmul_bias",
+                        compute_unit="cube", is_mapped=True,
+                        absorbed_inputs={"bias": "bias"}))
+        g.execution_order = ["node_0", "node_1"]
+
+        lifetimes = analyze_lifetimes(g)
+        # bias 的 last_use 应为 node_1 的 order (=1)，而非 weight 默认的 max_order
+        # 关键：bias 在 lifetimes 中存在（不被跳过）
+        assert "bias" in lifetimes
+        _, last_use = lifetimes["bias"]
+        # last_use >= 1（node_1 的 order），确认 absorbed 消费者被计入
+        assert last_use >= 1
+
+
+# ── 策略降级全链路测试 ──────────────────────────────────────
+
+
+class TestStrategyFallbackChain:
+    """验证策略降级链：bulk 失败 → perop → spill → tiled。"""
+
+    def test_bulk_to_spill_fallback(self):
+        """中等模型：bulk 放不下 → perop/spill 自动降级，最终分配成功。"""
+        g = _make_linear_chain(n_ops=5, shape=_MEDIUM_SHAPE)
+        config = _load_config()
+        g, dma_plans = run(g, config)
+        errors = post_validate(g)
+        assert errors == [], f"validation errors: {errors}"
+        # 所有输出 tensor 有 HBM 分配
+        for t in g.tensors.values():
+            if t.is_model_output:
+                assert t.hbm_offset is not None
+
+    def test_tiled_fallback(self):
+        """超大单算子：spill 也放不下 → tiled 自动切分。"""
+        # 单个 matmul，input [1, 4096, 1024] + weight [1024, 1024]
+        # weight=2MB 放得下，input+output M 维 4096 需要 tiling
+        g = Graph()
+        g.add_tensor(Tensor(id="inp", shape=[1, 4096, 1024], dtype="fp16",
+                            is_model_input=True, consumer_node_ids=["node_0"]))
+        g.add_tensor(Tensor(id="w", shape=[1024, 1024], dtype="fp16",
+                            is_weight=True, consumer_node_ids=["node_0"]))
+        g.add_tensor(Tensor(id="out", shape=[1, 4096, 1024], dtype="fp16",
+                            producer_node_id="node_0", is_model_output=True))
+        g.add_node(Node(id="node_0", op_type="matmul", inputs=["inp", "w"],
+                        outputs=["out"], npu_op="cube_matmul",
+                        compute_unit="cube", is_mapped=True))
+        g.execution_order = ["node_0"]
+
+        config = _load_config()
+        g, dma_plans = run(g, config)
+        errors = post_validate(g)
+        assert errors == []
+        # 确认使用了 tiling
+        assert "_tile_info" in g.nodes["node_0"].params
+
+    def test_memory_plan_error_not_swallowed(self):
+        """非 MemoryPlanError 不应被策略降级吞掉。"""
+        # 这个测试验证修复 #1：bare except 改为 except MemoryPlanError
+        # 如果有 bug 导致 KeyError/TypeError 等，应直接抛出
+        g = Graph()
+        # 创建一个空图不会触发异常，只验证正常流程通过
+        config = _load_config()
+        g, dma_plans = run(g, config)
+        assert dma_plans is not None

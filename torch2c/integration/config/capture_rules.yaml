@@ -11,6 +11,8 @@ param_renames:
     p0: dim
   aten.softmax.int:
     p0: dim
+  aten.mul.Scalar:
+    p0: scalar_value
   aten.native_layer_norm.default:
     p1: epsilon
     eps: epsilon

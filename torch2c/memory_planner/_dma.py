@@ -23,7 +23,11 @@ class DmaInstruction:
     src_format: str
     dst_format: str
     dtype: str = "fp16"
-    tile_stride: int | None = None  # tiled DMA 每 tile 的 HBM 字节步长
+    tile_stride: int | None = None  # tiled DMA 每 tile 的 HBM 字节步长（per-batch）
+    # batch > 1 且 tiled dim != dim 0 时，tile 数据在 HBM 非连续，需 per-batch DMA
+    batch_count: int | None = None  # 批次数（dim 0 ~ tiled_dim-1 的乘积）
+    hbm_batch_stride: int | None = None  # HBM 中相邻 batch 的字节步长
+    l1_batch_stride: int | None = None  # L1 中相邻 batch 的字节步长
 
 
 @dataclass

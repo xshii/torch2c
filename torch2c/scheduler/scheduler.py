@@ -35,27 +35,31 @@ def run(graph: Graph, config: dict | None = None) -> Graph:
         graph.nodes[nid].task_id = idx + 1  # globally unique, starting from 1
         graph.nodes[nid].dependencies = []
 
-    # 2. 遍历相邻算子对，确定依赖关系
+    # 2. 遍历算子对，确定依赖关系
+    #    - 数据依赖：pred 的输出是 succ 的输入
+    #    - 结构冒险：同一 compute_unit + 共享 tensor（L1 buffer 冲突）
     dep_count = 0
     parallel_count = 0
 
-    for i in range(len(topo_order) - 1):
-        nid_i = topo_order[i]
-        node_i = graph.nodes[nid_i]
-        nid_j = topo_order[i + 1]
+    for j in range(len(topo_order)):
+        nid_j = topo_order[j]
         node_j = graph.nodes[nid_j]
+        j_tids = set(node_j.inputs) | set(node_j.outputs)
 
-        if _has_data_dependency(graph, nid_i, nid_j):
-            # 数据依赖 → 插入依赖
-            node_j.dependencies.append(nid_i)
-            dep_count += 1
-        elif node_i.compute_unit == node_j.compute_unit:
-            # 无数据依赖 + 相同 compute_unit → 串行
-            node_j.dependencies.append(nid_i)
-            dep_count += 1
-        else:
-            # 无数据依赖 + 不同 compute_unit → 可并行
-            parallel_count += 1
+        for i in range(j):
+            nid_i = topo_order[i]
+            node_i = graph.nodes[nid_i]
+
+            if _has_data_dependency(graph, nid_i, nid_j):
+                node_j.dependencies.append(nid_i)
+                dep_count += 1
+            elif (node_i.compute_unit == node_j.compute_unit
+                  and (set(node_i.inputs) | set(node_i.outputs)) & j_tids):
+                # 同单元 + 共享 tensor → 结构冒险，需串行
+                node_j.dependencies.append(nid_i)
+                dep_count += 1
+            else:
+                parallel_count += 1
 
     # 3. 将 dependencies 转换为 per-unit TidInfo deps
     _assign_tid_deps(graph)

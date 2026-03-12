@@ -105,10 +105,25 @@ class Graph:
             self.execution_order.append(node.id)
 
     def remove_node(self, node_id: str) -> None:
-        """移除指定节点。"""
-        self.nodes.pop(node_id, None)
+        """移除指定节点，并清理相关 tensor 的 consumer/producer 引用。"""
+        node = self.nodes.pop(node_id, None)
         if node_id in self.execution_order:
             self.execution_order.remove(node_id)
+        if node is None:
+            return
+        # 清理输入 tensor 的 consumer 引用（安全移除，可能已被上层手动清理）
+        for tid in node.inputs:
+            t = self.tensors.get(tid)
+            if t:
+                try:
+                    t.consumer_node_ids.remove(node_id)
+                except ValueError:
+                    pass
+        # 清理输出 tensor 的 producer 引用
+        for tid in node.outputs:
+            t = self.tensors.get(tid)
+            if t and t.producer_node_id == node_id:
+                t.producer_node_id = None
 
     # ---- 张量操作 ----
 

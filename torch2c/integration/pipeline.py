@@ -15,7 +15,7 @@ from torch2c.common import (
     CompilerError, DiagnosticCollector, Graph, graph_diff,
     get_logger, get_model_config, load_config, load_debug_config,
 )
-from torch2c.integration._codegen_runner import _run_codegen
+from torch2c.integration._codegen_runner import _dump_intermediates, _run_codegen
 from torch2c.format_annotator import format_annotator
 from torch2c.graph_capture import graph_capture
 from torch2c.reformat_inserter import reformat_inserter
@@ -311,10 +311,14 @@ def compile(
     cosine_tol: float = 0.999,
     static_golden: bool = False,
     debug_dump: bool = False,
+    tile_override: dict | None = None,
 ) -> str:
     """完整编译流水线：9 Pass 从 PyTorch 模型到 C 工程。返回输出目录路径。
 
     output_dir 默认为 output/<ModelClassName>。
+
+    tile_override: 手动 tiling 参数，格式为 {node_id: {"tile_size": int, "num_buffers": int}}。
+        省略的字段使用自动计算值。设为 None 或 {} 使用全自动 tiling。
     """
     if output_dir is None:
         model_name = type(model).__name__
@@ -324,6 +328,8 @@ def compile(
     configs = _resolve_compile_configs(
         model, config_dir, target_dtype, target_format, compute_dtype,
     )
+    if tile_override:
+        configs["hardware"]["tile_override"] = tile_override
     collector = DiagnosticCollector()
 
     # Pass ① graph_capture（特殊：不是 run(graph, config) 模式）
@@ -358,6 +364,9 @@ def compile(
         model, dummy_input, mask, graph, dma_plans, configs, config_dir, output_dir,
         atol, cosine_tol, static_golden=static_golden,
     )
+
+    if debug_dump:
+        _dump_intermediates(model, dummy_input, mask, graph, output_dir)
 
     logger.info("=== 编译管线完成，输出目录: %s ===", output_dir)
     return output_dir
