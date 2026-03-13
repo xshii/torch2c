@@ -17,12 +17,15 @@ from torch2c.common import (
 )
 from torch2c.integration._codegen_runner import _dump_intermediates, _run_codegen
 from torch2c.format_annotator import format_annotator
+from torch2c.fusion import fusion_planner
+from torch2c.global_tiler import global_tiler
 from torch2c.graph_capture import graph_capture
 from torch2c.reformat_inserter import reformat_inserter
 from torch2c.memory_planner import memory_planner
 from torch2c.op_absorption import op_absorption
 from torch2c.op_decomposition import op_decomposition
 from torch2c.op_mapping import op_mapping
+from torch2c.roofline import roofline_analyzer
 from torch2c.scheduler import scheduler
 from torch2c.storage_assigner import storage_assigner
 from torch2c.validator import validator
@@ -229,7 +232,7 @@ def _run_late_passes(
     debug_dump: bool = False,
     model_name: str | None = None,
 ) -> Graph:
-    """Pass ⑥ validator → ⑦ scheduler → ⑧ memory_planner。"""
+    """Pass ⑥-⑧: validator → roofline → fusion → scheduler → global_tiler → memory_planner。"""
     # Pass ⑥ validator
     logger.info("Pass ⑥ validator 开始")
     validator_cfg = _build_validator_config(configs["signatures"])
@@ -243,6 +246,16 @@ def _run_late_passes(
         _dump_pass_snapshot(graph, before, output_dir, "⑥", "validator")
     logger.info("Pass ⑥ 完成")
 
+    # Pass ⑥b roofline_analyzer（标注计算强度）
+    logger.info("Pass ⑥b roofline_analyzer 开始")
+    graph = roofline_analyzer.run(graph, configs)
+    logger.info("Pass ⑥b 完成")
+
+    # Pass ⑥c fusion_planner（识别可融合算子组）
+    logger.info("Pass ⑥c fusion_planner 开始")
+    graph = fusion_planner.run(graph, configs)
+    logger.info("Pass ⑥c 完成")
+
     # Pass ⑦ scheduler（先确定执行顺序，再分配内存）
     logger.info("Pass ⑦ scheduler 开始")
     before = graph.to_dict() if debug_dump else None
@@ -251,6 +264,19 @@ def _run_late_passes(
         _dump_pass_snapshot(graph, before, output_dir, "⑦", "scheduler")
     _run_post_validation(collector, "scheduler", graph, scheduler.post_validate)
     logger.info("Pass ⑦ 完成")
+
+    # Pass ⑦b global_tiler（全局最优 tiling 决策）
+    logger.info("Pass ⑦b global_tiler 开始")
+    graph = global_tiler.run(graph, configs)
+    # 将 global_tiler 的决策注入 memory_planner 的 tile_override
+    tile_override = {}
+    for nid, node in graph.nodes.items():
+        tc = node.params.get("_tile_config")
+        if tc:
+            tile_override[nid] = tc
+    if tile_override:
+        configs["hardware"].setdefault("tile_override", {}).update(tile_override)
+    logger.info("Pass ⑦b 完成")
 
     # Pass ⑧ memory_planner（基于 scheduler 确定的执行顺序分配内存）
     logger.info("Pass ⑧ memory_planner 开始")
