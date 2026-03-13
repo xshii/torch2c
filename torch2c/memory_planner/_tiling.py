@@ -44,12 +44,35 @@ class TileInfo:
 
 
 # op → 可切分维度（相对于 shape 末尾的偏移，-2 = M 维）
-# None = 使用默认逻辑（_classify_matmul_tensors）
 _TILEABLE_OPS: dict[str, int | None] = {
     "cube_matmul": -2,
     "cube_matmul_bias": -2,
     "dma_reformat": -2,
+    # element-wise / reduction ops: 所有非权重 tensor 统一切分
+    "npu_softmax": -2,
+    "vector_softmax": -2,
+    "vector_add": -2,
+    "npu_layernorm": -2,
+    "vector_layernorm": -2,
+    "npu_gelu": -2,
+    "vector_gelu": -2,
+    "npu_relu": -2,
+    "npu_transpose": -2,
+    "vector_transpose": -2,
+    "vector_transpose_2d": -2,
+    # DMA / reshape ops
+    "idma_broadcast": -2,
+    "idma_reshape": -2,
+    "idma_move": -2,
+    "idma_slice": -2,
+    "idma_concat": -2,
 }
+
+# matmul 类 op: 只切分 A（第一个输入）和 C（输出），B（权重）不切分
+_MATMUL_OPS = {"cube_matmul", "cube_matmul_bias"}
+
+# element-wise 类 op: 所有非权重 tensor 统一切分（同 dma_reformat）
+_ELEMENTWISE_OPS = _TILEABLE_OPS.keys() - _MATMUL_OPS
 
 
 def _is_tileable(node: Node) -> bool:
@@ -61,31 +84,34 @@ def _get_tile_dim(node: Node) -> int:
     return _TILEABLE_OPS.get(node.npu_op, -2) or -2
 
 
-def _classify_matmul_tensors(
+def _classify_tiled_tensors(
     graph: Graph, node: Node,
 ) -> dict[str, int]:
-    """将 matmul 的 tensor 分为 tiled / untiled。
+    """将节点的 tensor 分为 tiled / untiled。
 
-    cube_matmul/cube_matmul_bias:
+    matmul 类（cube_matmul/cube_matmul_bias）:
       A（第一个非权重非吸收输入）：tiled
       B（第二个输入 / weight）：untiled
       C（输出）：tiled
       bias：untiled（已吸收）
 
-    dma_reformat:
+    element-wise 类（softmax/add/layernorm/gelu/reformat 等）:
       所有非权重 tensor 均 tiled
     """
     absorbed = set(node.absorbed_inputs.values())
     tiled: dict[str, int] = {}
     tile_dim_offset = _get_tile_dim(node)
 
-    if node.npu_op == "dma_reformat":
+    if node.npu_op in _ELEMENTWISE_OPS:
         for tid in list(node.inputs) + list(node.outputs):
+            if tid in absorbed:
+                continue
             t = graph.tensors.get(tid)
             if t and len(t.shape) >= 2 and not t.is_weight:
                 tiled[tid] = len(t.shape) + tile_dim_offset
         return tiled
 
+    # matmul: 只 tile A（第一个非权重输入）和 C（输出）
     for tid in node.inputs:
         if tid in absorbed:
             continue
@@ -277,7 +303,7 @@ def analyze_tiling(
         if not _is_tileable(node):
             continue
 
-        tiled_tensors = _classify_matmul_tensors(graph, node)
+        tiled_tensors = _classify_tiled_tensors(graph, node)
         if not tiled_tensors:
             continue
 

@@ -457,6 +457,12 @@ def _format_bytes(n: int) -> str:
     return f"{n} B"
 
 
+# ── ST10: 8-head Encoder 优化策略对比 ────────────────────────
+
+# L1 = 720KB: 4 heads 的 attention bmm 可放下 (~655KB)，8 heads (~1.3MB) 不行
+# d_model=256, num_heads=8, head_dim=32, seq_len=256, dim_ff=512
+_ST10_L1 = 720 * 1024  # 737,280 bytes
+
 # 策略配置：名称 → pass_toggles
 _STRATEGIES: dict[str, dict[str, bool]] = {
     "baseline（全关）": {
@@ -476,23 +482,35 @@ _STRATEGIES: dict[str, dict[str, bool]] = {
 
 
 class TestST10_OptimizationStrategyComparison:
-    """ST10: 不同优化策略的 cost model + 内存占用对比。
+    """ST10: 8-head Encoder 不同优化策略的 cost model + 内存占用对比。
 
-    用 TwoLayerMLP 模型，依次运行 4 种策略组合，
-    打印预估 cycles、HBM/L1 峰值、DMA 总量、融合组数等指标。
+    模型: EncoderModel(d_model=256, num_heads=8, dim_ff=512, num_layers=4)
+    输入: [1, 256, 256]，attention mask [1, 256, 256]（bitmap）
+    L1 = 720KB — 刚好放得下 4 个头的 attention，8 个头需要 tiling。
     """
 
     def test_strategy_comparison(self, tmp_path):
-        model = TwoLayerMLP(d=256)
+        from torch2c.integration.demo.encoder_model import EncoderModel
+
+        torch.manual_seed(42)
+        model = EncoderModel(
+            d_model=256, num_heads=8, dim_ff=512,
+            num_layers=4, precision="fp16",
+        )
         model.eval()
-        dummy = torch.randn(1, 128, 256)
-        config_dir = _make_config_dir()
+
+        dummy = torch.randn(1, 256, 256)
+        # bitmap mask: 随机 0/1 → -inf/0（上三角 causal mask）
+        mask = torch.triu(torch.full((1, 256, 256), float("-inf")), diagonal=1)
+
+        config_dir = _make_config_dir(l1_size=_ST10_L1)
 
         results: dict[str, dict] = {}
         for name, toggles in _STRATEGIES.items():
             out_dir = str(tmp_path / name.replace("（", "_").replace("）", "_"))
             graph = compile_graph_only(
                 model, dummy, config_dir, out_dir,
+                mask=mask,
                 target_dtype="fp16", target_format="nd",
                 pass_toggles=toggles if toggles else None,
             )
@@ -504,7 +522,9 @@ class TestST10_OptimizationStrategyComparison:
             f" {'DMA total':>10s} {'融合组':>6s} {'tiled':>6s} {'nodes':>6s}"
         )
         print("\n" + "=" * len(header))
-        print("ST10: 优化策略对比 — TwoLayerMLP(d=256), input=[1,128,256]")
+        print("ST10: 8-head Encoder 优化策略对比")
+        print(f"  model: EncoderModel(d=256, heads=8, ff=512, layers=4)")
+        print(f"  input: [1,256,256], causal mask, L1={_ST10_L1//1024}KB")
         print("=" * len(header))
         print(header)
         print("-" * len(header))
@@ -519,20 +539,20 @@ class TestST10_OptimizationStrategyComparison:
             )
         print("=" * len(header))
 
-        # ── 断言：优化应有改善 ──
+        # ── 断言 ──
         baseline = results["baseline（全关）"]
         full = results["full（全开）"]
 
-        # 全开策略的 DMA ≤ baseline（优化不应增加 DMA）
+        # 全开策略的 DMA 不应劣于 baseline
         assert full["dma_total_bytes"] <= baseline["dma_total_bytes"], (
             f"全开 DMA {full['dma_total_bytes']} > baseline {baseline['dma_total_bytes']}"
         )
 
-        # roofline 标注：全开时所有节点都有 bottleneck 标注
+        # roofline 标注：全开时所有节点都有 bottleneck 分类
         assert full["compute_bound_ops"] + full["memory_bound_ops"] == full["num_nodes"]
 
-        # global tiler：至少尝试了 tiling 评估（可能 0 个节点被 tile）
-        assert full["tiled_ops"] >= 0
-
-        # 各策略节点数一致或因 absorption/fusion 而减少（不应增加）
+        # 节点数：全开 ≤ baseline（absorption 可能减少节点）
         assert full["num_nodes"] <= baseline["num_nodes"]
+
+        # 8-head encoder 应该有较多节点（QKV proj + bmm + softmax + LN + FFN × 4 layers）
+        assert baseline["num_nodes"] >= 10, f"encoder 应有足够多节点，实际 {baseline['num_nodes']}"

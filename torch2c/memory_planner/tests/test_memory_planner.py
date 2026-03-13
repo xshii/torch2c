@@ -190,11 +190,11 @@ class TestL1CapacityCheck:
         )
         node = Node(
             id="node_0",
-            op_type="vector_add",
+            op_type="custom_reduce",
             inputs=["huge_input"],
             outputs=["huge_output"],
             compute_unit="vector",
-            npu_op="vector_add",
+            npu_op="custom_reduce",
             is_mapped=True,
         )
         g.add_tensor(huge_tensor)
@@ -633,15 +633,15 @@ class TestL1GlobalLiveness:
         ))
         for i in range(4):
             g.add_node(Node(
-                id=f"node_{i}", op_type="vector_add",
+                id=f"node_{i}", op_type="custom_reduce",
                 inputs=["t_in"], outputs=[f"t_local_{i}"],
-                compute_unit="vector", npu_op="vector_add", is_mapped=True,
+                compute_unit="vector", npu_op="custom_reduce", is_mapped=True,
             ))
         g.add_node(Node(
-            id="node_4", op_type="vector_add",
+            id="node_4", op_type="custom_reduce",
             inputs=["t_local_0", "t_local_1", "t_local_2", "t_local_3"],
             outputs=["t_out"],
-            compute_unit="vector", npu_op="vector_add", is_mapped=True,
+            compute_unit="vector", npu_op="custom_reduce", is_mapped=True,
         ))
         g.execution_order = [f"node_{i}" for i in range(5)]
 
