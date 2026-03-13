@@ -440,6 +440,40 @@ def compile(
     return output_dir
 
 
+def compile_graph_only(
+    model: nn.Module,
+    dummy_input: torch.Tensor,
+    config_dir: str,
+    output_dir: str,
+    mask: torch.Tensor | None = None,
+    *,
+    target_dtype: str | None = None,
+    target_format: str | None = None,
+    pass_toggles: dict[str, bool] | None = None,
+) -> Graph:
+    """仅运行 Pass ①-⑧（不含 codegen），返回编排后的 Graph。
+
+    用于 benchmark / 策略对比，跳过 C 代码生成和 golden 验证。
+    """
+    configs = _resolve_compile_configs(model, config_dir, target_dtype, target_format, None)
+    if pass_toggles:
+        from dataclasses import asdict
+        base_pc: PassConfig = configs["pass_config"]
+        configs["pass_config"] = PassConfig.from_dict({**asdict(base_pc), **pass_toggles})
+    collector = DiagnosticCollector()
+
+    graph = graph_capture.capture(model, dummy_input, mask=mask)
+    cube_size = configs["hardware"]["fractal"]["cube_size"]
+
+    graph = _run_pass_list(graph, _OPTIMIZATION_PASSES, configs, collector,
+                           output_dir, cube_size)
+    graph = _run_pass_list(graph, _ANNOTATION_PASSES, configs, collector,
+                           output_dir, cube_size)
+    graph = _run_late_passes(graph, configs, collector, output_dir, cube_size,
+                             model_name=type(model).__name__)
+    return graph
+
+
 # ---- 诊断入口 ----
 
 
