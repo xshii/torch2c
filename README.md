@@ -22,9 +22,11 @@ PyTorch 模型
     ▼
 ⑤ format_annotator   : 标注每个tensor的format/dtype/compute_dtype
     ▼
-⑤a reformat_inserter : 插入format转换节点（format不匹配时）
+⑤a format_planner    : 基于硬件能力的图级最优format分配
     ▼
-⑤b storage_assigner  : 分配tensor存储类型（hbm/local/pipe）
+⑤b reformat_inserter : 插入format转换节点（format不匹配时）
+    ▼
+⑤c storage_assigner  : 分配tensor存储类型（hbm/local/pipe）
     ▼
 ⑥ validator          : 校验所有算子在C接口中有对应
     ▼
@@ -97,8 +99,9 @@ torch2c/
 │   ├── op_decomposition/        Pass③：ATen op → NPU ops（1对N裂解）
 │   ├── op_absorption/           Pass④：独立算子吸收为相邻算子参数
 │   ├── format_annotator/        Pass⑤：标注format/dtype/compute_dtype
-│   ├── reformat_inserter/       Pass⑤a：插入format转换节点
-│   ├── storage_assigner/        Pass⑤b：分配tensor存储类型
+│   ├── format_planner/          Pass⑤a：图级最优format分配
+│   ├── reformat_inserter/       Pass⑤b：插入format转换节点
+│   ├── storage_assigner/        Pass⑤c：分配tensor存储类型
 │   ├── validator/               Pass⑥：合法性校验
 │   ├── memory_planner/          Pass⑦：内存编排（HBM+L1+DMA）
 │   ├── scheduler/               Pass⑧：拓扑排序与依赖生成
@@ -138,6 +141,7 @@ common（所有模块的唯一依赖）
   ├── op_decomposition   ─┤
   ├── op_absorption      ─┤
   ├── format_annotator   ─┼── 全部只依赖common，互相无依赖
+  ├── format_planner     ─┤
   ├── reformat_inserter  ─┤
   ├── storage_assigner   ─┤
   ├── validator          ─┤
@@ -199,33 +203,107 @@ pytest torch2c/common/tests/
 pytest torch2c/op_mapping/tests/
 ```
 
-### 运行端到端Demo
+### 编写模型并生成 C 代码
 
-```bash
-python -m torch2c.main
+**1. 定义模型** — 使用 `@npu` 标注每个子模块的精度和格式：
+
+```python
+import torch
+import torch.nn as nn
+from torch2c.common import NpuSpec, npu
+
+# 定义精度 spec
+FP16    = NpuSpec("fp16", "nd")
+FP16_NZ = NpuSpec("fp16", "nz")
+
+class MyModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # npu() 标注：指定 input/output 的 dtype+format, 以及权重格式
+        self.linear = npu(nn.Linear(64, 64),
+                          input=FP16, output=FP16, weight=FP16_NZ,
+                          compute_dtype="fp32")
+        self.act = npu(nn.GELU(),
+                       input=FP16, output=FP16, compute_dtype="fp16")
+        self.norm = npu(nn.LayerNorm(64),
+                        input=FP16, output=FP16, weight=FP16,
+                        compute_dtype="fp32")
+
+    def forward(self, x):
+        return self.norm(self.act(self.linear(x)))
 ```
 
-或分步运行：
+**2. 编译到 C 工程** — 一行调用 `compile()`：
 
-```bash
-# 1. 图捕获
-python -m torch2c.graph_capture.demo.run_demo
+```python
+from torch2c.common import INTEGRATION_CONFIG_DIR
+from torch2c.integration.pipeline import compile
 
-# 2. 端到端 ST 测试
-pytest torch2c/integration/tests/demo_st/ -v
+model = MyModel().eval()
+dummy_input = torch.randn(1, 32, 64)
+
+output_dir = compile(
+    model=model,
+    dummy_input=dummy_input,
+    config_dir=str(INTEGRATION_CONFIG_DIR),
+    output_dir="output/MyModel",
+)
+# output_dir 下生成完整可编译的 C 工程
 ```
 
-### 验证生成的C工程
+**3. 使用内置 demo 模型**（多层 Encoder Transformer）：
+
+```python
+from torch2c.integration.demo.encoder_model import EncoderModel
+
+model = EncoderModel(
+    d_model=192,     # 模型维度
+    dim_ff=384,      # FFN 中间维度
+    num_layers=2,    # Encoder 层数
+    num_heads=3,     # 注意力头数
+    precision="fp16" # "mixed" 或 "fp16"
+).eval()
+
+dummy = torch.randn(1, 32, 192)
+mask = torch.zeros(1, 32, 32)       # 可选 attention mask
+
+output_dir = compile(
+    model=model,
+    dummy_input=dummy,
+    config_dir=str(INTEGRATION_CONFIG_DIR),
+    mask=mask,
+)
+```
+
+**compile() 常用参数：**
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `target_dtype` | 全局目标精度 | `None`（由 npu() 标注决定） |
+| `target_format` | 全局目标格式 | `None` |
+| `pass_toggles` | 开关可选 Pass | `None`（全开） |
+| `tile_override` | 手动指定 tiling 参数 | `None` |
+| `debug_dump` | 输出每个 Pass 后的中间图 | `False` |
+
+### 验证生成的 C 工程
 
 ```bash
-# Mock模式编译验证
-cd output/
+cd output/MyModel/
 cmake .
 make
-ctest
+./model_run
+# 自动加载 golden 数据并比对精度
+```
 
-# 语法检查
-gcc -fsyntax-only -include npu_mock.h src/model_graph.c
+### 运行端到端 ST 测试
+
+```bash
+# 全量系统测试
+pytest torch2c/integration/tests/demo_st/ -v
+
+# 单模块 UT
+pytest torch2c/format_planner/tests/ -v
+pytest torch2c/memory_planner/tests/ -v
 ```
 
 ## 关键设计决策
@@ -234,7 +312,7 @@ gcc -fsyntax-only -include npu_mock.h src/model_graph.c
 |--------|------|
 | torch.export分解 | 禁止自动分解，保留layer_norm/softmax高级op |
 | ATen算子命名 | 使用全称（如 `aten.mm.default`） |
-| Format冲突 | DMA随路转换，不插入显式转换节点 |
+| Format冲突 | format_planner 自动分配最优格式，不匹配时插入 dma_reformat |
 | tensor.format语义 | HBM存储格式，DMA load时按消费者需求转换 |
 | 精度标注 | 输入format/dtype、计算dtype、输出format/dtype 均可不同 |
 | Scalar值 | 常量tensor（is_weight=True, shape=[1]） |
