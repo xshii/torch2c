@@ -10,8 +10,7 @@ from pathlib import Path
 
 from torch2c.codegen import c_emitter, cmake_emitter, mock_emitter, utils_emitter
 from torch2c.codegen._plan import CodegenPlan
-from torch2c.common import INTEGRATION_CONFIG_DIR, Graph, get_logger
-from torch2c.memory_planner._dma import DmaPlan
+from torch2c.common import DmaPlan, INTEGRATION_CONFIG_DIR, Graph, get_logger
 
 logger = get_logger("codegen.demo")
 

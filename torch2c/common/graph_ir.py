@@ -38,6 +38,7 @@ Tensor 字段:
 from __future__ import annotations
 
 from collections import deque
+from typing import ClassVar
 from dataclasses import asdict, dataclass, field
 
 
@@ -51,41 +52,79 @@ class Tensor:
     format 是纯 NPU 概念，PyTorch 侧始终为 nd，无需保留源值。
     """
 
+    # ── graph_capture 阶段 ──
     id: str
     shape: list[int]
     dtype: str
-    format: str = "nd"
-    src_dtype: str | None = None  # 原始精度（来自 .pth / torch.export）
-    hbm_offset: int | None = None
-    hbm_size: int | None = None
-    l1_offset: int | None = None
     is_weight: bool = False
     is_model_input: bool = False
     is_model_output: bool = False
     name: str | None = None
-    storage: str = "hbm"  # "hbm" | "local" | "pipe"
     producer_node_id: str | None = None
     consumer_node_ids: list[str] = field(default_factory=list)
+    # ── format_annotator 阶段 ──
+    format: str = "nd"
+    src_dtype: str | None = None
+    # ── storage_assigner 阶段 ──
+    storage: str = "hbm"  # "hbm" | "local" | "pipe"
+    # ── memory_planner 阶段 ──
+    hbm_offset: int | None = None
+    hbm_size: int | None = None
+    l1_offset: int | None = None
 
 
 @dataclass
 class Node:
     """计算节点描述。"""
 
+    # ── graph_capture 阶段 ──
     id: str
     op_type: str
     inputs: list[str] = field(default_factory=list)
     outputs: list[str] = field(default_factory=list)
     params: dict = field(default_factory=dict)
+    module_path: str | None = None
+    # ── op_mapping / op_decomposition 阶段 ──
     compute_unit: str | None = None
     npu_op: str | None = None
     is_mapped: bool = False
+    # ── op_absorption 阶段 ──
+    absorbed_inputs: dict = field(default_factory=dict)
+    # ── format_annotator 阶段 ──
     format_annotation: dict | None = None
+    # ── scheduler 阶段 ──
     schedule_order: int | None = None
     task_id: int = 0
     dependencies: list[str] = field(default_factory=list)
-    absorbed_inputs: dict = field(default_factory=dict)
-    module_path: str | None = None
+
+
+@dataclass
+class DmaInstruction:
+    """单条 DMA 搬运指令。"""
+
+    op: str  # "load" | "store"
+    tensor_id: str
+    hbm_offset: int
+    l1_offset: int
+    size_bytes: int
+    src_format: str
+    dst_format: str
+    dtype: str = "fp16"
+    tile_stride: int | None = None
+    batch_count: int | None = None
+    hbm_batch_stride: int | None = None
+    l1_batch_stride: int | None = None
+
+
+@dataclass
+class DmaPlan:
+    """单个算子的 DMA 计划。"""
+
+    node_id: str
+    loads: list[DmaInstruction] = field(default_factory=list)
+    stores: list[DmaInstruction] = field(default_factory=list)
+    tile_info: dict | None = None
+    l1_layout: dict[str, int] | None = None
 
 
 @dataclass
@@ -95,6 +134,7 @@ class Graph:
     nodes: dict[str, Node] = field(default_factory=dict)
     tensors: dict[str, Tensor] = field(default_factory=dict)
     execution_order: list[str] = field(default_factory=list)
+    dma_plans: list[DmaPlan] = field(default_factory=list)
 
     # ---- 节点操作 ----
 
@@ -191,15 +231,81 @@ class Graph:
                     errors.append(f"节点 {nid} 引用了不存在的输出张量 {tid}")
         return errors
 
+    # ── Pass 阶段契约校验 ──
+
+    STAGE_CONTRACTS: ClassVar[dict[str, dict]] = {
+        "graph_capture": {
+            "node_required": ["id", "op_type"],
+            "tensor_required": ["id", "shape", "dtype"],
+        },
+        "op_mapping": {
+            "node_required": ["compute_unit", "npu_op"],
+            "node_bool_true": ["is_mapped"],
+        },
+        "format_annotator": {
+            "node_required": ["format_annotation"],
+            "tensor_required": ["format"],
+        },
+        "scheduler": {
+            "node_required": ["schedule_order"],
+        },
+        "memory_planner": {
+            "tensor_hbm_required": ["hbm_offset", "hbm_size", "l1_offset"],
+        },
+    }
+
+    def validate_stage(self, stage: str) -> list[str]:
+        """校验指定 pass 完成后的字段契约。
+
+        Args:
+            stage: pass 名称（如 "op_mapping", "memory_planner"）。
+
+        Returns:
+            违反契约的错误信息列表（空 = 通过）。
+        """
+        contract = self.STAGE_CONTRACTS.get(stage)
+        if not contract:
+            return []
+
+        errors: list[str] = []
+
+        node_req = contract.get("node_required", [])
+        node_bool = contract.get("node_bool_true", [])
+        for nid, node in self.nodes.items():
+            for fld in node_req:
+                if getattr(node, fld, None) is None:
+                    errors.append(f"[{stage}] node {nid}: {fld} 未设置")
+            for fld in node_bool:
+                if not getattr(node, fld, False):
+                    errors.append(f"[{stage}] node {nid}: {fld} 应为 True")
+
+        tensor_req = contract.get("tensor_required", [])
+        tensor_hbm_req = contract.get("tensor_hbm_required", [])
+        for tid, t in self.tensors.items():
+            for fld in tensor_req:
+                if getattr(t, fld, None) is None:
+                    errors.append(f"[{stage}] tensor {tid}: {fld} 未设置")
+            if tensor_hbm_req and t.storage not in ("local", "pipe"):
+                needs_mem = t.consumer_node_ids or t.is_model_output
+                if needs_mem:
+                    for fld in tensor_hbm_req:
+                        if getattr(t, fld, None) is None:
+                            errors.append(f"[{stage}] tensor {tid}: {fld} 未设置")
+
+        return errors
+
     # ---- 序列化 ----
 
     def to_dict(self) -> dict:
         """将图序列化为普通字典。"""
-        return {
+        d: dict = {
             "nodes": {nid: asdict(n) for nid, n in self.nodes.items()},
             "tensors": {tid: asdict(t) for tid, t in self.tensors.items()},
             "execution_order": list(self.execution_order),
         }
+        if self.dma_plans:
+            d["dma_plans"] = [asdict(dp) for dp in self.dma_plans]
+        return d
 
     @classmethod
     def from_dict(cls, data: dict) -> Graph:
@@ -210,6 +316,11 @@ class Graph:
         for nid, nd in data.get("nodes", {}).items():
             g.nodes[nid] = Node(**nd)
         g.execution_order = list(data.get("execution_order", []))
+        for dp_dict in data.get("dma_plans", []):
+            loads = [DmaInstruction(**ld) for ld in dp_dict.get("loads", [])]
+            stores = [DmaInstruction(**st) for st in dp_dict.get("stores", [])]
+            rest = {k: v for k, v in dp_dict.items() if k not in ("loads", "stores")}
+            g.dma_plans.append(DmaPlan(**rest, loads=loads, stores=stores))
         return g
 
     # ---- 摘要 ----

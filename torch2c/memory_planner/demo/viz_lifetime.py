@@ -25,7 +25,7 @@ from torch2c.viz.lifetime_viz import render_lifetime as _render_lifetime
 CONFIG_PATH = str(HARDWARE_CONFIG_PATH)
 
 
-def _build_demo_graph() -> tuple[Graph, list]:
+def _build_demo_graph() -> Graph:
     """构建 matmul+bias(absorbed) → add → gelu → add2 示例。"""
     shape = [1, 128, 2048]
     g = Graph()
@@ -60,8 +60,8 @@ def _build_demo_graph() -> tuple[Graph, list]:
 
     g = run_idma(g, {"pipe_pairs": [["cube", "vector"]]})
     config = load_config(CONFIG_PATH)
-    g, plans = run_memory_planner(g, config)
-    return g, plans
+    g = run_memory_planner(g, config)
+    return g
 
 
 def main() -> None:
@@ -78,9 +78,9 @@ def main() -> None:
         with open(args.json) as f:
             data = json.load(f)
         graph = Graph.from_dict(data)
-        graph, _ = run_memory_planner(graph, config)
+        graph = run_memory_planner(graph, config)
     else:
-        graph, _ = _build_demo_graph()
+        graph = _build_demo_graph()
 
     if args.output:
         path = args.output

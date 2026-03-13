@@ -16,8 +16,7 @@ from dataclasses import dataclass
 from functools import reduce
 from operator import mul
 
-from torch2c.common import Graph, Node
-from torch2c.memory_planner._utils import calc_padded_size
+from torch2c.common import Graph, Node, calc_padded_size
 
 
 # ── 硬件参数 ─────────────────────────────────────────────

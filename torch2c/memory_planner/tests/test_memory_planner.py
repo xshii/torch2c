@@ -73,7 +73,7 @@ class TestNoOverlap:
         """同时活跃的 tensor 地址不重叠（per-op 路径）。"""
         g = _make_linear_chain(5, shape=_MEDIUM_SHAPE)
         config = _load_config()
-        g, _ = run(g, config)
+        g = run(g, config)
 
         # 检查同时活跃的 tensor 不重叠
         tensors_with_hbm = [t for t in g.tensors.values() if t.hbm_offset is not None]
@@ -123,7 +123,7 @@ class TestAlignment:
         """HBM offset 是 512 的倍数，L1 offset 是 32 的倍数（per-op 路径）。"""
         g = _make_linear_chain(5, shape=_MEDIUM_SHAPE)
         config = _load_config()
-        g, _ = run(g, config)
+        g = run(g, config)
 
         for t in g.tensors.values():
             if t.hbm_offset is not None:
@@ -137,7 +137,7 @@ class TestReuse:
         """线性链中 dead tensor 的空间被后续 tensor 复用（per-op 路径）。"""
         g = _make_linear_chain(5, shape=_MEDIUM_SHAPE)
         config = _load_config()
-        g, _ = run(g, config)
+        g = run(g, config)
 
         offsets = [t.hbm_offset for t in g.tensors.values() if t.hbm_offset is not None]
         # 线性链中有 6 个 tensor，但不是所有都需要独立空间
@@ -153,10 +153,10 @@ class TestDmaPlan:
         """每个算子有正确数量的 load 和 store 指令（per-op 路径）。"""
         g = _make_linear_chain(5, shape=_MEDIUM_SHAPE)
         config = _load_config()
-        g, dma_plans = run(g, config)
+        g = run(g, config)
 
-        assert len(dma_plans) == 5
-        for plan in dma_plans:
+        assert len(g.dma_plans) == 5
+        for plan in g.dma_plans:
             node = g.nodes[plan.node_id]
             # load 数 = 输入 tensor 数
             expected_loads = len(node.inputs)
@@ -216,7 +216,7 @@ class TestNoOverlapLongChain:
     def test_long_chain_no_overlap(self):
         g = _make_linear_chain(10, shape=_MEDIUM_SHAPE)
         config = _load_config()
-        g, _ = run(g, config)
+        g = run(g, config)
 
         tensors_with_hbm = [t for t in g.tensors.values() if t.hbm_offset is not None]
         for i, t1 in enumerate(tensors_with_hbm):
@@ -347,10 +347,10 @@ class TestDmaStoreFormat:
         g.execution_order = ["node_0", "node_1", "node_2", "node_3"]
 
         config = _load_config()
-        g, dma_plans = run(g, config)
+        g = run(g, config)
 
         # node_0 的 DMA plan
-        plan = dma_plans[0]
+        plan = g.dma_plans[0]
         assert plan.node_id == "node_0"
         assert plan.loads[0].dst_format == "nz"
         assert plan.stores[0].src_format == "nz"
@@ -415,12 +415,12 @@ class TestL1OnlyOptimization:
         g.execution_order = ["node_0", "node_1"]
 
         config = _load_config()
-        g, dma_plans = run(g, config)
+        g = run(g, config)
 
         # 全局布局模式: 只有 2 个 DMA plan（bulk_load + bulk_store）
-        assert len(dma_plans) == 2
-        assert dma_plans[0].node_id == "__bulk_load__"
-        assert dma_plans[1].node_id == "__bulk_store__"
+        assert len(g.dma_plans) == 2
+        assert g.dma_plans[0].node_id == "__bulk_load__"
+        assert g.dma_plans[1].node_id == "__bulk_store__"
         # 所有 tensor 有 l1_offset
         for t in g.tensors.values():
             assert t.l1_offset is not None
@@ -453,7 +453,7 @@ class TestL1GlobalLiveness:
         """
         g = _make_linear_chain(5, shape=_L1_TEST_SHAPE)
         config = _small_l1_config()
-        g, _ = run(g, config)
+        g = run(g, config)
 
         for t in g.tensors.values():
             assert t.l1_offset is not None, f"{t.id} 缺少 l1_offset"
@@ -468,7 +468,7 @@ class TestL1GlobalLiveness:
         """同时活跃在 L1 的 tensor 地址不重叠。"""
         g = _make_linear_chain(5, shape=_L1_TEST_SHAPE)
         config = _small_l1_config()
-        g, _ = run(g, config)
+        g = run(g, config)
 
         cube_size = config["fractal"]["cube_size"]
         for nid in g.execution_order:
@@ -532,13 +532,13 @@ class TestL1GlobalLiveness:
         g.execution_order = [f"node_{i}" for i in range(4)]
 
         config = _small_l1_config()
-        g, dma_plans = run(g, config)
+        g = run(g, config)
 
         t_local = g.tensors["t_local"]
         assert t_local.l1_offset is not None, "t_local 应有 L1 offset"
         assert t_local.hbm_offset is None, "storage=local 不应有 HBM offset"
 
-        plan_1 = dma_plans[1]
+        plan_1 = g.dma_plans[1]
         load_tids = [inst.tensor_id for inst in plan_1.loads]
         assert "t_local" not in load_tids, "t_local 不应有 DMA load"
         assert post_validate(g) == []
@@ -589,7 +589,7 @@ class TestL1GlobalLiveness:
         g.execution_order = ["node_0", "node_1", "node_2"]
 
         config = _small_l1_config()
-        g, _ = run(g, config)
+        g = run(g, config)
 
         t_a = g.tensors["t_local_a"]
         t_b = g.tensors["t_local_b"]
@@ -687,7 +687,7 @@ class TestL1GlobalLiveness:
 
         config = _small_l1_config()
         # node_3: 3 local (1.5MB) + t_out (512KB) = 2MB = L1 容量，刚好不溢出
-        g, _ = run(g, config)
+        g = run(g, config)
         assert post_validate(g) == []
 
     def test_l1_alignment_global(self):
@@ -695,7 +695,7 @@ class TestL1GlobalLiveness:
         g = _make_linear_chain(5, shape=_L1_TEST_SHAPE)
         config = _small_l1_config()
         l1_align = config["memory"]["l1"]["alignment_bytes"]
-        g, _ = run(g, config)
+        g = run(g, config)
 
         for t in g.tensors.values():
             if t.l1_offset is not None:
@@ -784,7 +784,7 @@ class TestPipeL1Allocation:
         g.execution_order = ["node_0", "node_1", "node_2"]
 
         config = _small_l1_config()
-        g, dma_plans = run(g, config)
+        g = run(g, config)
 
         # pipe tensor 不分配 HBM 和 L1
         assert g.tensors["t_pipe"].hbm_offset is None
@@ -794,7 +794,7 @@ class TestPipeL1Allocation:
         assert g.tensors["t_mid"].l1_offset is not None
         assert g.tensors["t_out"].l1_offset is not None
         # node_1 不应有 t_pipe 的 DMA load
-        plan_1 = dma_plans[1]
+        plan_1 = g.dma_plans[1]
         load_tids = [inst.tensor_id for inst in plan_1.loads]
         assert "t_pipe" not in load_tids
         # post_validate 通过
@@ -841,7 +841,7 @@ class TestPipeL1Allocation:
 
         config = _small_l1_config()
         # 不应溢出（pipe 节省了 L1）
-        g, _ = run(g, config)
+        g = run(g, config)
         assert post_validate(g) == []
 
         # pipe tensor 无 L1
@@ -897,7 +897,7 @@ class TestStrategyFallbackChain:
         """中等模型：bulk 放不下 → perop/spill 自动降级，最终分配成功。"""
         g = _make_linear_chain(n_ops=5, shape=_MEDIUM_SHAPE)
         config = _load_config()
-        g, dma_plans = run(g, config)
+        g = run(g, config)
         errors = post_validate(g)
         assert errors == [], f"validation errors: {errors}"
         # 所有输出 tensor 有 HBM 分配
@@ -922,7 +922,7 @@ class TestStrategyFallbackChain:
         g.execution_order = ["node_0"]
 
         config = _load_config()
-        g, dma_plans = run(g, config)
+        g = run(g, config)
         errors = post_validate(g)
         assert errors == []
         # 确认使用了 tiling
@@ -935,5 +935,5 @@ class TestStrategyFallbackChain:
         g = Graph()
         # 创建一个空图不会触发异常，只验证正常流程通过
         config = _load_config()
-        g, dma_plans = run(g, config)
-        assert dma_plans is not None
+        g = run(g, config)
+        assert g.dma_plans is not None

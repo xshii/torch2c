@@ -6,27 +6,26 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
-from torch2c.common import Graph, load_config
+from torch2c.common import INTEGRATION_CONFIG_DIR, Graph, load_config
 from torch2c.memory_planner import run
 
 DEMO_DIR = os.path.dirname(__file__)
-CONFIG_DIR = os.path.join(DEMO_DIR, "..", "config")
 
 
 def main() -> None:
     with open(os.path.join(DEMO_DIR, "demo_input_graph.json")) as f:
         data = json.load(f)
     graph = Graph.from_dict(data)
-    config = load_config(os.path.join(CONFIG_DIR, "hardware_config.yaml"))
+    config = load_config(str(INTEGRATION_CONFIG_DIR / "hardware_config.yaml"))
 
-    graph, dma_plans = run(graph, config)
+    graph = run(graph, config)
 
     print("=== HBM 分配结果 ===")
     for tid, t in sorted(graph.tensors.items()):
         print(f"  {tid}: hbm_offset={t.hbm_offset}, hbm_size={t.hbm_size}")
 
-    print(f"\n=== DMA 计划 ({len(dma_plans)} 个算子) ===")
-    for plan in dma_plans:
+    print(f"\n=== DMA 计划 ({len(graph.dma_plans)} 个算子) ===")
+    for plan in graph.dma_plans:
         print(f"  {plan.node_id}: {len(plan.loads)} loads, {len(plan.stores)} stores")
 
     # 验证

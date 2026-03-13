@@ -13,9 +13,8 @@ import pytest
 from torch2c.codegen import c_emitter, mock_emitter
 from torch2c.codegen._plan import CodegenPlan
 from torch2c.common import (
-    INTEGRATION_CONFIG_DIR, CodegenError, Graph, Node, Tensor, load_config,
+    DmaPlan, INTEGRATION_CONFIG_DIR, CodegenError, Graph, Node, Tensor, load_config,
 )
-from torch2c.memory_planner._dma import DmaPlan
 
 _CONFIG_DIR = str(INTEGRATION_CONFIG_DIR)
 _DEMO_PLAN = str(Path(__file__).resolve().parents[1] / "demo" / "demo_input_plan.json")

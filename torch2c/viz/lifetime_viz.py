@@ -13,7 +13,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from torch2c.common import Graph, get_logger
-from torch2c.memory_planner._utils import calc_padded_size
+from torch2c.common import calc_padded_size
 from torch2c.viz._utils import STORAGE_COLOR, ensure_viz_dir, human_size, shape_str
 from torch2c.viz.cost_model import estimate_all
 

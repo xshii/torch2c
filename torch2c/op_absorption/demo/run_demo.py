@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from torch2c.common import Graph, get_logger, setup_logging
+from torch2c.common import INTEGRATION_CONFIG_DIR, Graph, get_logger, setup_logging
 from torch2c.op_absorption import load_absorption_config, run
 
 logger = get_logger(__name__)
@@ -14,7 +14,7 @@ logger = get_logger(__name__)
 def main() -> None:
     setup_logging("DEBUG")
     demo_dir = Path(__file__).parent
-    config_path = demo_dir.parent / "config" / "absorptions.yaml"
+    config_path = INTEGRATION_CONFIG_DIR / "absorptions.yaml"
 
     # 加载输入图
     with open(demo_dir / "demo_input_graph.json", encoding="utf-8") as f:

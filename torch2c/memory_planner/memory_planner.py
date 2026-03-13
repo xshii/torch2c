@@ -73,7 +73,7 @@ def _dump_memory_layout(graph: Graph, cube_size: int) -> None:
     logger.info("\n".join(lines))
 
 
-def run(graph: Graph, config: dict) -> tuple[Graph, list[DmaPlan]]:
+def run(graph: Graph, config: dict) -> Graph:
     """内存编排主函数。
 
     Args:
@@ -81,7 +81,7 @@ def run(graph: Graph, config: dict) -> tuple[Graph, list[DmaPlan]]:
         config: hardware_config.yaml 解析后的字典。
 
     Returns:
-        (编排后的 Graph, DMA 计划列表)
+        编排后的 Graph（含 dma_plans）。
     """
     logger.info("Pass 开始，输入图: %d 个节点, %d 条张量", len(graph.nodes), len(graph.tensors))
 
@@ -121,7 +121,8 @@ def run(graph: Graph, config: dict) -> tuple[Graph, list[DmaPlan]]:
     allocated = sum(1 for t in graph.tensors.values() if t.hbm_offset is not None)
     logger.info("Pass 完成。HBM 分配: %d 个张量, DMA 计划: %d 条", allocated, len(dma_plans))
     _dump_memory_layout(graph, cube_size)
-    return graph, dma_plans
+    graph.dma_plans = dma_plans
+    return graph
 
 
 def post_validate(graph: Graph) -> list[str]:

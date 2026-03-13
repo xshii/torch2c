@@ -120,7 +120,9 @@ def _load_configs(
         "decomposition": load_config(os.path.join(config_dir, "decompositions.yaml")),
         "absorption": load_config(os.path.join(config_dir, "absorptions.yaml")),
         "format": format_config,
-        "reformat": {},
+        "reformat": {
+            "compute_unit_formats": hardware.get("unit_formats", {}),
+        },
         "storage": {
             "enable_local_storage": True,
             **hardware.get("local_bypass", {}),
@@ -226,7 +228,7 @@ def _run_late_passes(
     cube_size: int,
     debug_dump: bool = False,
     model_name: str | None = None,
-) -> tuple[Graph, list]:
+) -> Graph:
     """Pass ⑥ validator → ⑦ scheduler → ⑧ memory_planner。"""
     # Pass ⑥ validator
     logger.info("Pass ⑥ validator 开始")
@@ -253,16 +255,16 @@ def _run_late_passes(
     # Pass ⑧ memory_planner（基于 scheduler 确定的执行顺序分配内存）
     logger.info("Pass ⑧ memory_planner 开始")
     before = graph.to_dict() if debug_dump else None
-    graph, dma_plans = memory_planner.run(graph, configs["hardware"])
+    graph = memory_planner.run(graph, configs["hardware"])
     if debug_dump:
         _dump_pass_snapshot(graph, before, output_dir, "⑧", "memory_planner")
     _run_post_validation(collector, "memory_planner", graph, memory_planner.post_validate)
-    _emit_schedule_viz(graph, output_dir, cube_size, configs.get("hardware"), dma_plans)
+    _emit_schedule_viz(graph, output_dir, cube_size, configs.get("hardware"), graph.dma_plans)
     emit_lifetime_html(graph, output_dir, cube_size, configs.get("hardware"),
-                       dma_plans=dma_plans, title=model_name)
+                       dma_plans=graph.dma_plans, title=model_name)
     logger.info("Pass ⑧ 完成")
 
-    return graph, dma_plans
+    return graph
 
 
 def _resolve_compile_configs(
@@ -352,8 +354,8 @@ def compile(
     _run_phase_checkpoint(collector, "annotation", graph, debug_dump)
 
     # Phase 4-5: Validation + Backend (⑥-⑧)
-    graph, dma_plans = _run_late_passes(graph, configs, collector, output_dir, cube_size,
-                                        debug_dump, model_name=model_name)
+    graph = _run_late_passes(graph, configs, collector, output_dir, cube_size,
+                             debug_dump, model_name=model_name)
 
     logger.info(collector.summary())
     if collector.has_errors():
@@ -361,7 +363,7 @@ def compile(
 
     # Pass ⑨ codegen
     _run_codegen(
-        model, dummy_input, mask, graph, dma_plans, configs, config_dir, output_dir,
+        model, dummy_input, mask, graph, graph.dma_plans, configs, config_dir, output_dir,
         atol, cosine_tol, static_golden=static_golden,
     )
 

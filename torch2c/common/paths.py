@@ -12,4 +12,4 @@ PROJECT_ROOT = PACKAGE_ROOT.parent
 INTEGRATION_CONFIG_DIR = PACKAGE_ROOT / "integration" / "config"
 NPU_CPU_MOCK_DIR = PROJECT_ROOT / "npu_cpu_mock"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output"
-HARDWARE_CONFIG_PATH = PACKAGE_ROOT / "memory_planner" / "config" / "hardware_config.yaml"
+HARDWARE_CONFIG_PATH = INTEGRATION_CONFIG_DIR / "hardware_config.yaml"

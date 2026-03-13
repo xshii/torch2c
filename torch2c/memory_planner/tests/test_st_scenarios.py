@@ -235,7 +235,8 @@ class TestST1_EmbeddingBiasBulk:
     def test_bulk_strategy(self):
         """全部 tensor 放入 L1 → bulk DMA（__bulk_load__ + __bulk_store__）。"""
         g, config = self._build()
-        g, dma_plans = run(g, config)
+        g = run(g, config)
+        dma_plans = g.dma_plans
         assert len(dma_plans) == 2
         assert dma_plans[0].node_id == "__bulk_load__"
         assert dma_plans[1].node_id == "__bulk_store__"
@@ -243,14 +244,14 @@ class TestST1_EmbeddingBiasBulk:
     def test_l1_no_reuse(self):
         """bulk 策略下所有 tensor 的 L1 offset 唯一（不复用）。"""
         g, config = self._build()
-        g, _ = run(g, config)
+        g = run(g, config)
         offsets = [t.l1_offset for t in g.tensors.values() if t.l1_offset is not None]
         assert len(offsets) == len(set(offsets)), "bulk 策略 L1 offset 不应有复用"
 
     def test_hbm_linear(self):
         """HBM 线性分配：每个 tensor 的 hbm_offset 递增且无间隙复用。"""
         g, config = self._build()
-        g, _ = run(g, config)
+        g = run(g, config)
         hbm_tensors = sorted(
             [t for t in g.tensors.values() if t.hbm_offset is not None],
             key=lambda t: t.hbm_offset,
@@ -266,7 +267,8 @@ class TestST1_EmbeddingBiasBulk:
     def test_dma_format_convert(self):
         """bulk DMA 搬运所有 input/weight → L1，format_annotation 描述计算格式。"""
         g, config = self._build()
-        g, dma_plans = run(g, config)
+        g = run(g, config)
+        dma_plans = g.dma_plans
         bulk_load = dma_plans[0]
         # bulk load 包含 input 和 weight 的搬运
         load_tids = {i.tensor_id for i in bulk_load.loads}
@@ -287,7 +289,7 @@ class TestST1_EmbeddingBiasBulk:
     def test_post_validate_pass(self):
         """内存编排后校验通过。"""
         g, config = self._build()
-        g, _ = run(g, config)
+        g = run(g, config)
         assert post_validate(g) == []
 
 
@@ -315,7 +317,8 @@ class TestST2_EmbeddingBiasMixedPrecision:
     def test_bulk_strategy(self):
         """FP16 I/O 下总量仍远小于 1M → bulk 策略。"""
         g, config = self._build()
-        g, dma_plans = run(g, config)
+        g = run(g, config)
+        dma_plans = g.dma_plans
         assert len(dma_plans) == 2
         assert dma_plans[0].node_id == "__bulk_load__"
 
@@ -328,13 +331,13 @@ class TestST2_EmbeddingBiasMixedPrecision:
     def test_io_dtype_fp16(self):
         """输入输出 tensor 仍为 fp16。"""
         g, config = self._build()
-        g, _ = run(g, config)
+        g = run(g, config)
         assert g.tensors["input"].dtype == "fp16"
         assert g.tensors["output"].dtype == "fp16"
 
     def test_post_validate_pass(self):
         g, config = self._build()
-        g, _ = run(g, config)
+        g = run(g, config)
         assert post_validate(g) == []
 
 
@@ -353,7 +356,8 @@ class TestST3_EmbeddingBiasOverflow:
         """单算子总 tensor > 1M → tiled 策略 M 维切分成功。"""
         g = _build_embedding_bias(m=256, k=512, n=512)
         config = _config_1m()
-        g, dma_plans = run(g, config)
+        g = run(g, config)
+        dma_plans = g.dma_plans
         # tiled 策略成功，验证 tile_info 已设置
         node = g.nodes["mm0"]
         assert "_tile_info" in node.params
@@ -390,14 +394,15 @@ class TestST4_2LayerMLPBulk:
     def test_bulk_strategy(self):
         """全部放下 → bulk DMA。"""
         g, config = self._build()
-        g, dma_plans = run(g, config)
+        g = run(g, config)
+        dma_plans = g.dma_plans
         assert len(dma_plans) == 2
         assert dma_plans[0].node_id == "__bulk_load__"
 
     def test_l1_no_reuse(self):
         """bulk 策略下 L1 不复用。"""
         g, config = self._build()
-        g, _ = run(g, config)
+        g = run(g, config)
         offsets = [t.l1_offset for t in g.tensors.values() if t.l1_offset is not None]
         assert len(offsets) == len(set(offsets))
 
@@ -409,7 +414,7 @@ class TestST4_2LayerMLPBulk:
 
     def test_post_validate_pass(self):
         g, config = self._build()
-        g, _ = run(g, config)
+        g = run(g, config)
         assert post_validate(g) == []
 
 
@@ -435,7 +440,8 @@ class TestST5_2LayerMLPPerOp:
     def test_perop_strategy(self):
         """bulk 失败后 fallback 到 per-op，每个算子有独立 DMA plan。"""
         g, config = self._build()
-        g, dma_plans = run(g, config)
+        g = run(g, config)
+        dma_plans = g.dma_plans
         # per-op: 每个算子一个 DMA plan
         assert len(dma_plans) == 2
         assert dma_plans[0].node_id == "mm0"
@@ -444,14 +450,14 @@ class TestST5_2LayerMLPPerOp:
     def test_l1_has_reuse(self):
         """per-op 路径下 L1 offset 存在复用。"""
         g, config = self._build()
-        g, _ = run(g, config)
+        g = run(g, config)
         offsets = [t.l1_offset for t in g.tensors.values() if t.l1_offset is not None]
         assert len(set(offsets)) < len(offsets), "per-op 路径应有 L1 复用"
 
     def test_l1_no_overlap_per_op(self):
         """同一算子内的 tensor L1 地址不重叠。"""
         g, config = self._build()
-        g, _ = run(g, config)
+        g = run(g, config)
         cube_size = config["fractal"]["cube_size"]
         for nid in g.execution_order:
             node = g.nodes[nid]
@@ -476,7 +482,7 @@ class TestST5_2LayerMLPPerOp:
     def test_per_op_peak_under_1m(self):
         """每个算子的 L1 峰值 < 1M。"""
         g, config = self._build()
-        g, _ = run(g, config)
+        g = run(g, config)
         cube_size = config["fractal"]["cube_size"]
         for nid in g.execution_order:
             node = g.nodes[nid]
@@ -494,7 +500,7 @@ class TestST5_2LayerMLPPerOp:
     def test_hbm_reuse(self):
         """per-op 路径下 HBM 存在 lifetime 复用。"""
         g, config = self._build()
-        g, _ = run(g, config)
+        g = run(g, config)
         hbm_offsets = [
             t.hbm_offset for t in g.tensors.values() if t.hbm_offset is not None
         ]
@@ -505,7 +511,7 @@ class TestST5_2LayerMLPPerOp:
 
     def test_post_validate_pass(self):
         g, config = self._build()
-        g, _ = run(g, config)
+        g = run(g, config)
         assert post_validate(g) == []
 
 
@@ -534,12 +540,12 @@ class TestST6_MHATiled:
 
     def test_tiled_succeeds(self):
         """tiled 策略成功通过，attn 节点被切分。"""
-        g, dma_plans = self._build()
+        g = self._build()
         assert post_validate(g) == []
 
     def test_attn_has_tile_info(self):
         """attn 节点包含 _tile_info。"""
-        g, _ = self._build()
+        g = self._build()
         attn = g.nodes["attn"]
         assert "_tile_info" in attn.params
         ti = attn.params["_tile_info"]
@@ -549,7 +555,7 @@ class TestST6_MHATiled:
 
     def test_projections_not_tiled(self):
         """q_proj / k_proj 不需要 tiling（eviction 足够）。"""
-        g, _ = self._build()
+        g = self._build()
         assert "_tile_info" not in g.nodes["q_proj"].params
         assert "_tile_info" not in g.nodes["k_proj"].params
 
@@ -557,7 +563,7 @@ class TestST6_MHATiled:
         """单独 Q 投影可以放下（验证不是 Q 本身太大）。"""
         g = _build_embedding_bias(m=640, k=256, n=256)
         config = _config_1m()
-        g, _ = run(g, config)
+        g = run(g, config)
         assert post_validate(g) == []
 
     def test_size_calculation(self):
@@ -572,9 +578,9 @@ class TestST6_MHATiled:
 
     def test_tiled_dma_plan(self):
         """attn 节点的 DMA 计划包含 tiled 指令。"""
-        g, dma_plans = self._build()
+        g = self._build()
         # 找到 attn 的 DMA plan
-        attn_plan = [p for p in dma_plans if p.node_id == "attn"]
+        attn_plan = [p for p in g.dma_plans if p.node_id == "attn"]
         assert len(attn_plan) == 1
         plan = attn_plan[0]
         assert plan.tile_info is not None

@@ -15,7 +15,7 @@ from .errors import (
     Severity,
     ValidationError,
 )
-from .graph_ir import Graph, Node, Tensor, graph_diff
+from .graph_ir import DmaInstruction, DmaPlan, Graph, Node, Tensor, graph_diff
 from .logger import get_logger, setup_logging
 from .compile_config import get_model_config, torch2c_config
 from .debug_config import (
@@ -36,7 +36,8 @@ from .npu_annotate import (
     npu,
     npu_input,
 )
-from .pass_protocol import CompilerPass
+from .pass_protocol import CompilerPass, ValidatablePass
+from .sizing import align_up, calc_padded_size
 from .torch_debug import (
     disable_trace,
     enable_trace,
@@ -62,9 +63,12 @@ __all__ = [
     "CompileDiagnostic",
     "CompilerError",
     "CompilerPass",
+    "ValidatablePass",
     "ConfigError",
     "DecompositionError",
     "DiagnosticCollector",
+    "DmaInstruction",
+    "DmaPlan",
     "DtypeInfo",
     "Graph",
     "graph_diff",
@@ -106,4 +110,6 @@ __all__ = [
     "memory_layout_enabled",
     "c_mock_compile_level",
     "c_mock_runtime_level",
+    "align_up",
+    "calc_padded_size",
 ]

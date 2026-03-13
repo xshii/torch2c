@@ -2,43 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
 from torch2c.common import Graph, get_logger
+from torch2c.common.graph_ir import DmaInstruction, DmaPlan
 
 from ._utils import align_up, calc_padded_size
 
 logger = get_logger("memory_planner.dma")
-
-
-@dataclass
-class DmaInstruction:
-    """单条 DMA 搬运指令。"""
-
-    op: str  # "load" | "store"
-    tensor_id: str
-    hbm_offset: int
-    l1_offset: int
-    size_bytes: int
-    src_format: str
-    dst_format: str
-    dtype: str = "fp16"
-    tile_stride: int | None = None  # tiled DMA 每 tile 的 HBM 字节步长（per-batch）
-    # batch > 1 且 tiled dim != dim 0 时，tile 数据在 HBM 非连续，需 per-batch DMA
-    batch_count: int | None = None  # 批次数（dim 0 ~ tiled_dim-1 的乘积）
-    hbm_batch_stride: int | None = None  # HBM 中相邻 batch 的字节步长
-    l1_batch_stride: int | None = None  # L1 中相邻 batch 的字节步长
-
-
-@dataclass
-class DmaPlan:
-    """单个算子的 DMA 计划。"""
-
-    node_id: str
-    loads: list[DmaInstruction] = field(default_factory=list)
-    stores: list[DmaInstruction] = field(default_factory=list)
-    tile_info: dict | None = None  # 非 None 时表示此算子需要 tiled 执行
-    l1_layout: dict[str, int] | None = None  # per-op L1 layout (eviction 模式)
 
 
 def _get_dst_format(node, tensor_id: str, tensor) -> str:

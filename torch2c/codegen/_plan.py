@@ -8,8 +8,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from torch2c.common import Graph, Node, Tensor
-from torch2c.memory_planner._dma import DmaPlan
+from torch2c.common import DmaPlan, Graph, Node, Tensor
 
 
 class CodegenPlan:
