@@ -68,7 +68,7 @@ def run(graph: Graph, config: dict) -> Graph:
         npu_in = npu_ann.get("input")    # NpuSpec | None
         npu_out = npu_ann.get("output")  # NpuSpec | None
 
-        # 为每个输入构建标注
+        # 为每个输入构建标注（仅 dtype，format 留给 format_planner）
         # 优先级：per-node NpuSpec > global target > tensor 原始值 > 默认
         input_annotations = []
         for tid in node.inputs:
@@ -78,7 +78,8 @@ def run(graph: Graph, config: dict) -> Graph:
                 dt = (npu_in.dtype if npu_in else None) or target_dtype or t.dtype or "fp16"
                 input_annotations.append({"format": fmt, "dtype": dt})
 
-        # 为每个输出构建标注并同步更新 tensor
+        # 为每个输出构建标注并更新 tensor dtype + format
+        # format_planner（如果启用）会在后续覆盖 tensor.format
         output_annotations = []
         for tid in node.outputs:
             t = graph.get_tensor(tid)

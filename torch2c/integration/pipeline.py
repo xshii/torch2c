@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 import torch
 import torch.nn as nn
@@ -18,6 +18,7 @@ from torch2c.common import (
 from torch2c.common.pass_config import OptionalPass, PassConfig
 from torch2c.integration._codegen_runner import _dump_intermediates, _run_codegen
 from torch2c.format_annotator import format_annotator
+from torch2c.format_planner import format_planner
 from torch2c.fusion import fusion_planner
 from torch2c.global_tiler import global_tiler
 from torch2c.graph_capture import graph_capture
@@ -74,7 +75,7 @@ _OPTIMIZATION_PASSES: list[_PassDesc] = [
              op_absorption.post_validate, toggle=OptionalPass.ABSORPTION),
 ]
 
-# Phase 3: Backend Annotation (⑤-⑤b)
+# Phase 3: Backend Annotation (⑤-⑤c)
 _ANNOTATION_PASSES: list[_PassDesc] = [
     _PassDesc(
         "format_annotator",
@@ -84,15 +85,23 @@ _ANNOTATION_PASSES: list[_PassDesc] = [
         format_annotator.post_validate,
     ),
     _PassDesc(
-        "reformat_inserter",
+        "format_planner",
         "⑤a",
+        format_planner.run,
+        "format_planner",
+        format_planner.post_validate,
+        toggle=OptionalPass.FORMAT_PLANNER,
+    ),
+    _PassDesc(
+        "reformat_inserter",
+        "⑤b",
         reformat_inserter.run,
         "reformat",
         reformat_inserter.post_validate,
     ),
     _PassDesc(
         "storage_assigner",
-        "⑤b",
+        "⑤c",
         storage_assigner.run,
         "storage",
         storage_assigner.post_validate,
@@ -137,9 +146,10 @@ def _load_configs(
         "decomposition": load_config(os.path.join(config_dir, "decompositions.yaml")),
         "absorption": load_config(os.path.join(config_dir, "absorptions.yaml")),
         "format": format_config,
-        "reformat": {
-            "compute_unit_formats": hardware.get("unit_formats", {}),
+        "format_planner": {
+            "format_capabilities": hardware.get("format_capabilities", {}),
         },
+        "reformat": {},
         "storage": {
             "enable_local_storage": True,
             **hardware.get("local_bypass", {}),
@@ -396,7 +406,6 @@ def compile(
     # pass_toggles 覆盖 config 文件中的开关
     if pass_toggles:
         base_pc: PassConfig = configs["pass_config"]
-        from dataclasses import asdict
         merged = {**asdict(base_pc), **pass_toggles}
         configs["pass_config"] = PassConfig.from_dict(merged)
     collector = DiagnosticCollector()
@@ -415,7 +424,7 @@ def compile(
                            output_dir, cube_size, debug_dump)
     _run_phase_checkpoint(collector, "optimization", graph, debug_dump)
 
-    # Phase 3: Backend Annotation (⑤-⑤b)
+    # Phase 3: Backend Annotation (⑤-⑤c)
     graph = _run_pass_list(graph, _ANNOTATION_PASSES, configs, collector,
                            output_dir, cube_size, debug_dump)
     _run_phase_checkpoint(collector, "annotation", graph, debug_dump)
@@ -458,7 +467,6 @@ def compile_graph_only(
     """
     configs = _resolve_compile_configs(model, config_dir, target_dtype, target_format, None)
     if pass_toggles:
-        from dataclasses import asdict
         base_pc: PassConfig = configs["pass_config"]
         configs["pass_config"] = PassConfig.from_dict({**asdict(base_pc), **pass_toggles})
     collector = DiagnosticCollector()

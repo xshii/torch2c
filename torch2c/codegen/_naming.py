@@ -9,16 +9,29 @@ from ._helpers import find_op_sig
 
 # ---- npu_op → 简短前缀 ----
 _OP_SHORT = {
+    # cube
     "cube_matmul": "mm", "cube_matmul_bias": "mm_bias",
-    "vector_add": "add", "vector_mul": "mul", "vector_mul_scalar": "mul_s",
-    "vector_gelu": "gelu", "vector_softmax": "softmax",
+    # vector: arithmetic
+    "vector_add": "add", "vector_sub": "sub",
+    "vector_mul": "mul", "vector_div": "div",
+    "vector_mul_scalar": "mul_s", "vector_fill": "fill",
+    # vector: activation
+    "vector_gelu": "gelu", "vector_dropout": "dropout",
+    # vector: normalization
+    "vector_softmax": "softmax",
+    "vector_softmax_part1": "softmax_p1", "vector_softmax_part2": "softmax_p2",
     "vector_layernorm": "layernorm",
     "vector_layernorm_part1": "layernorm_p1", "vector_layernorm_part2": "layernorm_p2",
-    "vector_softmax_part1": "softmax_p1", "vector_softmax_part2": "softmax_p2",
+    "vector_rmsnorm": "rmsnorm",
+    "vector_rmsnorm_part1": "rmsnorm_p1", "vector_rmsnorm_part2": "rmsnorm_p2",
+    # vector: shape
     "vector_transpose": "trans", "vector_transpose_2d": "trans2d",
+    # dma / idma
+    "dma_reformat": "reformat", "dma_move": "dma_mv",
     "idma_reshape": "reshape", "idma_broadcast": "bcast", "idma_move": "copy",
+    "idma_concat": "concat", "idma_slice": "slice",
+    # codegen internal aliases
     "scalar_reshape": "reshape", "scalar_broadcast": "bcast", "scalar_copy": "copy",
-    "dma_reformat": "reformat",
 }
 
 

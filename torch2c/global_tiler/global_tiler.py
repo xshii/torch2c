@@ -22,8 +22,8 @@ from torch2c.common.sizing import calc_padded_size
 
 logger = get_logger("global_tiler")
 
-# 可 tiling 的 op
-_TILEABLE_OPS = frozenset({"cube_matmul", "cube_matmul_bias", "dma_reformat"})
+# global tiler 支持的 op（仅 cube + reformat，与 memory_planner._tiling 的全量列表不同）
+_GLOBAL_TILEABLE_OPS = frozenset({"cube_matmul", "cube_matmul_bias", "dma_reformat"})
 
 
 @dataclass
@@ -134,7 +134,7 @@ def _evaluate_node(
 ) -> dict | None:
     """评估节点是否应主动 tiling，返回 _tile_config 或 None。"""
     op = node.npu_op or node.op_type
-    if op not in _TILEABLE_OPS:
+    if op not in _GLOBAL_TILEABLE_OPS:
         return None
 
     dim_size = _get_tile_dim_size(node, graph)

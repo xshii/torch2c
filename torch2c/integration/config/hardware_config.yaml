@@ -20,9 +20,17 @@ dma:
   supports_dtype_cast: false
   max_transfer_size_bytes: 1048576
 
-unit_formats:
-  cube: nz
-  vector: nd
+format_capabilities:
+  cube:
+    src0: nd
+    src1: nz
+    dst: [nd, nz]
+  vector:
+    src: nd
+    dst: [nd, nz]
+  idma:
+    src: [nd, nz]
+    dst: [nd, nz]
 
 local_bypass:
   allowed_pairs:

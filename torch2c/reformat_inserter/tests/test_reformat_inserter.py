@@ -39,11 +39,19 @@ def _make_matmul_add() -> Graph:
         id="node_matmul", op_type="cube_matmul",
         inputs=["t_input", "t_weight"], outputs=["t_mm_out"],
         compute_unit="cube", npu_op="cube_matmul", is_mapped=True,
+        format_annotation={
+            "inputs": [{"format": "nd", "dtype": "fp16"}, {"format": "nz", "dtype": "fp16"}],
+            "outputs": [{"format": "nz", "dtype": "fp16"}],
+        },
     ))
     g.add_node(Node(
         id="node_add", op_type="vector_add",
         inputs=["t_mm_out"], outputs=["t_out"],
         compute_unit="vector", npu_op="vector_add", is_mapped=True,
+        format_annotation={
+            "inputs": [{"format": "nd", "dtype": "fp16"}],
+            "outputs": [{"format": "nd", "dtype": "fp16"}],
+        },
     ))
     g.execution_order = ["node_matmul", "node_add"]
     return g
@@ -146,10 +154,18 @@ class TestNoInsertion:
         g.add_node(Node(
             id="n0", op_type="vector_add", inputs=["t_in"], outputs=["t_mid"],
             compute_unit="vector", npu_op="vector_add", is_mapped=True,
+            format_annotation={
+                "inputs": [{"format": "nd", "dtype": "fp16"}],
+                "outputs": [{"format": "nd", "dtype": "fp16"}],
+            },
         ))
         g.add_node(Node(
             id="n1", op_type="vector_gelu", inputs=["t_mid"], outputs=["t_out"],
             compute_unit="vector", npu_op="vector_gelu", is_mapped=True,
+            format_annotation={
+                "inputs": [{"format": "nd", "dtype": "fp16"}],
+                "outputs": [{"format": "nd", "dtype": "fp16"}],
+            },
         ))
         g.execution_order = ["n0", "n1"]
 
@@ -174,11 +190,14 @@ class TestNoInsertion:
             id="t_out", shape=shape, dtype="fp16", format="nz",
             producer_node_id="n0", is_model_output=True,
         ))
-        # cube 要求 nz，但 weight(nd) 不应触发 reformat
         g.add_node(Node(
             id="n0", op_type="cube_matmul",
             inputs=["t_in", "t_w"], outputs=["t_out"],
             compute_unit="cube", npu_op="cube_matmul", is_mapped=True,
+            format_annotation={
+                "inputs": [{"format": "nd", "dtype": "fp16"}, {"format": "nz", "dtype": "fp16"}],
+                "outputs": [{"format": "nz", "dtype": "fp16"}],
+            },
         ))
         g.execution_order = ["n0"]
 
@@ -199,11 +218,38 @@ class TestNoInsertion:
             id="t_out", shape=shape, dtype="fp16", format="nz",
             producer_node_id="n0", is_model_output=True,
         ))
-        # cube 要求 nz，但 model_input(nd) 不应触发 reformat
         g.add_node(Node(
             id="n0", op_type="cube_matmul",
             inputs=["t_in"], outputs=["t_out"],
             compute_unit="cube", npu_op="cube_matmul", is_mapped=True,
+            format_annotation={
+                "inputs": [{"format": "nz", "dtype": "fp16"}],
+                "outputs": [{"format": "nz", "dtype": "fp16"}],
+            },
+        ))
+        g.execution_order = ["n0"]
+
+        g = run_reformat_inserter(g, {})
+
+        reformat_nodes = [n for n in g.nodes.values() if n.op_type == "dma_reformat"]
+        assert len(reformat_nodes) == 0
+
+    def test_no_annotation_skipped(self):
+        """无 format_annotation 的节点不做格式检查。"""
+        g = Graph()
+        shape = [1, 32, 64]
+        g.add_tensor(Tensor(
+            id="t_in", shape=shape, dtype="fp16", format="nd",
+            is_model_input=True, consumer_node_ids=["n0"],
+        ))
+        g.add_tensor(Tensor(
+            id="t_out", shape=shape, dtype="fp16", format="nd",
+            producer_node_id="n0", is_model_output=True,
+        ))
+        g.add_node(Node(
+            id="n0", op_type="some_op",
+            inputs=["t_in"], outputs=["t_out"],
+            compute_unit="vector", npu_op=None, is_mapped=False,
         ))
         g.execution_order = ["n0"]
 
@@ -254,16 +300,28 @@ class TestChainInsertion:
             id="n_mm1", op_type="cube_matmul",
             inputs=["t_in", "t_w1"], outputs=["t_mm1_out"],
             compute_unit="cube", npu_op="cube_matmul", is_mapped=True,
+            format_annotation={
+                "inputs": [{"format": "nd", "dtype": "fp16"}, {"format": "nz", "dtype": "fp16"}],
+                "outputs": [{"format": "nz", "dtype": "fp16"}],
+            },
         ))
         g.add_node(Node(
             id="n_add", op_type="vector_add",
             inputs=["t_mm1_out"], outputs=["t_add_out"],
             compute_unit="vector", npu_op="vector_add", is_mapped=True,
+            format_annotation={
+                "inputs": [{"format": "nd", "dtype": "fp16"}],
+                "outputs": [{"format": "nd", "dtype": "fp16"}],
+            },
         ))
         g.add_node(Node(
             id="n_mm2", op_type="cube_matmul",
             inputs=["t_add_out", "t_w2"], outputs=["t_out"],
             compute_unit="cube", npu_op="cube_matmul", is_mapped=True,
+            format_annotation={
+                "inputs": [{"format": "nz", "dtype": "fp16"}, {"format": "nz", "dtype": "fp16"}],
+                "outputs": [{"format": "nz", "dtype": "fp16"}],
+            },
         ))
         g.execution_order = ["n_mm1", "n_add", "n_mm2"]
         return g
@@ -303,29 +361,6 @@ class TestChainInsertion:
         # 第二个 reformat: nd → nz（add 输出 → matmul 输入）
         assert rfs[1].format_annotation["inputs"][0]["format"] == "nd"
         assert rfs[1].format_annotation["outputs"][0]["format"] == "nz"
-
-
-class TestCustomConfig:
-    """自定义 compute_unit_formats 配置。"""
-
-    def test_custom_format_mapping(self):
-        """使用自定义格式映射时应按新规则插入 reformat。"""
-        g = _make_matmul_add()
-        # 全部都要求 nd → matmul(cube) 输入的 nz 不需要转换
-        # 因为 input/weight 跳过，t_mm_out(nz) → add(要求nd) 仍然需要
-        g = run_reformat_inserter(g, {"compute_unit_formats": {"vector": "nd"}})
-
-        reformat_nodes = [n for n in g.nodes.values() if n.op_type == "dma_reformat"]
-        # 只在 t_mm_out(nz) → add(nd) 处插入
-        assert len(reformat_nodes) == 1
-
-    def test_empty_format_mapping(self):
-        """空的格式映射时不插入任何 reformat。"""
-        g = _make_matmul_add()
-        g = run_reformat_inserter(g, {"compute_unit_formats": {}})
-
-        reformat_nodes = [n for n in g.nodes.values() if n.op_type == "dma_reformat"]
-        assert len(reformat_nodes) == 0
 
 
 class TestPostValidate:

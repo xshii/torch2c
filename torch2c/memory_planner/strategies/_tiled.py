@@ -59,6 +59,7 @@ def _apply_tile_info(
         "original_size": tile_info.original_size,
         "tiled_tensors": tile_info.tiled_tensors,
         "num_buffers": tile_info.num_buffers,
+        "pipe_group": tile_info.pipe_group,
     }
     elo = extra_l1_offsets
     if elo is None and hasattr(tile_info, "_extra_l1_offsets"):

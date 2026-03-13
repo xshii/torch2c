@@ -8,11 +8,13 @@
   tile_size   — 每块的元素数
   num_tiles   — 切分块数
   tiled_tensors — {tensor_id: dim_idx} 参与切分的张量
+  pipe_group  — pipe 连接的节点组编号（共享 tile 循环）
 
 设计：
   - 权重 / bias 不切分（跨 tile 共享）
   - 第一个非权重输入（A）及输出（C）的 M 维切分
   - 第二个输入（B / weight）不切分
+  - pipe 连接的节点必须统一 tile_size（共享同一个 tile 循环）
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ class TileInfo:
     original_size: int
     tiled_tensors: dict[str, int] = field(default_factory=dict)
     num_buffers: int = 1  # 1=无流水, 2=ping-pong, N=N 级流水
+    pipe_group: int | None = None  # pipe 连接的节点组编号，共享 tile 循环
 
 
 # ---- 内部工具 -------------------------------------------------------
@@ -45,22 +48,35 @@ class TileInfo:
 
 # op → 可切分维度（相对于 shape 末尾的偏移，-2 = M 维）
 _TILEABLE_OPS: dict[str, int | None] = {
+    # cube ops
     "cube_matmul": -2,
     "cube_matmul_bias": -2,
-    "dma_reformat": -2,
-    # element-wise / reduction ops: 所有非权重 tensor 统一切分
-    "npu_softmax": -2,
-    "vector_softmax": -2,
+    # vector: arithmetic
     "vector_add": -2,
-    "npu_layernorm": -2,
-    "vector_layernorm": -2,
-    "npu_gelu": -2,
+    "vector_sub": -2,
+    "vector_mul": -2,
+    "vector_div": -2,
+    "vector_mul_scalar": -2,
+    "vector_fill": -2,
+    # vector: activation
     "vector_gelu": -2,
-    "npu_relu": -2,
-    "npu_transpose": -2,
+    "vector_dropout": -2,
+    # vector: normalization
+    "vector_softmax": -2,
+    "vector_softmax_part1": -2,
+    "vector_softmax_part2": -2,
+    "vector_layernorm": -2,
+    "vector_layernorm_part1": -2,
+    "vector_layernorm_part2": -2,
+    "vector_rmsnorm": -2,
+    "vector_rmsnorm_part1": -2,
+    "vector_rmsnorm_part2": -2,
+    # vector: shape
     "vector_transpose": -2,
     "vector_transpose_2d": -2,
-    # DMA / reshape ops
+    # DMA / iDMA ops
+    "dma_reformat": -2,
+    "dma_move": -2,
     "idma_broadcast": -2,
     "idma_reshape": -2,
     "idma_move": -2,
@@ -69,7 +85,8 @@ _TILEABLE_OPS: dict[str, int | None] = {
 }
 
 # matmul 类 op: 只切分 A（第一个输入）和 C（输出），B（权重）不切分
-_MATMUL_OPS = {"cube_matmul", "cube_matmul_bias"}
+# 定义在 op_absorption 中，此处复用
+from torch2c.op_absorption.op_absorption import _MATMUL_OPS
 
 # element-wise 类 op: 所有非权重 tensor 统一切分（同 dma_reformat）
 _ELEMENTWISE_OPS = _TILEABLE_OPS.keys() - _MATMUL_OPS
@@ -274,6 +291,159 @@ def _find_tile_size_for_multi_buffer(
     return best, math.ceil(original / best)
 
 
+# ---- pipe 统一 tiling ------------------------------------------------
+
+
+def _find_pipe_groups(graph: Graph) -> list[list[str]]:
+    """找出被 pipe tensor 连接的节点组（按执行序排列）。
+
+    返回连通分量列表，每个分量是共享 pipe tensor 的节点 ID 列表。
+    """
+    adj: dict[str, set[str]] = {}
+    for t in graph.tensors.values():
+        if t.storage != "pipe" or not t.producer_node_id:
+            continue
+        adj.setdefault(t.producer_node_id, set())
+        for cid in t.consumer_node_ids:
+            adj.setdefault(cid, set())
+            adj[t.producer_node_id].add(cid)
+            adj[cid].add(t.producer_node_id)
+    if not adj:
+        return []
+
+    order_idx = {nid: i for i, nid in enumerate(graph.execution_order)}
+    visited: set[str] = set()
+    groups: list[list[str]] = []
+    for nid in graph.execution_order:
+        if nid not in adj or nid in visited:
+            continue
+        group: list[str] = []
+        stack = [nid]
+        while stack:
+            n = stack.pop()
+            if n in visited:
+                continue
+            visited.add(n)
+            group.append(n)
+            for nb in adj.get(n, ()):
+                if nb not in visited:
+                    stack.append(nb)
+        group.sort(key=lambda x: order_idx.get(x, 0))
+        groups.append(group)
+    return groups
+
+
+def _degrade_group_pipes(graph: Graph, group: list[str]) -> None:
+    """将组内所有节点关联的 pipe tensor 降级为 hbm。"""
+    nid_set = set(group)
+    for t in graph.tensors.values():
+        if t.storage != "pipe":
+            continue
+        touches = (t.producer_node_id in nid_set
+                   or any(c in nid_set for c in t.consumer_node_ids))
+        if touches:
+            t.storage = "hbm"
+            logger.info("pipe 降级: tensor %s → hbm", t.id)
+
+
+def _unify_pipe_tile_sizes(
+    graph: Graph,
+    tile_map: dict[str, TileInfo],
+    l1_cap: int,
+    l1_align: int,
+    cube_size: int,
+) -> None:
+    """统一 pipe 连接节点组的 tile_size，原地修改 tile_map。
+
+    规则：pipe 连接的节点共享 tile 循环，必须使用相同 tile_size。
+    统一值 = 组内所有需 tiling 节点的 tile_size 最小值。
+    原本不需 tiling 的节点被"拉入"（tiled 后 L1 更小，保证 fit）。
+    """
+    for gid, group in enumerate(_find_pipe_groups(graph)):
+        tiled_nids = [n for n in group if n in tile_map]
+        if not tiled_nids:
+            continue
+
+        # 组内有不可 tile 的节点 → 降级整组 pipe
+        untileable = [n for n in group if not _is_tileable(graph.nodes[n])]
+        if untileable:
+            logger.warning(
+                "pipe 组 %d 含不可 tile 节点 %s，降级 pipe → hbm", gid, untileable,
+            )
+            _degrade_group_pipes(graph, group)
+            continue
+
+        ref = tile_map[tiled_nids[0]]
+        original = ref.original_size
+        unified = min(tile_map[n].tile_size for n in tiled_nids)
+        num_tiles = math.ceil(original / unified)
+
+        for nid in group:
+            _apply_unified_tile(
+                graph, tile_map, nid, gid, unified, num_tiles, original,
+                l1_cap, l1_align, cube_size,
+            )
+
+        logger.info(
+            "pipe 组 %d (%d 节点): 统一 tile_size=%d, num_tiles=%d",
+            gid, len(group), unified, num_tiles,
+        )
+
+
+def _apply_unified_tile(
+    graph: Graph,
+    tile_map: dict[str, TileInfo],
+    nid: str,
+    gid: int,
+    unified_ts: int,
+    num_tiles: int,
+    original: int,
+    l1_cap: int,
+    l1_align: int,
+    cube_size: int,
+) -> None:
+    """为组内单个节点应用统一 tile_size，更新 tile_map。"""
+    node = graph.nodes[nid]
+    already_tiled = nid in tile_map
+
+    if already_tiled:
+        tt = tile_map[nid].tiled_tensors
+        old_ts = tile_map[nid].tile_size
+    else:
+        tt = _classify_tiled_tensors(graph, node)
+        old_ts = original
+        if not tt:
+            return
+
+    # 重新计算 num_buffers
+    nb = 1
+    for try_nb in (3, 2):
+        peak = _calc_multi_buffer_peak(
+            graph, node, unified_ts, tt, try_nb, cube_size, l1_align,
+        )
+        if peak <= l1_cap:
+            nb = try_nb
+            break
+
+    first_tid = next(iter(tt))
+    tile_map[nid] = TileInfo(
+        tile_dim=tt[first_tid],
+        tile_size=unified_ts,
+        num_tiles=num_tiles,
+        original_size=original,
+        tiled_tensors=tt,
+        num_buffers=nb,
+        pipe_group=gid,
+    )
+
+    if not already_tiled:
+        logger.info("pipe 组 %d: 节点 %s 加入 tiling (tile_size=%d)", gid, nid, unified_ts)
+    elif old_ts != unified_ts:
+        logger.info(
+            "pipe 组 %d: 节点 %s tile_size %d → %d", gid, nid, old_ts, unified_ts,
+        )
+
+
 # ---- 公共 API -------------------------------------------------------
 
 
@@ -359,5 +529,8 @@ def analyze_tiling(
             "节点 %s 需要 tiling: dim=%d, %d → %d × %d%s%s",
             nid, dim_idx, original, tile_size, num_tiles, buf_label, src,
         )
+
+    # pipe 连接的节点组统一 tile_size
+    _unify_pipe_tile_sizes(graph, result, l1_cap, l1_align, cube_size)
 
     return result

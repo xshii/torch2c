@@ -29,6 +29,7 @@ class OptionalPass(Enum):
     """
 
     ABSORPTION = auto()         # ④ op_absorption
+    FORMAT_PLANNER = auto()     # ⑤a format_planner
     STORAGE_ASSIGNER = auto()   # ⑤b storage_assigner
     ROOFLINE_ANALYZER = auto()  # ⑥b roofline_analyzer
     FUSION_PLANNER = auto()     # ⑥c fusion_planner
@@ -40,6 +41,7 @@ class PassConfig:
     """可选 Pass 开关配置，所有字段默认 True。"""
 
     absorption: bool = True
+    format_planner: bool = True
     storage_assigner: bool = True
     roofline_analyzer: bool = True
     fusion_planner: bool = True
