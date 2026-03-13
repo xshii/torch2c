@@ -30,7 +30,8 @@ class OptionalPass(Enum):
 
     ABSORPTION = auto()         # ④ op_absorption
     FORMAT_PLANNER = auto()     # ⑤a format_planner
-    STORAGE_ASSIGNER = auto()   # ⑤b storage_assigner
+    STORAGE_ASSIGNER = auto()   # ⑤c storage_assigner
+    BLOCK_PAD = auto()          # ⑤d block_pad
     ROOFLINE_ANALYZER = auto()  # ⑥b roofline_analyzer
     FUSION_PLANNER = auto()     # ⑥c fusion_planner
     GLOBAL_TILER = auto()       # ⑦b global_tiler
@@ -43,6 +44,7 @@ class PassConfig:
     absorption: bool = True
     format_planner: bool = True
     storage_assigner: bool = True
+    block_pad: bool = True
     roofline_analyzer: bool = True
     fusion_planner: bool = True
     global_tiler: bool = True

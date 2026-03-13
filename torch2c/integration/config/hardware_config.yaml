@@ -32,6 +32,17 @@ format_capabilities:
     src: [nd, nz]
     dst: [nd, nz]
 
+block_pad:
+  default:
+    last_dim: 16           # ndim>=2: 最后 1 维对齐到的倍数
+    last_two_product: 256  # ndim>=2: 最后 2 维乘积对齐到的倍数
+    # single_dim: 256      # ndim==1: 唯一维度对齐（省略时 = last_two_product）
+  by_dtype:
+    # 特定 dtype 覆盖默认值，缺失字段回退 default
+    # int8:
+    #   last_dim: 32
+    #   last_two_product: 1024
+
 local_bypass:
   allowed_pairs:
     - ["cube", "vector"]

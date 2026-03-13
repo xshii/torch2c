@@ -17,6 +17,7 @@ from torch2c.common import (
 )
 from torch2c.common.pass_config import OptionalPass, PassConfig
 from torch2c.integration._codegen_runner import _dump_intermediates, _run_codegen
+from torch2c.block_pad import block_pad
 from torch2c.format_annotator import format_annotator
 from torch2c.format_planner import format_planner
 from torch2c.fusion import fusion_planner
@@ -75,7 +76,7 @@ _OPTIMIZATION_PASSES: list[_PassDesc] = [
              op_absorption.post_validate, toggle=OptionalPass.ABSORPTION),
 ]
 
-# Phase 3: Backend Annotation (⑤-⑤c)
+# Phase 3: Backend Annotation (⑤-⑤d)
 _ANNOTATION_PASSES: list[_PassDesc] = [
     _PassDesc(
         "format_annotator",
@@ -106,6 +107,14 @@ _ANNOTATION_PASSES: list[_PassDesc] = [
         "storage",
         storage_assigner.post_validate,
         toggle=OptionalPass.STORAGE_ASSIGNER,
+    ),
+    _PassDesc(
+        "block_pad",
+        "⑤d",
+        block_pad.run,
+        "block_pad",
+        block_pad.post_validate,
+        toggle=OptionalPass.BLOCK_PAD,
     ),
 ]
 
@@ -150,6 +159,7 @@ def _load_configs(
             "format_capabilities": hardware.get("format_capabilities", {}),
         },
         "reformat": {},
+        "block_pad": {"block_pad": hardware.get("block_pad", {})},
         "storage": {
             "enable_local_storage": True,
             **hardware.get("local_bypass", {}),
@@ -424,7 +434,7 @@ def compile(
                            output_dir, cube_size, debug_dump)
     _run_phase_checkpoint(collector, "optimization", graph, debug_dump)
 
-    # Phase 3: Backend Annotation (⑤-⑤c)
+    # Phase 3: Backend Annotation (⑤-⑤d)
     graph = _run_pass_list(graph, _ANNOTATION_PASSES, configs, collector,
                            output_dir, cube_size, debug_dump)
     _run_phase_checkpoint(collector, "annotation", graph, debug_dump)

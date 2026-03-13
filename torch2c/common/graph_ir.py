@@ -20,7 +20,8 @@ Node 字段:
 
 Tensor 字段:
   id              W: graph_capture        R: all
-  shape           W: graph_capture        R: memory_planner, codegen
+  shape           W: graph_capture/block_pad R: memory_planner, codegen
+  original_shape  W: block_pad            R: codegen
   dtype           W: graph_capture/fmt_ann R: memory_planner, codegen
   format          W: format_annotator     R: memory_planner, codegen
   hbm_offset      W: memory_planner       R: codegen
@@ -67,6 +68,8 @@ class Tensor:
     src_dtype: str | None = None
     # ── storage_assigner 阶段 ──
     storage: str = "hbm"  # "hbm" | "local" | "pipe"
+    # ── block_pad 阶段 ──
+    original_shape: list[int] | None = None  # padding 前的原始 shape
     # ── memory_planner 阶段 ──
     hbm_offset: int | None = None
     hbm_size: int | None = None
