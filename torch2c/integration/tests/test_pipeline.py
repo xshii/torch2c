@@ -10,9 +10,11 @@ import torch
 
 from torch2c.common import INTEGRATION_CONFIG_DIR
 from torch2c.integration.demo.encoder_model import EncoderModel
+from torch2c.common.pass_config import OptionalPass, PassConfig
 from torch2c.integration.pipeline import (
     _build_validator_config,
     _load_configs,
+    _load_pass_config,
     compile,
 )
 
@@ -42,6 +44,68 @@ class TestLoadConfigs:
         assert "supported_ops" in v_cfg
         assert "cube_matmul" in v_cfg["supported_ops"]
         assert "vector_add" in v_cfg["supported_ops"]
+
+    def test_pass_config_loaded(self):
+        configs = _load_configs(_CONFIG_DIR)
+        pc = configs["pass_config"]
+        assert isinstance(pc, PassConfig)
+        assert pc.is_enabled(OptionalPass.ABSORPTION)
+        assert pc.is_enabled(OptionalPass.ROOFLINE_ANALYZER)
+
+    def test_pass_config_default_all_true(self):
+        pc = _load_pass_config(_CONFIG_DIR)
+        for p in OptionalPass:
+            assert pc.is_enabled(p), f"{p.name} should default to True"
+
+    def test_pass_config_missing_file(self, tmp_path):
+        """optimization_config.yaml 不存在时全部默认启用。"""
+        pc = _load_pass_config(str(tmp_path))
+        for p in OptionalPass:
+            assert pc.is_enabled(p)
+
+
+# ---- Pass 开关端到端 ----
+
+
+class TestPassToggles:
+    @pytest.fixture
+    def output_dir(self, tmp_path):
+        return str(tmp_path / "output")
+
+    def _compile_with_toggles(self, output_dir, **toggles):
+        model = EncoderModel(d_model=192, dim_ff=384, num_layers=2)
+        model.eval()
+        dummy = torch.randn(1, 32, 192)
+        mask = torch.zeros(1, 32, 32)
+        return compile(
+            model=model, dummy_input=dummy, config_dir=_CONFIG_DIR,
+            output_dir=output_dir, mask=mask, pass_toggles=toggles,
+        )
+
+    def test_disable_roofline(self, output_dir):
+        """关闭 roofline 仍正确编译。"""
+        result = self._compile_with_toggles(output_dir, roofline_analyzer=False)
+        assert os.path.isfile(os.path.join(result, "src", "model_graph.c"))
+
+    def test_disable_fusion(self, output_dir):
+        """关闭 fusion 仍正确编译。"""
+        result = self._compile_with_toggles(output_dir, fusion_planner=False)
+        assert os.path.isfile(os.path.join(result, "src", "model_graph.c"))
+
+    def test_disable_global_tiler(self, output_dir):
+        """关闭 global_tiler 仍正确编译。"""
+        result = self._compile_with_toggles(output_dir, global_tiler=False)
+        assert os.path.isfile(os.path.join(result, "src", "model_graph.c"))
+
+    def test_disable_all_optional(self, output_dir):
+        """关闭全部可选 Pass 仍正确编译。"""
+        result = self._compile_with_toggles(
+            output_dir,
+            absorption=False, storage_assigner=False,
+            roofline_analyzer=False, fusion_planner=False,
+            global_tiler=False,
+        )
+        assert os.path.isfile(os.path.join(result, "src", "model_graph.c"))
 
 
 # ---- 端到端 ----

@@ -36,6 +36,7 @@ from .npu_annotate import (
     npu,
     npu_input,
 )
+from .pass_config import OptionalPass, PassConfig
 from .pass_protocol import CompilerPass, ValidatablePass
 from .sizing import align_up, calc_padded_size
 from .torch_debug import (

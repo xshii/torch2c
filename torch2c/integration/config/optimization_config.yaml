@@ -1,0 +1,22 @@
+# optimization_config.yaml — 优化 Pass 开关与参数
+#
+# 必选 Pass（始终运行，无法关闭）：
+#   capture, mapping, decomposition, format_annotator,
+#   reformat_inserter, validator, scheduler, memory_planner, codegen
+#
+# 可选 Pass 开关（设为 false 跳过该 Pass）：
+
+passes:
+  absorption: true           # ④ op_absorption — bias/activation 融合到主算子
+  storage_assigner: true     # ⑤b — local/pipe 存储优化（关闭后全走 HBM）
+  roofline_analyzer: true    # ⑥b — 算子计算强度分析（标注 _roofline）
+  fusion_planner: true       # ⑥c — 跨算子融合分析（标注 _fusion_group）
+  global_tiler: true         # ⑦b — cost-based 全局 tiling（注入 tile_override）
+
+# 后续可扩展参数示例（当前未启用）：
+# tiling:
+#   min_speedup_threshold: 1.10
+#   prefer_ping_pong: true
+# fusion:
+#   max_chain_length: 8
+#   min_dma_savings_bytes: 1024
