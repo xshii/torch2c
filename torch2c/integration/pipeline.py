@@ -25,6 +25,7 @@ from torch2c.global_tiler import global_tiler
 from torch2c.graph_capture import graph_capture
 from torch2c.reformat_inserter import reformat_inserter
 from torch2c.memory_planner import memory_planner
+from torch2c.mha_merge import mha_merge
 from torch2c.op_absorption import op_absorption
 from torch2c.op_decomposition import op_decomposition
 from torch2c.op_mapping import op_mapping
@@ -41,25 +42,55 @@ logger = get_logger(__name__)
 
 @dataclass(frozen=True)
 class _PassDesc:
-    """中间 Pass 的声明式描述。"""
+    """中间 Pass 的声明式描述。
+
+    config_key: configs dict 中的键名。None 表示传入完整 configs dict。
+    config_builder: 若非 None，用 config_builder(configs) 的返回值代替 config_key 查找。
+    post_hook: 若非 None，在 run() 成功后调用 post_hook(graph, configs)。
+    collect_errors: 若为 True，捕获 CompilerError 并收集到 collector 后重新抛出。
+    viz_hook: 若非 None，在 Pass 完成后调用 viz_hook(graph, output_dir, cube_size, configs)。
+    validate_with_config: 若为 True，validate_fn(graph, config) 传入 pass config。
+    """
 
     name: str
     number: str
     run_fn: Callable
     config_key: str | None
     validate_fn: Callable | None = None
-    # viz_hook(graph, output_dir, cube_size) — Pass 完成后生成可视化产物
     viz_hook: Callable | None = None
-    # toggle: 若非 None，则可通过 PassConfig 关闭该 Pass
     toggle: OptionalPass | None = None
+    config_builder: Callable | None = None
+    post_hook: Callable | None = None
+    collect_errors: bool = False
+    validate_with_config: bool = False
 
 
-def _emit_schedule_viz(
-    graph: Graph, output_dir: str, cube_size: int,
-    hw_config: dict | None = None, dma_plans: list | None = None,
+# ---- Pass hooks ----
+
+
+def _global_tiler_post_hook(graph: Graph, configs: dict) -> None:
+    """将 global_tiler 决策注入 hardware config 的 tile_override。"""
+    tile_override = {}
+    for nid, node in graph.nodes.items():
+        tc = node.params.get("_tile_config")
+        if tc:
+            tile_override[nid] = tc
+    if tile_override:
+        configs["hardware"].setdefault("tile_override", {}).update(tile_override)
+
+
+def _memory_planner_viz(
+    graph: Graph, output_dir: str, cube_size: int, configs: dict,
 ) -> None:
-    """memory_planner 后生成 Pipeline Schedule 甘特图（HTML），含 DMA 搬运。"""
-    emit_graph_html(graph, output_dir, cube_size, hw_config, dma_plans)
+    """memory_planner 后生成甘特图 + lifetime 图。"""
+    hw = configs.get("hardware")
+    model_name = configs.get("_model_name")
+    emit_graph_html(graph, output_dir, cube_size, hw, graph.dma_plans)
+    emit_lifetime_html(graph, output_dir, cube_size, hw,
+                       dma_plans=graph.dma_plans, title=model_name)
+
+
+# ---- Pass 列表 ----
 
 
 # Phase 2: Graph Optimization (②-④)
@@ -74,47 +105,66 @@ _OPTIMIZATION_PASSES: list[_PassDesc] = [
     ),
     _PassDesc("op_absorption", "④", op_absorption.run, "absorption",
              op_absorption.post_validate, toggle=OptionalPass.ABSORPTION),
+    _PassDesc("mha_merge", "④b", mha_merge.run, "mha_merge",
+             mha_merge.post_validate, toggle=OptionalPass.MHA_MERGE),
 ]
 
 # Phase 3: Backend Annotation (⑤-⑤d)
 _ANNOTATION_PASSES: list[_PassDesc] = [
     _PassDesc(
-        "format_annotator",
-        "⑤",
-        format_annotator.run,
-        "format",
-        format_annotator.post_validate,
+        "format_annotator", "⑤", format_annotator.run,
+        "format", format_annotator.post_validate,
     ),
     _PassDesc(
-        "format_planner",
-        "⑤a",
-        format_planner.run,
-        "format_planner",
-        format_planner.post_validate,
+        "format_planner", "⑤a", format_planner.run,
+        "format_planner", format_planner.post_validate,
         toggle=OptionalPass.FORMAT_PLANNER,
     ),
     _PassDesc(
-        "reformat_inserter",
-        "⑤b",
-        reformat_inserter.run,
-        "reformat",
-        reformat_inserter.post_validate,
+        "reformat_inserter", "⑤b", reformat_inserter.run,
+        "reformat", reformat_inserter.post_validate,
     ),
     _PassDesc(
-        "storage_assigner",
-        "⑤c",
-        storage_assigner.run,
-        "storage",
-        storage_assigner.post_validate,
+        "storage_assigner", "⑤c", storage_assigner.run,
+        "storage", storage_assigner.post_validate,
         toggle=OptionalPass.STORAGE_ASSIGNER,
     ),
     _PassDesc(
-        "block_pad",
-        "⑤d",
-        block_pad.run,
-        "block_pad",
-        block_pad.post_validate,
+        "block_pad", "⑤d", block_pad.run,
+        "block_pad", block_pad.post_validate,
         toggle=OptionalPass.BLOCK_PAD,
+        validate_with_config=True,
+    ),
+]
+
+# Phase 4-5: Validation + Scheduling + Memory (⑥-⑧)
+_LATE_PASSES: list[_PassDesc] = [
+    _PassDesc(
+        "validator", "⑥", validator.run, None,
+        config_builder=lambda c: _build_validator_config(c["signatures"]),
+        collect_errors=True,
+    ),
+    _PassDesc(
+        "roofline_analyzer", "⑥b", roofline_analyzer.run, None,
+        toggle=OptionalPass.ROOFLINE_ANALYZER,
+    ),
+    _PassDesc(
+        "fusion_planner", "⑥c", fusion_planner.run, None,
+        toggle=OptionalPass.FUSION_PLANNER,
+    ),
+    _PassDesc(
+        "scheduler", "⑦", scheduler.run, None,
+        scheduler.post_validate,
+    ),
+    _PassDesc(
+        "global_tiler", "⑦b", global_tiler.run, None,
+        toggle=OptionalPass.GLOBAL_TILER,
+        post_hook=_global_tiler_post_hook,
+    ),
+    _PassDesc(
+        "memory_planner", "⑧", memory_planner.run, "hardware",
+        memory_planner.post_validate,
+        viz_hook=_memory_planner_viz,
     ),
 ]
 
@@ -159,7 +209,20 @@ def _load_configs(
             "format_capabilities": hardware.get("format_capabilities", {}),
         },
         "reformat": {},
-        "block_pad": {"block_pad": hardware.get("block_pad", {})},
+        "mha_merge": {
+            **hardware.get("mha_merge", {}),
+            "hardware": {
+                "last_dim_align": hardware.get("block_pad", {}).get(
+                    "default", {}).get("last_dim", 16),
+                "l1_size_bytes": hardware.get("memory", {}).get(
+                    "l1", {}).get("total_size_bytes", 16 * 1024 * 1024),
+                "dma_bytes_per_cycle": hardware.get("compute", {}).get(
+                    "dma_bytes_per_cycle", 256),
+                "matmul_launch_cycles": hardware.get("mha_merge", {}).get(
+                    "matmul_launch_cycles", 100),
+            },
+        },
+        "block_pad": hardware.get("block_pad", {}),
         "storage": {
             "enable_local_storage": True,
             **hardware.get("local_bypass", {}),
@@ -215,6 +278,15 @@ def _dump_pass_snapshot(
     logger.debug("debug_dump: %s written", prefix)
 
 
+def _resolve_pass_config(p: _PassDesc, configs: dict) -> dict:
+    """为 Pass 解析配置：config_builder > config_key > 完整 configs。"""
+    if p.config_builder:
+        return p.config_builder(configs)
+    if p.config_key is not None:
+        return configs[p.config_key]
+    return configs
+
+
 def _run_pass_list(
     graph: Graph,
     passes: list[_PassDesc],
@@ -231,16 +303,27 @@ def _run_pass_list(
             logger.info("Pass %s %s 已禁用，跳过", p.number, p.name)
             continue
         logger.info("Pass %s %s 开始", p.number, p.name)
-        if p.config_key is None:
-            raise CompilerError(f"Pass {p.name} 缺少 config_key")
+        pass_config = _resolve_pass_config(p, configs)
         before = graph.to_dict() if debug_dump else None
-        graph = p.run_fn(graph, configs[p.config_key])
+        try:
+            graph = p.run_fn(graph, pass_config)
+        except CompilerError as exc:
+            if p.collect_errors:
+                collector.error(p.name, str(exc))
+            raise
+        if p.post_hook:
+            p.post_hook(graph, configs)
         if debug_dump:
             _dump_pass_snapshot(graph, before, output_dir, p.number, p.name)
         if p.validate_fn:
-            _run_post_validation(collector, p.name, graph, p.validate_fn)
+            vfn = p.validate_fn
+            if p.validate_with_config:
+                _run_post_validation(collector, p.name, graph,
+                                     lambda g, _vfn=vfn, _cfg=pass_config: _vfn(g, _cfg))
+            else:
+                _run_post_validation(collector, p.name, graph, vfn)
         if p.viz_hook:
-            p.viz_hook(graph, output_dir, cube_size)
+            p.viz_hook(graph, output_dir, cube_size, configs)
         logger.info("Pass %s 完成", p.number)
     return graph
 
@@ -261,86 +344,6 @@ def _run_phase_checkpoint(
             logger.warning("Phase %s 边界校验: %s", phase_name, msg)
     else:
         logger.debug("Phase %s 边界校验通过", phase_name)
-
-
-def _run_late_passes(
-    graph: Graph,
-    configs: dict,
-    collector: DiagnosticCollector,
-    output_dir: str,
-    cube_size: int,
-    debug_dump: bool = False,
-    model_name: str | None = None,
-) -> Graph:
-    """Pass ⑥-⑧: validator → roofline → fusion → scheduler → global_tiler → memory_planner。"""
-    # Pass ⑥ validator
-    logger.info("Pass ⑥ validator 开始")
-    validator_cfg = _build_validator_config(configs["signatures"])
-    before = graph.to_dict() if debug_dump else None
-    try:
-        graph = validator.run(graph, validator_cfg)
-    except CompilerError as exc:
-        collector.error("validator", str(exc))
-        raise
-    if debug_dump:
-        _dump_pass_snapshot(graph, before, output_dir, "⑥", "validator")
-    logger.info("Pass ⑥ 完成")
-
-    pc: PassConfig = configs.get("pass_config", PassConfig())
-
-    # Pass ⑥b roofline_analyzer（标注计算强度）
-    if pc.is_enabled(OptionalPass.ROOFLINE_ANALYZER):
-        logger.info("Pass ⑥b roofline_analyzer 开始")
-        graph = roofline_analyzer.run(graph, configs)
-        logger.info("Pass ⑥b 完成")
-    else:
-        logger.info("Pass ⑥b roofline_analyzer 已禁用，跳过")
-
-    # Pass ⑥c fusion_planner（识别可融合算子组）
-    if pc.is_enabled(OptionalPass.FUSION_PLANNER):
-        logger.info("Pass ⑥c fusion_planner 开始")
-        graph = fusion_planner.run(graph, configs)
-        logger.info("Pass ⑥c 完成")
-    else:
-        logger.info("Pass ⑥c fusion_planner 已禁用，跳过")
-
-    # Pass ⑦ scheduler（先确定执行顺序，再分配内存）
-    logger.info("Pass ⑦ scheduler 开始")
-    before = graph.to_dict() if debug_dump else None
-    graph = scheduler.run(graph)
-    if debug_dump:
-        _dump_pass_snapshot(graph, before, output_dir, "⑦", "scheduler")
-    _run_post_validation(collector, "scheduler", graph, scheduler.post_validate)
-    logger.info("Pass ⑦ 完成")
-
-    # Pass ⑦b global_tiler（全局最优 tiling 决策）
-    if pc.is_enabled(OptionalPass.GLOBAL_TILER):
-        logger.info("Pass ⑦b global_tiler 开始")
-        graph = global_tiler.run(graph, configs)
-        tile_override = {}
-        for nid, node in graph.nodes.items():
-            tc = node.params.get("_tile_config")
-            if tc:
-                tile_override[nid] = tc
-        if tile_override:
-            configs["hardware"].setdefault("tile_override", {}).update(tile_override)
-        logger.info("Pass ⑦b 完成")
-    else:
-        logger.info("Pass ⑦b global_tiler 已禁用，跳过")
-
-    # Pass ⑧ memory_planner（基于 scheduler 确定的执行顺序分配内存）
-    logger.info("Pass ⑧ memory_planner 开始")
-    before = graph.to_dict() if debug_dump else None
-    graph = memory_planner.run(graph, configs["hardware"])
-    if debug_dump:
-        _dump_pass_snapshot(graph, before, output_dir, "⑧", "memory_planner")
-    _run_post_validation(collector, "memory_planner", graph, memory_planner.post_validate)
-    _emit_schedule_viz(graph, output_dir, cube_size, configs.get("hardware"), graph.dma_plans)
-    emit_lifetime_html(graph, output_dir, cube_size, configs.get("hardware"),
-                       dma_plans=graph.dma_plans, title=model_name)
-    logger.info("Pass ⑧ 完成")
-
-    return graph
 
 
 def _resolve_compile_configs(
@@ -428,6 +431,7 @@ def compile(
 
     cube_size = configs["hardware"]["fractal"]["cube_size"]
     model_name = type(model).__name__
+    configs["_model_name"] = model_name  # viz hook 使用
 
     # Phase 2: Graph Optimization (②-④)
     graph = _run_pass_list(graph, _OPTIMIZATION_PASSES, configs, collector,
@@ -439,9 +443,9 @@ def compile(
                            output_dir, cube_size, debug_dump)
     _run_phase_checkpoint(collector, "annotation", graph, debug_dump)
 
-    # Phase 4-5: Validation + Backend (⑥-⑧)
-    graph = _run_late_passes(graph, configs, collector, output_dir, cube_size,
-                             debug_dump, model_name=model_name)
+    # Phase 4-5: Validation + Scheduling + Memory (⑥-⑧)
+    graph = _run_pass_list(graph, _LATE_PASSES, configs, collector,
+                           output_dir, cube_size, debug_dump)
 
     logger.info(collector.summary())
     if collector.has_errors():
@@ -483,13 +487,14 @@ def compile_graph_only(
 
     graph = graph_capture.capture(model, dummy_input, mask=mask)
     cube_size = configs["hardware"]["fractal"]["cube_size"]
+    configs["_model_name"] = type(model).__name__
 
     graph = _run_pass_list(graph, _OPTIMIZATION_PASSES, configs, collector,
                            output_dir, cube_size)
     graph = _run_pass_list(graph, _ANNOTATION_PASSES, configs, collector,
                            output_dir, cube_size)
-    graph = _run_late_passes(graph, configs, collector, output_dir, cube_size,
-                             model_name=type(model).__name__)
+    graph = _run_pass_list(graph, _LATE_PASSES, configs, collector,
+                           output_dir, cube_size)
     return graph
 
 

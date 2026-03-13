@@ -29,6 +29,7 @@ class OptionalPass(Enum):
     """
 
     ABSORPTION = auto()         # ④ op_absorption
+    MHA_MERGE = auto()          # ④b mha_merge
     FORMAT_PLANNER = auto()     # ⑤a format_planner
     STORAGE_ASSIGNER = auto()   # ⑤c storage_assigner
     BLOCK_PAD = auto()          # ⑤d block_pad
@@ -42,6 +43,7 @@ class PassConfig:
     """可选 Pass 开关配置，所有字段默认 True。"""
 
     absorption: bool = True
+    mha_merge: bool = True
     format_planner: bool = True
     storage_assigner: bool = True
     block_pad: bool = True

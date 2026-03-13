@@ -116,6 +116,25 @@ def _np_to_str(np_dtype: type) -> str:
     return {np.float16: "fp16", np.float32: "fp32"}.get(np_dtype, "fp16")
 
 
+def _apply_weight_slices(state_dict: dict, graph: Graph) -> dict:
+    """扫描 _weight_slices/_bias_slices 标注，将源权重切片为 per-head 副本。"""
+    sliced = dict(state_dict)
+    for node in graph.nodes.values():
+        for key in ("_weight_slices", "_bias_slices"):
+            ws = node.params.get(key)
+            if not ws:
+                continue
+            src = sliced.get(ws["source_name"])
+            if src is None:
+                continue
+            weight_t = graph.get_tensor(node.inputs[ws["weight_input_index"]])
+            if weight_t and weight_t.name:
+                sliced[weight_t.name] = src.narrow(
+                    ws["dim"], ws["start"], ws["end"] - ws["start"],
+                ).contiguous()
+    return sliced
+
+
 def _export_weights_and_golden(
     model: nn.Module,
     dummy_input: torch.Tensor,
@@ -132,8 +151,9 @@ def _export_weights_and_golden(
     weights = [t for t in graph.tensors.values() if t.is_weight and t.name]
     weight_offsets = {t.name: t.hbm_offset or 0 for t in weights}
     per_weight_dtype = {t.name: t.dtype or "fp16" for t in weights}
+    sd = _apply_weight_slices(model.state_dict(), graph)
     weight_exporter.export_weights(
-        model.state_dict(), weight_path, dtype="fp16", offsets=weight_offsets,
+        sd, weight_path, dtype="fp16", offsets=weight_offsets,
         per_weight_dtype=per_weight_dtype,
     )
 
