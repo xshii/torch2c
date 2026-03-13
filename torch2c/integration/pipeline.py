@@ -143,6 +143,7 @@ def _load_configs(
         "storage": {
             "enable_local_storage": True,
             **hardware.get("local_bypass", {}),
+            **hardware.get("pipe_bypass", {}),
         },
         "hardware": hardware,
         "signatures": load_config(os.path.join(config_dir, "c_api_signatures.yaml")),
