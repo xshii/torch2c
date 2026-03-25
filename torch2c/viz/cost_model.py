@@ -36,8 +36,14 @@ class HwParams:
     def from_config(cls, hw_config: dict | None) -> HwParams:
         """从 hardware_config.yaml 构建，缺失字段用默认值。"""
         hw = cls()
-        if hw_config and "fractal" in hw_config:
+        if not hw_config:
+            return hw
+        if "fractal" in hw_config:
             hw.cube_size = hw_config["fractal"].get("cube_size", hw.cube_size)
+        compute = hw_config.get("compute", {})
+        hw.cube_ops_per_cycle = compute.get("cube_ops_per_cycle", hw.cube_ops_per_cycle)
+        hw.vector_ops_per_cycle = compute.get("vector_ops_per_cycle", hw.vector_ops_per_cycle)
+        hw.dma_bytes_per_cycle = compute.get("dma_bytes_per_cycle", hw.dma_bytes_per_cycle)
         return hw
 
 

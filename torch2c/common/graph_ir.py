@@ -93,6 +93,14 @@ class Node:
     is_mapped: bool = False
     # ── op_absorption 阶段 ──
     absorbed_inputs: dict = field(default_factory=dict)
+
+    def active_inputs(self) -> list[str]:
+        """返回非 absorbed 的有效输入 tensor id 列表。"""
+        if not self.absorbed_inputs:
+            return list(self.inputs)
+        absorbed = set(self.absorbed_inputs.values())
+        return [tid for tid in self.inputs if tid not in absorbed]
+
     # ── format_annotator 阶段 ──
     format_annotation: dict | None = None
     # ── scheduler 阶段 ──
@@ -185,6 +193,66 @@ class Graph:
 
     def get_tensor(self, tensor_id: str) -> Tensor | None:
         return self.tensors.get(tensor_id)
+
+    # ---- 重编号 ----
+
+    def renumber(self, prefix: str = "node_") -> dict[str, str]:
+        """按 execution_order 重编号所有节点，更新全部引用。
+
+        Returns:
+            旧 ID → 新 ID 的映射表。
+        """
+        if not self.execution_order:
+            return {}
+
+        # Build old → new mapping
+        id_map: dict[str, str] = {}
+        for i, old_id in enumerate(self.execution_order):
+            new_id = f"{prefix}{i}"
+            if new_id != old_id:
+                id_map[old_id] = new_id
+
+        if not id_map:
+            return {}
+
+        # Also keep identity mappings for nodes not being renamed
+        full_map: dict[str, str] = {}
+        for old_id in self.execution_order:
+            full_map[old_id] = id_map.get(old_id, old_id)
+
+        # 1. Rename nodes dict
+        new_nodes: dict[str, Node] = {}
+        for old_id, node in self.nodes.items():
+            new_id = full_map.get(old_id, old_id)
+            node.id = new_id
+            new_nodes[new_id] = node
+
+        # 2. Update tensor references
+        for t in self.tensors.values():
+            if t.producer_node_id and t.producer_node_id in full_map:
+                t.producer_node_id = full_map[t.producer_node_id]
+            t.consumer_node_ids = [
+                full_map.get(cid, cid) for cid in t.consumer_node_ids
+            ]
+
+        # 3. Update node.dependencies
+        for node in new_nodes.values():
+            node.dependencies = [
+                full_map.get(d, d) for d in node.dependencies
+            ]
+
+        # 4. Update execution_order
+        self.execution_order = [
+            full_map.get(old_id, old_id) for old_id in self.execution_order
+        ]
+
+        # 5. Update DMA plans
+        for dp in self.dma_plans:
+            if dp.node_id in full_map:
+                dp.node_id = full_map[dp.node_id]
+
+        self.nodes = new_nodes
+        return id_map
 
     # ---- 拓扑排序 ----
 

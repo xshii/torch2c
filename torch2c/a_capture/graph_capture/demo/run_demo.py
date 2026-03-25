@@ -1,0 +1,32 @@
+"""图捕获演示：捕获 DemoEncoder 并保存为 JSON。"""
+
+from __future__ import annotations
+
+import json
+import pathlib
+
+import torch
+
+from torch2c.a_capture.graph_capture import capture
+from torch2c.a_capture.graph_capture.demo.demo_model import DemoEncoder
+
+
+def main() -> None:
+    model = DemoEncoder(hidden_size=64, num_heads=4, ffn_dim=256)
+    model.eval()
+
+    dummy_input = torch.randn(1, 32, 64)
+    mask = torch.zeros(1, 1, 32, 32)
+
+    graph = capture(model, dummy_input, mask=mask)
+
+    out_dir = pathlib.Path(__file__).resolve().parents[3] / "output" / "graph_capture_demo"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "captured_graph.json"
+    out_path.write_text(json.dumps(graph.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"已保存到 {out_path}")
+    print(graph.summary())
+
+
+if __name__ == "__main__":
+    main()

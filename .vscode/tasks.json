@@ -19,7 +19,7 @@
       "label": "demo:e2e",
       "type": "shell",
       "command": "${workspaceFolder}/.venv/bin/python",
-      "args": ["torch2c/codegen/demo/run_demo.py"],
+      "args": ["torch2c/d_emission/codegen/demo/run_demo.py"],
       "detail": "完整编译链 demo（graph_capture → codegen）",
       "group": "none"
     },
@@ -49,7 +49,7 @@
       "label": "demo:viz",
       "type": "shell",
       "command": "${workspaceFolder}/.venv/bin/python",
-      "args": ["torch2c/memory_planner/demo/viz_lifetime.py"],
+      "args": ["torch2c/d_emission/memory_planner/demo/viz_lifetime.py"],
       "detail": "生成统一 HBM+L1 内存 lifetime 图（viz/lifetime.html）",
       "group": "none"
     },
@@ -59,6 +59,14 @@
       "command": "${workspaceFolder}/.venv/bin/python",
       "args": ["torch2c/${input:demoModule}/demo/run_demo.py"],
       "detail": "运行指定模块的 demo",
+      "group": "none"
+    },
+    {
+      "label": "compile:debug",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["scripts/compile_and_viz.py"],
+      "detail": "编译 DemoEncoder（debug_dump 模式，产出 debug 快照）",
       "group": "none"
     },
     {
@@ -79,15 +87,15 @@
       "type": "pickString",
       "description": "选择要运行 demo 的模块",
       "options": [
-        "graph_capture",
-        "op_mapping",
-        "op_decomposition",
-        "op_absorption",
-        "format_annotator",
-        "validator",
-        "memory_planner",
-        "scheduler",
-        "codegen"
+        "a_capture/graph_capture",
+        "b_lowering/op_mapping",
+        "b_lowering/op_decomposition",
+        "optpass/bc_op_absorption",
+        "c_backend/format_annotator",
+        "c_backend/validator",
+        "d_emission/memory_planner",
+        "d_emission/scheduler",
+        "d_emission/codegen"
       ]
     }
   ]

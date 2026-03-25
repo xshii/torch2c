@@ -7,9 +7,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from torch2c.codegen import c_emitter, golden_exporter, weight_exporter
-from torch2c.codegen._plan import CodegenPlan
-from torch2c.codegen.c_project import (
+from torch2c.d_emission.codegen import c_emitter, golden_exporter, weight_exporter
+from torch2c.d_emission.codegen._plan import CodegenPlan
+from torch2c.d_emission.codegen.c_project import (
     cmake_emitter,
     main_emitter,
     mock_emitter,

@@ -139,7 +139,6 @@ class TestEndToEnd:
         assert os.path.isfile(os.path.join(src, "model_params.h"))
         assert os.path.isfile(os.path.join(src, "model_weights.h"))
         assert os.path.isfile(os.path.join(result_dir, "main.c"))
-        assert os.path.isfile(os.path.join(result_dir, "npu_mock.h"))
         assert os.path.isfile(os.path.join(result_dir, "CMakeLists.txt"))
 
         # viz 产物

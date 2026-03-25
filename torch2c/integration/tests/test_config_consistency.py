@@ -168,7 +168,7 @@ class TestTilingCoverage:
     _KNOWN_UNTILEABLE: set[str] = set()
 
     def test_all_sig_ops_tileable_or_excluded(self, configs):
-        from torch2c.memory_planner._tiling import _TILEABLE_OPS
+        from torch2c.d_emission.memory_planner._tiling import _TILEABLE_OPS
 
         sig_ops = _sig_all_ops(configs)
         covered = set(_TILEABLE_OPS.keys()) | self._KNOWN_UNTILEABLE
@@ -182,7 +182,7 @@ class TestTilingCoverage:
 
     def test_tileable_ops_are_valid(self, configs):
         """_TILEABLE_OPS 中的算子必须在 signatures 中存在（防止拼写错误 / 旧算子残留）。"""
-        from torch2c.memory_planner._tiling import _TILEABLE_OPS
+        from torch2c.d_emission.memory_planner._tiling import _TILEABLE_OPS
 
         sig_ops = _sig_all_ops(configs)
         invalid = set(_TILEABLE_OPS.keys()) - sig_ops
@@ -201,7 +201,7 @@ class TestCodegenNamingCoverage:
     """
 
     def test_all_sig_ops_have_short_name(self, configs):
-        from torch2c.codegen._naming import _OP_SHORT
+        from torch2c.d_emission.codegen._naming import _OP_SHORT
 
         sig_ops = _sig_all_ops(configs)
         missing = sig_ops - set(_OP_SHORT.keys())
@@ -213,7 +213,7 @@ class TestCodegenNamingCoverage:
 
     def test_short_names_are_valid(self, configs):
         """_OP_SHORT 中的算子必须在 signatures 中存在。"""
-        from torch2c.codegen._naming import _OP_SHORT
+        from torch2c.d_emission.codegen._naming import _OP_SHORT
 
         sig_ops = _sig_all_ops(configs)
         # 允许 scalar_ 前缀的变体（codegen 内部使用）
@@ -265,7 +265,7 @@ class TestHardcodedOpSetsValidity:
     """
 
     def test_absorption_matmul_ops_valid(self, configs):
-        from torch2c.op_absorption.op_absorption import _MATMUL_OPS
+        from torch2c.common.constants import MATMUL_OPS as _MATMUL_OPS
 
         sig_ops = _sig_all_ops(configs)
         invalid = _MATMUL_OPS - sig_ops
@@ -274,7 +274,7 @@ class TestHardcodedOpSetsValidity:
         )
 
     def test_decomposition_elementwise_ops_valid(self, configs):
-        from torch2c.op_decomposition.op_decomposition import _ELEMENTWISE_OPS
+        from torch2c.b_lowering.op_decomposition.op_decomposition import _ELEMENTWISE_OPS
 
         sig_ops = _sig_all_ops(configs)
         invalid = _ELEMENTWISE_OPS - sig_ops
@@ -283,7 +283,7 @@ class TestHardcodedOpSetsValidity:
         )
 
     def test_global_tiler_tileable_ops_valid(self, configs):
-        from torch2c.global_tiler.global_tiler import _GLOBAL_TILEABLE_OPS
+        from torch2c.optpass.d_global_tiler.global_tiler import _GLOBAL_TILEABLE_OPS
 
         sig_ops = _sig_all_ops(configs)
         invalid = _GLOBAL_TILEABLE_OPS - sig_ops
@@ -292,7 +292,7 @@ class TestHardcodedOpSetsValidity:
         )
 
     def test_roofline_flops_multiplier_valid(self, configs):
-        from torch2c.roofline.roofline_analyzer import _VECTOR_FLOPS_MULTIPLIER
+        from torch2c.optpass.cd_roofline.roofline_analyzer import _VECTOR_FLOPS_MULTIPLIER
 
         sig_ops = _sig_all_ops(configs)
         # 这里用前缀匹配（vector_softmax 匹配 vector_softmax_part1 等）
