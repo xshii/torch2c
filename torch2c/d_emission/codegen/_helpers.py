@@ -29,7 +29,6 @@ FORMAT_MAP = {
     "nz": "NPU_FORMAT_NZ",
     "zz": "NPU_FORMAT_ZZ",
     "nn": "NPU_FORMAT_NN",
-    "nc1hwc0": "NPU_FORMAT_NC1HWC0",
 }
 
 # param type → C type 映射
