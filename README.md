@@ -91,6 +91,8 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
+> **VSCode**: 打开项目后执行 Task `install:dev`（`Cmd+Shift+P` → `Tasks: Run Task`）
+
 ### 编译模型
 
 ```python
@@ -109,45 +111,56 @@ compile(model, x,
 
 ### Demo 脚本
 
-```bash
-# Y = AX + B（最简单的线性层）
-python scripts/demo_axb.py
-
-# Embedding → Linear → ReLU
-python scripts/demo_embedding.py
-
-# 单层 Attention（2 头，含 LayerNorm）
-python scripts/demo_single_attn.py
-
-# 2 层 Encoder Transformer
-python scripts/compile_and_viz.py
-```
+| 脚本 | 模型 | VSCode Task |
+|------|------|-------------|
+| `scripts/demo_axb.py` | Y = AX + B | 打开文件 → `run:current` |
+| `scripts/demo_embedding.py` | Embedding → Linear → ReLU | 打开文件 → `run:current` |
+| `scripts/demo_single_attn.py` | 单层 Attention（2 头 + LayerNorm） | 打开文件 → `run:current` |
+| `scripts/compile_and_viz.py` | 2 层 Encoder Transformer | `compile:debug` |
 
 ### 可视化
 
 ```bash
-# 本地打开
+# 本地：编译后直接打开
 open output/compile_viz/viz/pipeline.html
 
-# 远端访问（Flask 服务器）
-pip install flask
+# 远端：Flask 服务器
 python scripts/viz_server.py --compile --port 8080
 # 浏览器访问 http://<ip>:8080/
 ```
 
+> **VSCode**: 打开任意编译脚本 → Task `run:current+viz`，编译完自动打开 pipeline.html
+
+pipeline.html 功能：
+- 点击 pass 节点 → 展示 4 列甬道图（Cube/Vector/IDMA/DMA）+ pass 说明
+- ← → 方向键切换 pass，↑ ↓ 切换图中节点
+- 悬浮节点 → tooltip 显示 tensor ID/shape + 优化原因（opt_log）
+- 点击节点 → 高亮上下游依赖（蓝色上游/橙色下游流动动画）
+
 ### 测试
 
-```bash
-# 全量 UT（441 个用例）
-pytest
+| 范围 | 命令 | VSCode Task |
+|------|------|-------------|
+| 全量 UT（441 用例） | `pytest` | `test:all`（默认 `Cmd+Shift+T`） |
+| 当前打开的测试文件 | `pytest <file> -v` | `test:current` |
+| 指定模块路径 | `pytest <path> -v` | `test:module`（输入路径） |
+| 端到端 ST | `pytest torch2c/integration/tests/demo_st/ -v` | `demo:st` |
+| ST6 MHA tiling | — | `demo:st6` |
 
-# 单模块
-pytest torch2c/b_lowering/op_mapping/tests/ -v
-pytest torch2c/optpass/bc_mha_merge/tests/ -v
+### VSCode Tasks 速查
 
-# 端到端 ST
-pytest torch2c/integration/tests/demo_st/ -v
-```
+| Task | 作用 |
+|------|------|
+| `install:dev` | 安装开发依赖 |
+| `test:all` | 全量测试（默认快捷键） |
+| `test:current` | pytest 当前打开的测试文件 |
+| `test:module` | pytest 指定模块路径 |
+| `run:current` | 运行当前打开的 Python 文件 |
+| `run:current+viz` | 运行 + 自动打开生成的 pipeline.html |
+| `compile:debug` | 编译 DemoEncoder（debug_dump + 可视化） |
+| `demo:e2e` | 完整编译链 demo |
+| `demo:st` | 全量端到端 ST 测试 |
+| `demo:module` | 选择模块运行 demo |
 
 ### 验证 C 工程
 
