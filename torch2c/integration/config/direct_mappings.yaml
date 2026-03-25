@@ -38,6 +38,9 @@ mappings:
   aten.gelu.default:
     npu_op: vector_gelu
     compute_unit: vector
+  aten.relu.default:
+    npu_op: vector_relu
+    compute_unit: vector
   aten.dropout.default:
     npu_op: vector_dropout
     compute_unit: vector
@@ -80,6 +83,9 @@ mappings:
     compute_unit: idma
   aten.expand.default:
     npu_op: idma_broadcast
+    compute_unit: idma
+  aten.embedding.default:
+    npu_op: idma_embedding
     compute_unit: idma
   aten.clone.default:
     npu_op: idma_move

@@ -89,6 +89,7 @@ void vector_fill(TidInfo tid, npu_tensor_t out, float value, int count, npu_dtyp
 
 /* ---- vector: activation & regularization ---- */
 void vector_gelu(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int count, npu_dtype_t compute_dtype);
+void vector_relu(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int count, npu_dtype_t compute_dtype);
 void vector_dropout(TidInfo tid, npu_tensor_t input, npu_tensor_t out, npu_tensor_t mask, int count, float scale, npu_dtype_t compute_dtype);
 
 /* ---- vector: normalization ---- */
@@ -115,6 +116,7 @@ void dma_reformat(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int size_by
 /* ---- idma (L1 → pipe) ---- */
 void idma_move(TidInfo tid, npu_tensor_t dst, npu_tensor_t src, int size_bytes);
 void idma_reshape(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int size);
+void idma_embedding(TidInfo tid, npu_tensor_t weight, npu_tensor_t indices, npu_tensor_t out, int vocab_size, int dim);
 void idma_broadcast(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int src_count, int dst_count);
 void idma_concat(TidInfo tid, const npu_tensor_t* inputs, const int* counts, int num_inputs, npu_tensor_t out);
 void idma_slice(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int dim, int start, int size);

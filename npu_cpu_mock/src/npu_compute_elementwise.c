@@ -134,3 +134,15 @@ void vector_gelu(TidInfo tid, npu_tensor_t input, npu_tensor_t out,
     }
     UNOP_TRACE_END("vector_gelu", tid);
 }
+
+void vector_relu(TidInfo tid, npu_tensor_t input, npu_tensor_t out,
+                 int count, npu_dtype_t compute_dtype) {
+    UNOP_TRACE_BEGIN("vector_relu", tid, input, out, count);
+    void* pi = npu_t_ptr(input);
+    void* po = npu_t_ptr(out);
+    for (int i = 0; i < count; i++) {
+        float x = npu_read_compute(pi, i, input.dtype, compute_dtype);
+        npu_write_compute(po, i, x > 0.0f ? x : 0.0f, out.dtype, compute_dtype);
+    }
+    UNOP_TRACE_END("vector_relu", tid);
+}

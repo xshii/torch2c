@@ -29,7 +29,8 @@ _OP_SHORT = {
     # dma / idma
     "dma_reformat": "reformat", "dma_move": "dma_mv",
     "idma_reshape": "reshape", "idma_broadcast": "bcast", "idma_move": "copy",
-    "idma_concat": "concat", "idma_slice": "slice",
+    "idma_concat": "concat", "idma_slice": "slice", "idma_embedding": "embed",
+    "vector_relu": "relu",
     # codegen internal aliases
     "scalar_reshape": "reshape", "scalar_broadcast": "bcast", "scalar_copy": "copy",
 }

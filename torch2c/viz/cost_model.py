@@ -162,6 +162,8 @@ COST_FORMULAS: dict[str, CostFn] = {
     "idma_broadcast": _dma_cost,
     "idma_concat": _dma_cost,
     "idma_slice": _dma_cost,
+    "idma_embedding": _dma_cost,
+    "vector_relu": _vector_elementwise_cost,
 }
 
 _GENERIC_FALLBACK: dict[str, CostFn] = {

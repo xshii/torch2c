@@ -81,6 +81,9 @@ _TILEABLE_OPS: dict[str, int | None] = {
     "idma_move": -2,
     "idma_slice": -2,
     "idma_concat": -2,
+    "idma_embedding": -2,
+    # vector: activation
+    "vector_relu": -2,
 }
 
 # matmul 类 op: 只切分 A（第一个输入）和 C（输出），B（权重）不切分

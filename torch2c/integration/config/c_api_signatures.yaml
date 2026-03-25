@@ -98,6 +98,14 @@ compute_ops:
 
   # ---- vector: activation & regularization ----
 
+  vector_relu:
+    unit: vector
+    params:
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "count", type: "int",         source: "tensor.input_0.elem_count" }
+      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
+
   vector_gelu:
     unit: vector
     params:
@@ -246,6 +254,15 @@ idma_ops:
       - { name: "dims",  type: "int_array",   source: "tensor.input_0.shape" }
       - { name: "dim0",  type: "int",         source: "param.dim0" }
       - { name: "dim1",  type: "int",         source: "param.dim1" }
+
+  idma_embedding:
+    unit: idma
+    params:
+      - { name: "weight", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "indices", type: "tensor_desc", source: "tensor.input_1" }
+      - { name: "out",    type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "vocab_size", type: "int",     source: "tensor.input_0.shape.0" }
+      - { name: "dim",    type: "int",         source: "tensor.input_0.shape.1" }
 
   idma_reshape:
     unit: idma
