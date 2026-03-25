@@ -59,15 +59,13 @@ mappings:
     npu_op: vector_rmsnorm
     compute_unit: vector
 
-  # ---- vector: shape ----
-  aten.transpose.int:
-    npu_op: vector_transpose
-    compute_unit: vector
-  aten.t.default:
-    npu_op: vector_transpose_2d
-    compute_unit: vector
-
   # ---- idma: data movement ----
+  aten.transpose.int:
+    npu_op: idma_transpose
+    compute_unit: idma
+  aten.t.default:
+    npu_op: idma_transpose
+    compute_unit: idma
   aten.view.default:
     npu_op: idma_reshape
     compute_unit: idma

@@ -152,9 +152,8 @@ COST_FORMULAS: dict[str, CostFn] = {
     "vector_rmsnorm": _vector_layernorm_cost,
     "vector_rmsnorm_part1": _vector_layernorm_cost,
     "vector_rmsnorm_part2": _vector_elementwise_cost,
-    # vector: shape
-    "vector_transpose": _vector_elementwise_cost,
-    "vector_transpose_2d": _vector_elementwise_cost,
+    # idma: transpose
+    "idma_transpose": _vector_elementwise_cost,
     # dma / idma
     "dma_move": _dma_cost,
     "dma_reformat": _dma_cost,

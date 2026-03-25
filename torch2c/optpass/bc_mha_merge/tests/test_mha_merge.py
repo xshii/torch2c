@@ -70,7 +70,7 @@ def _make_mha_chain(
                         npu_op="idma_reshape", is_mapped=True, compute_unit="idma"))
     graph.add_node(Node(id=tr_nid, op_type="aten.transpose.int",
                         inputs=[view_out_tid], outputs=[tr_out_tid],
-                        npu_op="vector_transpose", is_mapped=True,
+                        npu_op="idma_transpose", is_mapped=True,
                         compute_unit="vector",
                         params={"dim0": 1, "dim1": 2}))
     graph.add_node(Node(id=rs_nid, op_type="aten.reshape.default",

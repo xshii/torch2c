@@ -66,8 +66,35 @@
       "type": "shell",
       "command": "${workspaceFolder}/.venv/bin/python",
       "args": ["scripts/compile_and_viz.py"],
-      "detail": "编译 DemoEncoder（debug_dump 模式，产出 debug 快照）",
+      "detail": "编译 DemoEncoder（debug_dump 模式，产出 debug 快照 + 可视化）",
       "group": "none"
+    },
+    {
+      "label": "run:current",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["${file}"],
+      "detail": "运行当前打开的 Python 文件",
+      "group": "none",
+      "presentation": { "reveal": "always", "focus": true }
+    },
+    {
+      "label": "run:current+viz",
+      "type": "shell",
+      "command": "bash",
+      "args": ["-c", "${workspaceFolder}/.venv/bin/python '${file}' && HTML=$(find ${workspaceFolder}/output -name 'pipeline.html' -newer '${file}' 2>/dev/null | head -1) && [ -n \"$HTML\" ] && open \"$HTML\" || echo 'No pipeline.html found'"],
+      "detail": "运行当前 Python 文件 + 自动打开生成的 pipeline.html",
+      "group": "none",
+      "presentation": { "reveal": "always", "focus": true }
+    },
+    {
+      "label": "test:current",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/pytest",
+      "args": ["${file}", "-v", "--tb=short"],
+      "detail": "用 pytest 运行当前打开的测试文件",
+      "group": "test",
+      "presentation": { "reveal": "always", "focus": true }
     },
     {
       "label": "install:dev",

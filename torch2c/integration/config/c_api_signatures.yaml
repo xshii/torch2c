@@ -208,27 +208,6 @@ compute_ops:
       - { name: "size",  type: "int",         source: "tensor.input_0.hbm_size" }
       - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
-  # ---- vector: shape ----
-
-  vector_transpose:
-    unit: vector
-    params:
-      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
-      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
-      - { name: "ndim",  type: "int",         source: "tensor.input_0.ndim" }
-      - { name: "dims",  type: "int_array",   source: "tensor.input_0.shape" }
-      - { name: "dim0",  type: "int",         source: "param.dim0" }
-      - { name: "dim1",  type: "int",         source: "param.dim1" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
-
-  vector_transpose_2d:
-    unit: vector
-    params:
-      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
-      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
-      - { name: "rows",  type: "int",         source: "tensor.input_0.shape.0" }
-      - { name: "cols",  type: "int",         source: "tensor.input_0.shape.1" }
-      - { name: "compute_dtype", type: "dtype_enum", source: "param.compute_dtype", default: "fp16" }
 
 dma_ops:
 
@@ -257,6 +236,16 @@ idma_ops:
       - { name: "dst",        type: "tensor_desc", source: "tensor.output_0" }
       - { name: "src",        type: "tensor_desc", source: "tensor.input_0" }
       - { name: "size_bytes", type: "int",         source: "tensor.input_0.hbm_size" }
+
+  idma_transpose:
+    unit: idma
+    params:
+      - { name: "input", type: "tensor_desc", source: "tensor.input_0" }
+      - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
+      - { name: "ndim",  type: "int",         source: "tensor.input_0.ndim" }
+      - { name: "dims",  type: "int_array",   source: "tensor.input_0.shape" }
+      - { name: "dim0",  type: "int",         source: "param.dim0" }
+      - { name: "dim1",  type: "int",         source: "param.dim1" }
 
   idma_reshape:
     unit: idma

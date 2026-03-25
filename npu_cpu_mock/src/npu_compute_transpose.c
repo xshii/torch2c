@@ -79,3 +79,9 @@ void vector_transpose_2d(TidInfo tid, npu_tensor_t input, npu_tensor_t out,
 
     NPU_TRACE_END("vector_transpose_2d", tid, _dbg, 2);
 }
+
+/* idma_transpose: IDMA 单元，CPU mock 直接复用 vector_transpose */
+void idma_transpose(TidInfo tid, npu_tensor_t input, npu_tensor_t out,
+                    int ndim, const int* dims, int dim0, int dim1, npu_dtype_t compute_dtype) {
+    vector_transpose(tid, input, out, ndim, dims, dim0, dim1, compute_dtype);
+}

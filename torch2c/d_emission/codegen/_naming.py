@@ -25,7 +25,7 @@ _OP_SHORT = {
     "vector_rmsnorm": "rmsnorm",
     "vector_rmsnorm_part1": "rmsnorm_p1", "vector_rmsnorm_part2": "rmsnorm_p2",
     # vector: shape
-    "vector_transpose": "trans", "vector_transpose_2d": "trans2d",
+    "idma_transpose": "trans",
     # dma / idma
     "dma_reformat": "reformat", "dma_move": "dma_mv",
     "idma_reshape": "reshape", "idma_broadcast": "bcast", "idma_move": "copy",

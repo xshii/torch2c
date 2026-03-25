@@ -358,7 +358,7 @@ int main(void) {{
 
 
 class TestTranspose:
-    """vector_transpose_2d: B = A^T (fp16)"""
+    """idma_transpose: B = A^T (fp16)"""
 
     def test_transpose_2d(self, tmp_path):
         rows, cols = 8, 16
@@ -375,8 +375,9 @@ int main(void) {{
     l1_init();
     load_file("a.bin", l1 + {off_in}, {rows * cols * 2});
 
-    vector_transpose_2d(TID0, T(l1, {off_in}, NPU_DTYPE_FP16), T(l1, {off_out}, NPU_DTYPE_FP16),
-                        {rows}, {cols}, NPU_DTYPE_FP16);
+    {{ int dims[] = {{{rows}, {cols}}};
+    idma_transpose(TID0, T(l1, {off_in}, NPU_DTYPE_FP16), T(l1, {off_out}, NPU_DTYPE_FP16),
+                        2, dims, 0, 1, NPU_DTYPE_FP16); }}
 
     save_file("out.bin", l1 + {off_out}, {rows * cols * 2});
     return 0;
@@ -621,8 +622,9 @@ int main(void) {{
     load_file("v.bin", l1 + {off_v}, {seq * d * 2});
 
     /* K^T */
-    vector_transpose_2d(TID0, T(l1, {off_k}, NPU_DTYPE_FP16), T(l1, {off_kt}, NPU_DTYPE_FP16),
-                        {seq}, {d}, NPU_DTYPE_FP16);
+    {{ int dims_kt[] = {{{seq}, {d}}};
+    idma_transpose(TID0, T(l1, {off_k}, NPU_DTYPE_FP16), T(l1, {off_kt}, NPU_DTYPE_FP16),
+                        2, dims_kt, 0, 1, NPU_DTYPE_FP16); }}
     /* scores = Q @ K^T */
     cube_matmul(TID0, T(l1, {off_q}, NPU_DTYPE_FP16), T(l1, {off_kt}, NPU_DTYPE_FP16),
                 T(l1, {off_scores}, NPU_DTYPE_FP16), 1, {seq}, {seq}, {d}, 0, NPU_DTYPE_FP16);
@@ -646,7 +648,7 @@ int main(void) {{
 
 
 class TestMultiHeadAttention:
-    """组合测试: 多头注意力（混合精度 fp16 存储 + fp32 计算, vector_transpose 做 head reshape）"""
+    """组合测试: 多头注意力（混合精度 fp16 存储 + fp32 计算, idma_transpose 做 head reshape）"""
 
     def test_multi_head_attention(self, tmp_path):
         num_heads, seq, d_model = 2, 4, 8
@@ -748,14 +750,14 @@ int main(void) {{
                 T(l1, {off_v}, NPU_DTYPE_FP16), 1, {seq}, {d_model}, {d_model}, 0, NPU_DTYPE_FP32);
 
     /* deinterleave Q/K/V: (seq, num_heads, head_dim) -> transpose(0,1) -> (num_heads, seq, head_dim)
-       uses vector_transpose instead of manual C loops — mirrors DMA随路格式转换 */
+       uses idma_transpose instead of manual C loops — mirrors DMA随路格式转换 */
     {{
         const int deinterleave_dims[] = {{{seq}, {num_heads}, {head_dim}}};
-        vector_transpose(TID0, T(l1, {off_q}, NPU_DTYPE_FP16), T(l1, {off_qh}, NPU_DTYPE_FP16),
+        idma_transpose(TID0, T(l1, {off_q}, NPU_DTYPE_FP16), T(l1, {off_qh}, NPU_DTYPE_FP16),
                          3, deinterleave_dims, 0, 1, NPU_DTYPE_FP32);
-        vector_transpose(TID0, T(l1, {off_k}, NPU_DTYPE_FP16), T(l1, {off_kh}, NPU_DTYPE_FP16),
+        idma_transpose(TID0, T(l1, {off_k}, NPU_DTYPE_FP16), T(l1, {off_kh}, NPU_DTYPE_FP16),
                          3, deinterleave_dims, 0, 1, NPU_DTYPE_FP32);
-        vector_transpose(TID0, T(l1, {off_v}, NPU_DTYPE_FP16), T(l1, {off_vh}, NPU_DTYPE_FP16),
+        idma_transpose(TID0, T(l1, {off_v}, NPU_DTYPE_FP16), T(l1, {off_vh}, NPU_DTYPE_FP16),
                          3, deinterleave_dims, 0, 1, NPU_DTYPE_FP32);
     }}
 
@@ -763,8 +765,9 @@ int main(void) {{
     for (int h = 0; h < {num_heads}; h++) {{
         int kh_off = {off_kh} + h * {seq * head_dim * 2};
         int kht_off = {off_kht} + h * {seq * head_dim * 2};
-        vector_transpose_2d(TID0, T(l1, kh_off, NPU_DTYPE_FP16), T(l1, kht_off, NPU_DTYPE_FP16),
-                            {seq}, {head_dim}, NPU_DTYPE_FP32);
+        {{ int dims_kht[] = {{{seq}, {head_dim}}};
+        idma_transpose(TID0, T(l1, kh_off, NPU_DTYPE_FP16), T(l1, kht_off, NPU_DTYPE_FP16),
+                            2, dims_kht, 0, 1, NPU_DTYPE_FP32); }}
     }}
 
     /* batched scores = Q_heads @ K_heads^T, using loop={num_heads} */
@@ -788,7 +791,7 @@ int main(void) {{
     /* reinterleave heads: (num_heads, seq, head_dim) -> transpose(0,1) -> (seq, num_heads, head_dim) = (seq, d_model) */
     {{
         const int reinterleave_dims[] = {{{num_heads}, {seq}, {head_dim}}};
-        vector_transpose(TID0, T(l1, {off_head_out}, NPU_DTYPE_FP16), T(l1, {off_concat}, NPU_DTYPE_FP16),
+        idma_transpose(TID0, T(l1, {off_head_out}, NPU_DTYPE_FP16), T(l1, {off_concat}, NPU_DTYPE_FP16),
                          3, reinterleave_dims, 0, 1, NPU_DTYPE_FP32);
     }}
 

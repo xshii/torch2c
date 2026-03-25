@@ -23,7 +23,7 @@ class ForwardChain:
 
     proj_node_id: str       # cube_matmul / cube_matmul_bias
     view_node_id: str       # idma_reshape (view)
-    transpose_node_id: str  # vector_transpose
+    transpose_node_id: str  # idma_transpose
     reshape_node_id: str    # idma_reshape (reshape)
     B: int
     S: int
@@ -71,12 +71,12 @@ def _match_forward_chain(graph: Graph, proj_nid: str) -> ForwardChain | None:
     if not view or view.npu_op != "idma_reshape":
         return None
 
-    # view → transpose (vector_transpose)
+    # view → transpose (idma_transpose)
     tr_nid = _single_consumer(graph, view_nid)
     if not tr_nid:
         return None
     tr = graph.get_node(tr_nid)
-    if not tr or tr.npu_op != "vector_transpose":
+    if not tr or tr.npu_op != "idma_transpose":
         return None
     # 检查 transpose dims: dim0=1, dim1=2
     if tr.params.get("dim0") != 1 or tr.params.get("dim1") != 2:

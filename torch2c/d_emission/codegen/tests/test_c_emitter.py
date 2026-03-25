@@ -169,15 +169,15 @@ class TestParamFilling:
         assert "32" in block  # seq = shape[-2]
 
     def test_transpose_4d_with_int_array(self):
-        """vector_transpose 4D 接口：ndim + dims(int_array) + dim0/dim1。"""
+        """idma_transpose 4D 接口：ndim + dims(int_array) + dim0/dim1。"""
         sigs = _load_sigs()
         tensors = {
             "in": _make_tensor("in", [1, 4, 32, 16]),
             "out": _make_tensor("out", [1, 4, 16, 32], l1_offset=4096),
         }
-        node = _make_node("n", "vector_transpose", ["in"], ["out"], params={"dim0": 2, "dim1": 3})
+        node = _make_node("n", "idma_transpose", ["in"], ["out"], params={"dim0": 2, "dim1": 3})
         block = c_emitter.gen_op_block(node, tensors, _empty_dma(), sigs)
-        assert "vector_transpose(" in block
+        assert "idma_transpose(" in block
         assert "4" in block  # ndim
         assert "(const int[]){1, 4, 32, 16}" in block  # dims
         assert "2" in block  # dim0

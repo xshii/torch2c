@@ -102,9 +102,11 @@ void vector_rmsnorm(TidInfo tid, npu_tensor_t input, npu_tensor_t gamma, npu_ten
 void vector_rmsnorm_part1(TidInfo tid, npu_tensor_t input, npu_tensor_t gamma, npu_tensor_t out, int hidden, int seq, float eps, npu_dtype_t compute_dtype);
 void vector_rmsnorm_part2(TidInfo tid, npu_tensor_t inter, npu_tensor_t orig, npu_tensor_t out, int size, npu_dtype_t compute_dtype);
 
-/* ---- vector: shape ---- */
+/* ---- transpose ---- */
 void vector_transpose(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int ndim, const int* dims, int dim0, int dim1, npu_dtype_t compute_dtype);
 void vector_transpose_2d(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int rows, int cols, npu_dtype_t compute_dtype);
+/* idma_transpose: IDMA 单元执行 transpose，CPU mock 复用 vector 实现 */
+void idma_transpose(TidInfo tid, npu_tensor_t input, npu_tensor_t out, int ndim, const int* dims, int dim0, int dim1, npu_dtype_t compute_dtype);
 
 /* ---- dma (HBM ↔ L1) ---- */
 void dma_move(TidInfo tid, npu_tensor_t dst, npu_tensor_t src, int size_bytes);

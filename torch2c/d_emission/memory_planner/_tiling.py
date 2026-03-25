@@ -71,9 +71,8 @@ _TILEABLE_OPS: dict[str, int | None] = {
     "vector_rmsnorm": -2,
     "vector_rmsnorm_part1": -2,
     "vector_rmsnorm_part2": -2,
-    # vector: shape
-    "vector_transpose": -2,
-    "vector_transpose_2d": -2,
+    # idma: transpose
+    "idma_transpose": -2,
     # DMA / iDMA ops
     "dma_reformat": -2,
     "dma_move": -2,

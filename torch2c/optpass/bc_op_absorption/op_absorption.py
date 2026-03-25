@@ -97,7 +97,7 @@ from torch2c.common.constants import MATMUL_OPS as _MATMUL_OPS
 def _absorb_weight_transposes(graph: Graph) -> int:
     """吸收权重 transpose 节点。
 
-    当 vector_transpose_2d 的输入是权重 tensor 时，删除该节点，
+    当 idma_transpose 的输入是权重 tensor 时，删除该节点，
     消费者直接引用原始权重，并注入 transpose_b=1。
     DMA 随路搬运的 ND→NZ format 转换自动处理转置。
     """
@@ -105,7 +105,7 @@ def _absorb_weight_transposes(graph: Graph) -> int:
     tensors_to_remove: list[str] = []
 
     for node in list(graph.nodes.values()):
-        if node.npu_op != "vector_transpose_2d" or len(node.inputs) != 1:
+        if node.npu_op != "idma_transpose" or len(node.inputs) != 1:
             continue
         weight_tid = node.inputs[0]
         weight_t = graph.get_tensor(weight_tid)
