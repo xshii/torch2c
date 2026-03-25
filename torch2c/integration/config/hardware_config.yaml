@@ -22,15 +22,15 @@ dma:
 
 format_capabilities:
   cube:
-    src0: nd
-    src1: nz
-    dst: [nd, nz]
+    src0: [nd, zz]       # 激活：ND 或 Fractal_Z
+    src1: nz              # 权重：必须 Fractal_NZ
+    dst: [nd, nz, zz]
   vector:
-    src: nd
-    dst: [nd, nz]
+    src: [nd]             # Vector 仅支持 ND
+    dst: [nd]
   idma:
-    src: [nd, nz]
-    dst: [nd, nz]
+    src: [nd, nz, zz, nn]  # IDMA 支持所有格式（随路转换）
+    dst: [nd, nz, zz, nn]
 
 mha_merge:
   prefer_merged_threshold: 0.9  # split 必须便宜 >10% 才触发

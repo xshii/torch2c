@@ -17,6 +17,8 @@ typedef enum {
 typedef enum {
     NPU_FORMAT_ND = 0,
     NPU_FORMAT_NZ,
+    NPU_FORMAT_ZZ,
+    NPU_FORMAT_NN,
     NPU_FORMAT_NC1HWC0
 } npu_format_t;
 

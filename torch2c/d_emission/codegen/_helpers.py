@@ -27,6 +27,8 @@ DTYPE_C_ENUM_MAP = {k: v.c_enum for k, v in DTYPE_INFO.items()}
 FORMAT_MAP = {
     "nd": "NPU_FORMAT_ND",
     "nz": "NPU_FORMAT_NZ",
+    "zz": "NPU_FORMAT_ZZ",
+    "nn": "NPU_FORMAT_NN",
     "nc1hwc0": "NPU_FORMAT_NC1HWC0",
 }
 
