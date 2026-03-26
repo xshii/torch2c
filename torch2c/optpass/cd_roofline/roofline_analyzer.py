@@ -17,7 +17,7 @@ from operator import mul
 
 from torch2c.common import Graph, Node, get_logger
 from torch2c.common.opt_log import log_opt
-from torch2c.common.sizing import calc_padded_size
+from torch2c.common.sizing import calc_padded_size, get_dim_align
 
 
 logger = get_logger("roofline")
@@ -133,7 +133,7 @@ def estimate_bytes(node: Node, graph: Graph, hw: RooflineHwParams) -> int:
     for tid in list(node.inputs) + list(node.outputs):
         t = graph.tensors.get(tid)
         if t:
-            total += calc_padded_size(t.shape, t.dtype, t.format, (hw.cube_size, hw.cube_size))
+            total += calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
     return total
 
 

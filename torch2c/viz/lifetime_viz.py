@@ -13,7 +13,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from torch2c.common import Graph, get_logger
-from torch2c.common import calc_padded_size
+from torch2c.common import calc_padded_size, get_dim_align
 from torch2c.viz._utils import STORAGE_COLOR, ensure_viz_dir, human_size, shape_str
 from torch2c.viz.cost_model import estimate_all
 
@@ -129,7 +129,7 @@ def _build_blocks(
             if t.l1_offset is None:
                 continue
             offset = t.l1_offset
-            size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
+            size = calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
         elif mode == "hbm":
             if t.storage != "hbm":
                 continue
@@ -219,10 +219,10 @@ def _build_eviction_l1_blocks(
                         dim_idx = tile_info["tiled_tensors"][tid]
                         tiled_shape = list(t.shape)
                         tiled_shape[dim_idx] = tile_info["tile_size"]
-                        size = calc_padded_size(tiled_shape, t.dtype, t.format, (cube_size, cube_size))
+                        size = calc_padded_size(tiled_shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
                         shape_label = shape_str(tiled_shape)
                     else:
-                        size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
+                        size = calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
                         shape_label = shape_str(t.shape)
                     blocks.append(MemBlock(
                         tid=f"{tid}@{nid}_t{ti}", offset=l1_off, size=size,
@@ -247,7 +247,7 @@ def _build_eviction_l1_blocks(
                 t = graph.tensors.get(tid)
                 if not t:
                     continue
-                size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
+                size = calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
                 blocks.append(MemBlock(
                     tid=f"{tid}@{nid}", offset=l1_off, size=size,
                     start_cycle=start_c, end_cycle=end_c,

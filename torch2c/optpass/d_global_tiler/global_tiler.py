@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from torch2c.common import Graph, Node, get_logger
 from torch2c.common.opt_log import log_opt
-from torch2c.common.sizing import calc_padded_size
+from torch2c.common.sizing import calc_padded_size, get_dim_align
 
 logger = get_logger("global_tiler")
 
@@ -96,9 +96,9 @@ def _estimate_dma_cycles(
         if tile_size and not t.is_weight and len(t.shape) >= 2:
             s = list(t.shape)
             s[-2] = tile_size
-            total_bytes += calc_padded_size(s, t.dtype, t.format, (cube_size, cube_size))
+            total_bytes += calc_padded_size(s, t.dtype, t.format, get_dim_align(t.format, t.dtype))
         else:
-            total_bytes += calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
+            total_bytes += calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
     return max(1.0, total_bytes / dma_bw)
 
 
@@ -115,10 +115,10 @@ def _estimate_l1_peak(
         if tile_size and not t.is_weight and len(t.shape) >= 2:
             s = list(t.shape)
             s[-2] = tile_size
-            size = calc_padded_size(s, t.dtype, t.format, (cube_size, cube_size))
+            size = calc_padded_size(s, t.dtype, t.format, get_dim_align(t.format, t.dtype))
             total += size * num_buffers
         else:
-            total += calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
+            total += calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
     return total
 
 

@@ -11,6 +11,25 @@ from torch2c.common.dtypes import dtype_bytes
 
 _FRACTAL_MIN_NDIM = 2  # 分形格式 (nz/zz/nn) 最少需要 2 维
 
+# 默认对齐表: format → dtype → (dim[-2], dim[-1])
+# 与 hardware_config.yaml block_pad.alignment 保持一致
+_DEFAULT_ALIGNMENT: dict[str, dict[str, tuple[int, int]]] = {
+    "nd":  {"fp16": (1, 16), "fp32": (1, 16), "bf16": (1, 16),
+            "int8": (1, 32), "int32": (1, 16)},
+    "nz":  {"fp16": (16, 16), "fp32": (16, 16), "bf16": (16, 16),
+            "int8": (32, 16), "int32": (16, 16)},
+    "zz":  {"fp16": (16, 16), "fp32": (16, 16), "bf16": (16, 16),
+            "int8": (16, 32), "int32": (16, 16)},
+    "nn":  {"fp16": (16, 16), "fp32": (16, 16), "bf16": (16, 16),
+            "int8": (32, 16), "int32": (16, 16)},
+}
+_FALLBACK_ALIGN = (16, 16)
+
+
+def get_dim_align(fmt: str, dtype: str) -> tuple[int, int]:
+    """根据 format 和 dtype 返回 (dim[-2]对齐, dim[-1]对齐)。"""
+    return _DEFAULT_ALIGNMENT.get(fmt, {}).get(dtype, _FALLBACK_ALIGN)
+
 
 def align_up(offset: int, alignment: int) -> int:
     """向上对齐到 alignment 的整数倍。"""

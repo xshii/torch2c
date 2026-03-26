@@ -18,6 +18,7 @@ from torch2c.common.opt_log import log_opt
 from ._dma import DmaPlan
 from ._strategy import strategy_bulk, strategy_perop, strategy_spill, strategy_tiled
 from ._utils import calc_padded_size
+from torch2c.common.sizing import get_dim_align
 
 logger = get_logger("memory_planner")
 
@@ -40,7 +41,7 @@ def _dump_memory_layout(graph: Graph, cube_size: int) -> None:
         if t.hbm_offset is not None and t.hbm_size is not None:
             hbm_max = max(hbm_max, t.hbm_offset + t.hbm_size)
         if t.l1_offset is not None:
-            l1_size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
+            l1_size = calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
             l1_max = max(l1_max, t.l1_offset + l1_size)
 
     lines = [

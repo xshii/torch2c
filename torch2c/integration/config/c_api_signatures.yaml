@@ -252,8 +252,9 @@ idma_ops:
       - { name: "out",   type: "tensor_desc", source: "tensor.output_0" }
       - { name: "ndim",  type: "int",         source: "tensor.input_0.ndim" }
       - { name: "dims",  type: "int_array",   source: "tensor.input_0.shape" }
-      - { name: "dim0",  type: "int",         source: "param.dim0" }
-      - { name: "dim1",  type: "int",         source: "param.dim1" }
+      - { name: "dim0",          type: "int",        source: "param.dim0" }
+      - { name: "dim1",          type: "int",        source: "param.dim1" }
+      - { name: "compute_dtype", type: "dtype_enum",  source: "param.compute_dtype", default: "fp16" }
 
   idma_embedding:
     unit: idma

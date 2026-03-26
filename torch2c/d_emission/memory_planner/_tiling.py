@@ -26,6 +26,7 @@ from torch2c.common import Graph, Node, get_logger
 
 from ._l1_alloc import collect_op_tensors
 from ._utils import align_up, calc_padded_size
+from torch2c.common.sizing import get_dim_align
 
 logger = get_logger("memory_planner.tiling")
 
@@ -156,7 +157,7 @@ def _calc_op_peak(
         t = graph.tensors.get(tid)
         if not t or t.storage == "pipe":
             continue
-        size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
+        size = calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
         total += align_up(size, l1_align)
     return total
 
@@ -179,9 +180,9 @@ def _calc_tiled_peak(
             dim_idx = tiled_tensors[tid]
             s = list(t.shape)
             s[dim_idx] = tile_size
-            size = calc_padded_size(s, t.dtype, t.format, (cube_size, cube_size))
+            size = calc_padded_size(s, t.dtype, t.format, get_dim_align(t.format, t.dtype))
         else:
-            size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
+            size = calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
         total += align_up(size, l1_align)
     return total
 
@@ -205,10 +206,10 @@ def _calc_multi_buffer_peak(
             dim_idx = tiled_tensors[tid]
             s = list(t.shape)
             s[dim_idx] = tile_size
-            size = calc_padded_size(s, t.dtype, t.format, (cube_size, cube_size))
+            size = calc_padded_size(s, t.dtype, t.format, get_dim_align(t.format, t.dtype))
             total += align_up(size, l1_align) * num_buffers
         else:
-            size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
+            size = calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
             total += align_up(size, l1_align)
     return total
 

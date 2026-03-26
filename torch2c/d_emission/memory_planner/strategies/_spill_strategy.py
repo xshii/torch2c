@@ -10,6 +10,7 @@ from .._l1_alloc import collect_op_tensors
 from .._spill import allocate_l1_with_spill
 from .._tiling import analyze_tiling
 from .._utils import align_up, calc_padded_size
+from torch2c.common.sizing import get_dim_align
 from ._tiled import _apply_tile_info
 
 logger = get_logger("memory_planner.strategy")
@@ -77,10 +78,10 @@ def strategy_spill(
                 dim_idx = tile_info.tiled_tensors[tid]
                 tiled_shape = list(t.shape)
                 tiled_shape[dim_idx] = tile_info.tile_size
-                size = calc_padded_size(tiled_shape, t.dtype, t.format, (cube_size, cube_size))
+                size = calc_padded_size(tiled_shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
                 tiled_sizes[tid] = align_up(size, l1_align)
             else:
-                size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
+                size = calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
             l1_offset += align_up(size, l1_align)
 
         # 分配额外缓冲副本
@@ -124,7 +125,7 @@ def strategy_spill(
                 plan.stores.insert(0, DmaInstruction(
                     op="store", tensor_id=stid,
                     hbm_offset=t.hbm_offset, l1_offset=t.l1_offset or 0,
-                    size_bytes=calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size)),
+                    size_bytes=calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype)),
                     src_format=t.format, dst_format=t.format, dtype=t.dtype,
                 ))
 

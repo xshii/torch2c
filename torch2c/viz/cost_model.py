@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from functools import reduce
 from operator import mul
 
-from torch2c.common import Graph, Node, calc_padded_size
+from torch2c.common import Graph, Node, calc_padded_size, get_dim_align
 
 
 # ── 硬件参数 ─────────────────────────────────────────────
@@ -110,7 +110,7 @@ def _dma_cost(node: Node, graph: Graph, hw: HwParams) -> int:
     for tid in node.inputs:
         t = graph.tensors.get(tid)
         if t:
-            size = calc_padded_size(t.shape, t.dtype, t.format, (hw.cube_size, hw.cube_size))
+            size = calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
             return max(1, size // bw)
     return 1
 

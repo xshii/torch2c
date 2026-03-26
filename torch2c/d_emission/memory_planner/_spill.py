@@ -12,6 +12,7 @@ from torch2c.common import Graph, MemoryPlanError, get_logger
 
 from ._l1_alloc import collect_op_tensors
 from ._utils import align_up, best_fit_alloc, calc_padded_size
+from torch2c.common.sizing import get_dim_align
 
 logger = get_logger("memory_planner.spill")
 
@@ -52,7 +53,7 @@ def _merge_free_blocks(free_blocks: list[list[int]]) -> list[list[int]]:
 def _tensor_l1_size(graph: Graph, tid: str, cube_size: int, l1_align: int) -> int:
     """计算 tensor 的 L1 对齐大小。"""
     t = graph.tensors[tid]
-    return align_up(calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size)), l1_align)
+    return align_up(calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype)), l1_align)
 
 
 def _select_victims(

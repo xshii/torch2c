@@ -5,6 +5,7 @@ from __future__ import annotations
 from torch2c.common import Graph, MemoryPlanError, get_logger
 
 from ._utils import align_up, best_fit_alloc, calc_padded_size
+from torch2c.common.sizing import get_dim_align
 
 logger = get_logger("memory_planner.l1")
 
@@ -109,7 +110,7 @@ def allocate_l1_global(
             t = graph.tensors.get(tid)
             if not t or tid not in l1_lifetimes:
                 continue
-            size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
+            size = calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
             aligned_size = align_up(size, l1_alignment)
 
             offset = best_fit_alloc(free_blocks, aligned_size)

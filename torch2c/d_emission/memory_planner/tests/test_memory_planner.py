@@ -8,6 +8,7 @@ from torch2c.common.testing import load_hw_config, make_linear_chain
 from torch2c.d_emission.memory_planner import run
 from torch2c.d_emission.memory_planner._hbm_alloc import analyze_lifetimes
 from torch2c.d_emission.memory_planner._utils import align_up, calc_padded_size
+from torch2c.common.sizing import get_dim_align
 from torch2c.d_emission.memory_planner.memory_planner import post_validate
 
 # 小 shape（适配 L1 全局布局）
@@ -35,23 +36,23 @@ def _load_config() -> dict:
 class TestCalcPaddedSize:
     def test_nd_format(self):
         # [1, 32, 64] fp16 = 1*32*64*2 = 4096
-        assert calc_padded_size([1, 32, 64], "fp16", "nd", (16, 16)) == 4096
+        assert calc_padded_size([1, 32, 64], "fp16", "nd", get_dim_align("nd", "fp16")) == 4096
 
     def test_nz_aligned(self):
         # [1, 32, 64] 已对齐到 16 → 不变
-        assert calc_padded_size([1, 32, 64], "fp16", "nz", (16, 16)) == 4096
+        assert calc_padded_size([1, 32, 64], "fp16", "nz", get_dim_align("nz", "fp16")) == 4096
 
     def test_nz_unaligned(self):
         # [1, 30, 60] → pad 到 [1, 32, 64], 1*32*64*2 = 4096
-        assert calc_padded_size([1, 30, 60], "fp16", "nz", (16, 16)) == 4096
+        assert calc_padded_size([1, 30, 60], "fp16", "nz", get_dim_align("nz", "fp16")) == 4096
 
     def test_nz_small(self):
         # [1, 3, 5] → pad 到 [1, 16, 16], 1*16*16*2 = 512
-        assert calc_padded_size([1, 3, 5], "fp16", "nz", (16, 16)) == 512
+        assert calc_padded_size([1, 3, 5], "fp16", "nz", get_dim_align("nz", "fp16")) == 512
 
     def test_fp32_dtype(self):
         # [1, 32, 64] fp32 = 1*32*64*4 = 8192
-        assert calc_padded_size([1, 32, 64], "fp32", "nd", (16, 16)) == 8192
+        assert calc_padded_size([1, 32, 64], "fp32", "nd", get_dim_align("nd", "fp32")) == 8192
 
 
 class TestAlignUp:
@@ -479,8 +480,8 @@ class TestL1GlobalLiveness:
                 for t2 in op_tensors[i + 1:]:
                     if t1.l1_offset is None or t2.l1_offset is None:
                         continue
-                    s1 = calc_padded_size(t1.shape, t1.dtype, t1.format, (cube_size, cube_size))
-                    s2 = calc_padded_size(t2.shape, t2.dtype, t2.format, (cube_size, cube_size))
+                    s1 = calc_padded_size(t1.shape, t1.dtype, t1.format, get_dim_align(t1.format, t1.dtype))
+                    s2 = calc_padded_size(t2.shape, t2.dtype, t2.format, get_dim_align(t2.format, t2.dtype))
                     end1 = t1.l1_offset + s1
                     end2 = t2.l1_offset + s2
                     overlap = t1.l1_offset < end2 and t2.l1_offset < end1
@@ -597,8 +598,8 @@ class TestL1GlobalLiveness:
         assert t_b.l1_offset is not None
 
         cube_size = config["fractal"]["cube_size"]
-        sa = calc_padded_size(t_a.shape, t_a.dtype, t_a.format, (cube_size, cube_size))
-        sb = calc_padded_size(t_b.shape, t_b.dtype, t_b.format, (cube_size, cube_size))
+        sa = calc_padded_size(t_a.shape, t_a.dtype, t_a.format, get_dim_align(t_a.format, t_a.dtype))
+        sb = calc_padded_size(t_b.shape, t_b.dtype, t_b.format, get_dim_align(t_b.format, t_b.dtype))
         end_a = t_a.l1_offset + sa
         end_b = t_b.l1_offset + sb
         overlap = t_a.l1_offset < end_b and t_b.l1_offset < end_a

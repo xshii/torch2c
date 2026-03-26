@@ -38,7 +38,7 @@ from .npu_annotate import (
 )
 from .pass_config import OptionalPass, PassConfig
 from .pass_protocol import CompilerPass, ValidatablePass
-from .sizing import align_up, calc_padded_size
+from .sizing import align_up, calc_padded_size, get_dim_align
 from .torch_debug import (
     disable_trace,
     enable_trace,
@@ -113,4 +113,5 @@ __all__ = [
     "c_mock_runtime_level",
     "align_up",
     "calc_padded_size",
+    "get_dim_align",
 ]

@@ -11,6 +11,7 @@ from torch2c.common.errors import MemoryPlanError
 from torch2c.common.testing import load_hw_config
 from torch2c.d_emission.memory_planner import run
 from torch2c.d_emission.memory_planner._utils import align_up, calc_padded_size
+from torch2c.common.sizing import get_dim_align
 from torch2c.d_emission.memory_planner.memory_planner import post_validate
 
 _L1_1M = 1_048_576  # 1 MB
@@ -369,9 +370,9 @@ class TestST3_EmbeddingBiasOverflow:
     def test_size_calculation(self):
         """验证 tensor 大小计算正确。"""
         # input[1,256,512] fp16 nd = 256*512*2 = 262144
-        assert calc_padded_size([1, 256, 512], "fp16", "nd", (_CUBE_SIZE, _CUBE_SIZE)) == 262144
+        assert calc_padded_size([1, 256, 512], "fp16", "nd", get_dim_align("nd", "fp16")) == 262144
         # weight[512,512] fp16 nd = 512*512*2 = 524288
-        assert calc_padded_size([512, 512], "fp16", "nd", (_CUBE_SIZE, _CUBE_SIZE)) == 524288
+        assert calc_padded_size([512, 512], "fp16", "nd", get_dim_align("nd", "fp16")) == 524288
         # total > 1M
         total = 262144 + 524288 + 1024 + 262144
         assert total > _L1_1M
@@ -469,8 +470,8 @@ class TestST5_2LayerMLPPerOp:
                 for t2 in op_tensors[i + 1:]:
                     if t1.l1_offset is None or t2.l1_offset is None:
                         continue
-                    s1 = calc_padded_size(t1.shape, t1.dtype, t1.format, (cube_size, cube_size))
-                    s2 = calc_padded_size(t2.shape, t2.dtype, t2.format, (cube_size, cube_size))
+                    s1 = calc_padded_size(t1.shape, t1.dtype, t1.format, get_dim_align(t1.format, t1.dtype))
+                    s2 = calc_padded_size(t2.shape, t2.dtype, t2.format, get_dim_align(t2.format, t2.dtype))
                     end1 = t1.l1_offset + s1
                     end2 = t2.l1_offset + s2
                     overlap = t1.l1_offset < end2 and t2.l1_offset < end1
@@ -493,7 +494,7 @@ class TestST5_2LayerMLPPerOp:
             for tid in op_tids:
                 t = g.tensors.get(tid)
                 if t and t.l1_offset is not None:
-                    end = t.l1_offset + calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
+                    end = t.l1_offset + calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
                     peak = max(peak, end)
             assert peak <= _L1_1M, f"节点 {nid} L1 峰值 {peak} 超过 1M"
 
@@ -568,9 +569,9 @@ class TestST6_MHATiled:
 
     def test_size_calculation(self):
         """验证峰值计算：Q 投影 768KB < 1M，K 投影时 1088KB > 1M。"""
-        act_size = calc_padded_size([1, 640, 256], "fp16", "nd", (_CUBE_SIZE, _CUBE_SIZE))
-        wt_size = calc_padded_size([256, 256], "fp16", "nd", (_CUBE_SIZE, _CUBE_SIZE))
-        bias_size = calc_padded_size([256], "fp16", "nd", (_CUBE_SIZE, _CUBE_SIZE))
+        act_size = calc_padded_size([1, 640, 256], "fp16", "nd", get_dim_align("nd", "fp16"))
+        wt_size = calc_padded_size([256, 256], "fp16", "nd", get_dim_align("nd", "fp16"))
+        bias_size = calc_padded_size([256], "fp16", "nd", get_dim_align("nd", "fp16"))
         q_peak = act_size + wt_size + bias_size + act_size
         k_peak = act_size + act_size + wt_size + bias_size + act_size
         assert q_peak < _L1_1M, f"Q peak {q_peak} should < 1M"

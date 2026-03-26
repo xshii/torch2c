@@ -18,7 +18,7 @@ import yaml
 from torch2c.common import INTEGRATION_CONFIG_DIR, NpuSpec, npu
 from torch2c.common.errors import MemoryPlanError
 from torch2c.common.graph_ir import DmaInstruction, Graph
-from torch2c.common.sizing import calc_padded_size
+from torch2c.common.sizing import calc_padded_size, get_dim_align
 from torch2c.integration.demo.validate_c_output import validate_c
 from torch2c.integration.pipeline import compile, compile_graph_only
 from torch2c.viz.cost_model import estimate_all
@@ -405,7 +405,7 @@ def _collect_metrics(graph: Graph, hw_config: dict | None = None) -> dict:
     cube_size = 16
     for t in graph.tensors.values():
         if t.l1_offset is not None:
-            size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
+            size = calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
             l1_peak = max(l1_peak, t.l1_offset + size)
 
     # DMA 总量

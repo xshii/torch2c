@@ -5,6 +5,7 @@ from __future__ import annotations
 from torch2c.common import Graph, get_logger
 
 from ._utils import align_up, best_fit_alloc, calc_padded_size
+from torch2c.common.sizing import get_dim_align
 
 logger = get_logger("memory_planner.hbm")
 
@@ -97,7 +98,7 @@ def allocate_hbm(
 
     for tid in sorted_tids:
         t = graph.tensors[tid]
-        size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
+        size = calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
         t.hbm_size = size
         aligned_size = align_up(size, hbm_alignment)
 

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from torch2c.common import Graph, get_logger, calc_padded_size
+from torch2c.common import Graph, get_logger, calc_padded_size, get_dim_align
 from torch2c.common.opt_log import log_opt
 
 logger = get_logger(__name__)
@@ -173,7 +173,7 @@ def _compute_savings(chain: list[str], graph: Graph) -> int:
             t = graph.get_tensor(tid)
             if t is None:
                 continue
-            size = calc_padded_size(t.shape, t.dtype, t.format, (16, 16))
+            size = calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
             savings += size * 2  # saved load + store
     return savings
 
