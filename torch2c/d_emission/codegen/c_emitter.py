@@ -238,13 +238,28 @@ def _gen_bulk_dma(dma_plan: dict, label: str) -> str:
 def _gen_grouped_body(group_order, group_nids, dma_plans, nodes, tensors,
                       signatures, c_names, dim_replace, sections, spec_macros):
     """生成分组模式的函数定义 + model_run 函数体。返回 (func_sections, main_body)。"""
+    from torch2c.d_emission.codegen._fused_emitter import gen_fused_block, segment_by_fusion
+
     prefix, indent = "t->", "    "
     func_sections, func_calls = [], []
     for group in group_order:
         nids = group_nids[group]
         fn = _group_name_to_c_func(group)
-        ops = [gen_op_block(nodes[nid], tensors, dma_plans.get(nid, _EMPTY_DMA),
-                            signatures, c_names, prefix, dim_replace) for nid in nids]
+        # 按 fusion_group 分段：融合组生成共享代码块
+        segments = segment_by_fusion(nids, nodes)
+        ops = []
+        for is_fused, seg_nids in segments:
+            if is_fused:
+                ops.append(gen_fused_block(
+                    seg_nids, nodes, tensors, dma_plans, signatures,
+                    c_names, prefix, dim_replace,
+                    _gen_dma_line, _gen_op_call,
+                ))
+            else:
+                for nid in seg_nids:
+                    ops.append(gen_op_block(nodes[nid], tensors,
+                               dma_plans.get(nid, _EMPTY_DMA),
+                               signatures, c_names, prefix, dim_replace))
         func_sections.append(f"static void {fn}(model_tensors_t* t) {{\n"
                              + "\n\n".join(p for p in ops if p) + "\n}")
         func_calls.append(f"{indent}{fn}(&t);")
@@ -292,6 +307,8 @@ def emit_model_graph_c(plan, signatures: dict) -> str:
 
 def _emit_flat(nodes, tensors, order, dma_plans, signatures, c_names):
     """无模块信息时退化为平铺模式。"""
+    from torch2c.d_emission.codegen._fused_emitter import gen_fused_block, segment_by_fusion
+
     used_tids = _collect_used_tensor_ids(nodes, tensors, order, signatures)
     sections = [("flat", used_tids)]
     flat_names = {tid: f"flat.{c_names.get(tid, tid)}" for tid in used_tids}
@@ -302,9 +319,20 @@ def _emit_flat(nodes, tensors, order, dma_plans, signatures, c_names):
     bl = dma_plans.get("__bulk_load__")
     if bl:
         parts.append(_gen_bulk_dma(bl, "Bulk DMA Load"))
-    for nid in order:
-        parts.append(gen_op_block(nodes[nid], tensors,
-                                  dma_plans.get(nid, _EMPTY_DMA), signatures, flat_names, "t."))
+    # 按 fusion_group 分段
+    segments = segment_by_fusion(order, nodes)
+    for is_fused, seg_nids in segments:
+        if is_fused:
+            parts.append(gen_fused_block(
+                seg_nids, nodes, tensors, dma_plans, signatures,
+                flat_names, "t.", None,
+                _gen_dma_line, _gen_op_call,
+            ))
+        else:
+            for nid in seg_nids:
+                parts.append(gen_op_block(nodes[nid], tensors,
+                                          dma_plans.get(nid, _EMPTY_DMA),
+                                          signatures, flat_names, "t."))
     bs = dma_plans.get("__bulk_store__")
     if bs:
         parts.append(_gen_bulk_dma(bs, "Bulk DMA Store"))
