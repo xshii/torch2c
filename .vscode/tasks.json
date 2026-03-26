@@ -70,6 +70,36 @@
       "group": "none"
     },
     {
+      "label": "compile:minimal",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["scripts/compile_model.py", "${file}", "--mode", "minimal"],
+      "detail": "编译当前模型文件 → C 代码（无优化，只跑必需 pass）",
+      "group": { "kind": "build", "isDefault": false },
+      "presentation": { "reveal": "always", "focus": true },
+      "problemMatcher": ["$python"]
+    },
+    {
+      "label": "compile:full",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["scripts/compile_model.py", "${file}", "--mode", "full"],
+      "detail": "编译当前模型文件 → C 代码（全优化）",
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "always", "focus": true },
+      "problemMatcher": ["$python"]
+    },
+    {
+      "label": "compile:both",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["scripts/compile_model.py", "${file}", "--mode", "both"],
+      "detail": "编译当前模型 → 无优化版 + 全优化版（自动打开 HTML + 可 diff 对比）",
+      "group": "build",
+      "presentation": { "reveal": "always", "focus": true },
+      "problemMatcher": ["$python"]
+    },
+    {
       "label": "run:current",
       "type": "shell",
       "command": "${workspaceFolder}/.venv/bin/python",
@@ -82,8 +112,8 @@
       "label": "run:current+viz",
       "type": "shell",
       "command": "bash",
-      "args": ["-c", "${workspaceFolder}/.venv/bin/python '${file}' && HTML=$(find ${workspaceFolder}/output -name 'pipeline.html' -newer '${file}' 2>/dev/null | head -1) && [ -n \"$HTML\" ] && open \"$HTML\" || echo 'No pipeline.html found'"],
-      "detail": "运行当前 Python 文件 + 自动打开生成的 pipeline.html",
+      "args": ["-c", "${workspaceFolder}/.venv/bin/python '${file}' && HTML=$(find ${workspaceFolder}/output -name '*.html' -newer '${file}' 2>/dev/null | head -1) && [ -n \"$HTML\" ] && open \"$HTML\" || echo 'No HTML output found'"],
+      "detail": "运行当前文件 + 自动打开生成的 HTML",
       "group": "none",
       "presentation": { "reveal": "always", "focus": true }
     },
