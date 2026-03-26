@@ -1,0 +1,56 @@
+# Pre-commit hooks — guardrails for AI-assisted development
+# Install: pre-commit install
+# Run all: pre-commit run --all-files
+
+repos:
+  # ── Standard file hygiene ──────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+
+  # ── Ruff: fast Python linter + formatter ───────────────────────
+  # Config lives in pyproject.toml [tool.ruff]
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  # ── Project-specific convention checks ─────────────────────────
+  - repo: local
+    hooks:
+      # No print() in torch2c/ source — use logger instead
+      - id: no-print-in-source
+        name: "no print() in torch2c/ source (use logger)"
+        language: pygrep
+        entry: '\bprint\s*\('
+        files: '^torch2c/.*\.py$'
+        exclude: '(^torch2c/.*/tests/|^torch2c/.*/demo/|/test_|conftest\.py)'
+        types: [python]
+
+      # No .addr in C files — should use .ptr
+      - id: no-dot-addr-in-c
+        name: "no .addr in C files (use .ptr)"
+        language: pygrep
+        entry: '\.addr\b'
+        files: '^npu_cpu_mock/.*\.c$'
+        types_or: [c]
+
+      # No hardcoded (16, 16) in calc_padded_size calls
+      - id: no-hardcoded-alignment
+        name: "no hardcoded (16, 16) in calc_padded_size"
+        language: pygrep
+        entry: 'calc_padded_size\([^)]*\(16\s*,\s*16\)'
+        types: [python]
+
+      # Full convention checker (function length, file length, etc.)
+      - id: check-conventions
+        name: "check project conventions (size limits, patterns)"
+        language: python
+        entry: python scripts/check_conventions.py
+        pass_filenames: false
+        always_run: true

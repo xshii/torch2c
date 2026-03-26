@@ -1,0 +1,78 @@
+# torch2c Cursor Rules（给 AI 助手的项目规则）
+# 详细规则见 CLAUDE.md 和 SKILLS.md
+
+## 危险操作（绝对不要做）
+- 不要用 `tensor.addr`，正确写法是 `.ptr`
+- 不要硬编码 `calc_padded_size(..., (16, 16))`，必须用 `get_dim_align(fmt, dtype)`
+- 不要在 op_mapping 中设 `is_mapped=True`（只有 decomposition 才设）
+- 不要跳过 config 一致性检查（`test_config_consistency.py`）
+- 不要在 pass 中修改 config（pass 是 graph → graph 的纯变换）
+- 不要用 `print`，用 `common.get_logger(__name__)` 的 logger
+- 不要用 Python 3.11+ 特性（项目要求 3.10）
+- 不要用裸 `raise`，用 `common.errors` 的异常类
+
+## 技术约束
+- Python 3.10, PyTorch 2.4+, C99
+- 每个函数 < 50 行，模块核心代码 < 300 行
+- 精度：max_abs_diff < 2.0 (FP16), cosine > 0.95
+- 测试：`pytest`（Python）、`ctest`（C）
+
+## 编译流水线（17 pass）
+# A-Frontend: ①graph_capture
+# B-Lowering: ②op_mapping → ③op_decomposition
+# 可选: ④op_absorption, ④b mha_merge
+# C-Backend: ⑤format_annotator → ⑤b reformat_inserter → ⑥validator
+# 可选: ⑤a format_planner, ⑤c storage_assigner, ⑤d block_pad, ⑥b roofline, ⑥c fusion
+# D-Emission: ⑦scheduler → ⑧memory_planner → ⑨codegen
+# 可选: ⑦b global_tiler
+
+## 关键文件路径
+# IR 数据结构          torch2c/common/graph_ir.py
+# 内存大小计算         torch2c/common/sizing.py
+# Pass 管线顺序        torch2c/integration/pipeline.py
+# Pass 开关枚举        torch2c/common/pass_config.py
+# 算子映射配置         torch2c/integration/config/direct_mappings.yaml
+# 算子裂解配置         torch2c/integration/config/decompositions.yaml
+# C API 签名           torch2c/integration/config/c_api_signatures.yaml
+# C mock 实现          npu_cpu_mock/src/ + npu_cpu_mock/include/npu_api.h
+# 硬件参数             torch2c/integration/config/hardware_config.yaml
+# Codegen 模板         torch2c/d_emission/codegen/
+
+## 新增算子必改文件（7 个）
+# 1. torch2c/integration/config/direct_mappings.yaml
+# 2. torch2c/integration/config/c_api_signatures.yaml
+# 3. torch2c/integration/config/tiling_config.yaml
+# 4. torch2c/integration/config/naming_rules.yaml
+# 5. torch2c/integration/config/cost_model_config.yaml
+# 6. npu_cpu_mock/include/npu_api.h
+# 7. npu_cpu_mock/src/npu_compute_xxx.c
+
+## 新增 Pass 必改文件（5 个）
+# 1. torch2c/optpass/{prefix}_{name}/{name}.py
+# 2. torch2c/optpass/{prefix}_{name}/__init__.py
+# 3. torch2c/optpass/{prefix}_{name}/tests/test_{name}.py
+# 4. torch2c/common/pass_config.py（加 toggle）
+# 5. torch2c/integration/pipeline.py（注册 pass）
+
+## 编程规范
+- 用 `common.get_logger(__name__)` 记日志
+- 用 `common.errors` 的异常类
+- 用 `opt_log` 记录优化决策原因
+- Config 改完跑一致性测试
+- 每个 pass 后自动 `graph.renumber()`
+- Tensor format 语义：format = HBM 存储格式，DMA load 时随路转换
+
+## 测试命令
+# 全量测试:   .venv/bin/pytest --tb=short -q
+# 单模块测试: .venv/bin/pytest torch2c/<module>/tests/ -v
+# 单文件测试: .venv/bin/pytest path/to/test_file.py -v
+
+## 目录结构
+# torch2c/a_capture/    — Frontend
+# torch2c/b_lowering/   — Lowering (op_mapping, op_decomposition)
+# torch2c/c_backend/    — Backend (format_annotator, reformat_inserter, validator)
+# torch2c/d_emission/   — Emission (scheduler, memory_planner, codegen)
+# torch2c/optpass/      — 可选优化 Pass（bc_/c_/cd_/d_ 前缀）
+# torch2c/common/       — 基础设施（Graph IR、日志、配置、sizing）
+# torch2c/integration/  — 管线串联 + 配置 + 端到端测试
+# npu_cpu_mock/          — NPU C API 的 CPU 模拟实现

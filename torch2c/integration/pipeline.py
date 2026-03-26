@@ -695,9 +695,9 @@ def inspect(
     from torch2c.common import format_model_annotations
 
     inputs = [dummy_input] + ([mask] if mask is not None else [])
-    print(format_model_annotations(model, inputs=inputs))
+    print(format_model_annotations(model, inputs=inputs))  # noqa: print
 
     graph = graph_capture.capture(model, dummy_input, mask=mask)
-    print("\n" + graph.summary())
-    print("\n" + graph.format_npu_annotations())
+    print("\n" + graph.summary())  # noqa: print
+    print("\n" + graph.format_npu_annotations())  # noqa: print
     return graph
