@@ -173,7 +173,7 @@ def _compute_savings(chain: list[str], graph: Graph) -> int:
             t = graph.get_tensor(tid)
             if t is None:
                 continue
-            size = calc_padded_size(t.shape, t.dtype, t.format, 16)
+            size = calc_padded_size(t.shape, t.dtype, t.format, (16, 16))
             savings += size * 2  # saved load + store
     return savings
 

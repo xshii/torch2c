@@ -156,7 +156,7 @@ def _calc_op_peak(
         t = graph.tensors.get(tid)
         if not t or t.storage == "pipe":
             continue
-        size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+        size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
         total += align_up(size, l1_align)
     return total
 
@@ -179,9 +179,9 @@ def _calc_tiled_peak(
             dim_idx = tiled_tensors[tid]
             s = list(t.shape)
             s[dim_idx] = tile_size
-            size = calc_padded_size(s, t.dtype, t.format, cube_size)
+            size = calc_padded_size(s, t.dtype, t.format, (cube_size, cube_size))
         else:
-            size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+            size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
         total += align_up(size, l1_align)
     return total
 
@@ -205,10 +205,10 @@ def _calc_multi_buffer_peak(
             dim_idx = tiled_tensors[tid]
             s = list(t.shape)
             s[dim_idx] = tile_size
-            size = calc_padded_size(s, t.dtype, t.format, cube_size)
+            size = calc_padded_size(s, t.dtype, t.format, (cube_size, cube_size))
             total += align_up(size, l1_align) * num_buffers
         else:
-            size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+            size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
             total += align_up(size, l1_align)
     return total
 

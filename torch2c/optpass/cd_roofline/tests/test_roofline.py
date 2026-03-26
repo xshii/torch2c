@@ -126,6 +126,6 @@ def test_bytes_includes_all_tensors() -> None:
     hw = _default_hw()
 
     nbytes = estimate_bytes(node, graph, hw)
-    # 3 tensors x 4x16 x 2 bytes = 384
-    expected = 3 * (4 * 16 * 2)
+    # 3 tensors x 16x16 x 2 bytes = 1536 (dim[-2]=4 padded to cube_size=16)
+    expected = 3 * (16 * 16 * 2)
     assert nbytes == expected

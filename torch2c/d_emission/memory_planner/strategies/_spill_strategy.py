@@ -77,10 +77,10 @@ def strategy_spill(
                 dim_idx = tile_info.tiled_tensors[tid]
                 tiled_shape = list(t.shape)
                 tiled_shape[dim_idx] = tile_info.tile_size
-                size = calc_padded_size(tiled_shape, t.dtype, t.format, cube_size)
+                size = calc_padded_size(tiled_shape, t.dtype, t.format, (cube_size, cube_size))
                 tiled_sizes[tid] = align_up(size, l1_align)
             else:
-                size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+                size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
             l1_offset += align_up(size, l1_align)
 
         # 分配额外缓冲副本
@@ -124,7 +124,7 @@ def strategy_spill(
                 plan.stores.insert(0, DmaInstruction(
                     op="store", tensor_id=stid,
                     hbm_offset=t.hbm_offset, l1_offset=t.l1_offset or 0,
-                    size_bytes=calc_padded_size(t.shape, t.dtype, t.format, cube_size),
+                    size_bytes=calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size)),
                     src_format=t.format, dst_format=t.format, dtype=t.dtype,
                 ))
 

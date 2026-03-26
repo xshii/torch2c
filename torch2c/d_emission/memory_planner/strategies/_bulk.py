@@ -26,7 +26,7 @@ def strategy_bulk(
             continue
         offset = align_up(offset, l1_align)
         layout[tid] = offset
-        offset += calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+        offset += calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
 
     if offset > l1_cap:
         return False, []
@@ -38,7 +38,7 @@ def strategy_bulk(
     for tid, l1_off in layout.items():
         t = graph.tensors[tid]
         t.l1_offset = l1_off
-        size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+        size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
         if t.storage in ("local", "pipe"):
             continue
         t.hbm_size = size

@@ -1035,8 +1035,9 @@ YAML配置加载与schema校验。
   3. store: 所有输出从L1→HBM
 
 ### 关键函数
-  calc_padded_size(shape, dtype, format, cube_size) -> int
-      计算padding后的字节数。分形格式需将shape的最后两维对齐到cube_size的整数倍。
+  calc_padded_size(shape, dtype, format, dim_align) -> int
+      计算padding后的字节数。dim_align=(dim[-2]对齐, dim[-1]对齐)，
+      分形格式两维均按对应值对齐；ND格式对齐值为1时跳过该维。
 
   align_up(offset, alignment) -> int
       向上对齐。

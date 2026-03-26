@@ -109,7 +109,7 @@ def allocate_l1_global(
             t = graph.tensors.get(tid)
             if not t or tid not in l1_lifetimes:
                 continue
-            size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+            size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
             aligned_size = align_up(size, l1_alignment)
 
             offset = best_fit_alloc(free_blocks, aligned_size)

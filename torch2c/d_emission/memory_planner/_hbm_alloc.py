@@ -97,7 +97,7 @@ def allocate_hbm(
 
     for tid in sorted_tids:
         t = graph.tensors[tid]
-        size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+        size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
         t.hbm_size = size
         aligned_size = align_up(size, hbm_alignment)
 

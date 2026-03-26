@@ -67,7 +67,7 @@ class DmaPlan:
 
 ### 关键函数
 
-- `calc_padded_size(shape, dtype, format, cube_size) -> int` — 计算padding后的字节数
+- `calc_padded_size(shape, dtype, format, dim_align) -> int` — 计算padding后的字节数
 - `align_up(offset, alignment) -> int` — 向上对齐
 
 ## config/hardware_config.yaml

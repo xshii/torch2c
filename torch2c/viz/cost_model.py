@@ -110,7 +110,7 @@ def _dma_cost(node: Node, graph: Graph, hw: HwParams) -> int:
     for tid in node.inputs:
         t = graph.tensors.get(tid)
         if t:
-            size = calc_padded_size(t.shape, t.dtype, t.format, hw.cube_size)
+            size = calc_padded_size(t.shape, t.dtype, t.format, (hw.cube_size, hw.cube_size))
             return max(1, size // bw)
     return 1
 

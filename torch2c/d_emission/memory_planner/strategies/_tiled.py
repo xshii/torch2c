@@ -38,9 +38,9 @@ def _set_tile_stride(
         per_batch_tiled[0] = tile_size
         instr.batch_count = batch_count
         instr.hbm_batch_stride = calc_padded_size(
-            per_batch_orig, t.dtype, t.format, cube_size)
+            per_batch_orig, t.dtype, t.format, (cube_size, cube_size))
         instr.l1_batch_stride = calc_padded_size(
-            per_batch_tiled, t.dtype, t.format, cube_size)
+            per_batch_tiled, t.dtype, t.format, (cube_size, cube_size))
 
 
 # ── 共用辅助：tile info 写入 DMA plan ──────────────────────
@@ -75,7 +75,7 @@ def _apply_tile_info(
             tiled_shape = list(t.shape)
             tiled_shape[dim_idx] = tile_info.tile_size
             instr.size_bytes = calc_padded_size(
-                tiled_shape, t.dtype, t.format, cube_size,
+                tiled_shape, t.dtype, t.format, (cube_size, cube_size),
             )
             _set_tile_stride(instr, t, dim_idx, tile_info.tile_size, cube_size)
     plan.tile_info = node.params["_tile_info"]
@@ -129,10 +129,10 @@ def strategy_tiled(
                 dim_idx = tile_info.tiled_tensors[tid]
                 tiled_shape = list(t.shape)
                 tiled_shape[dim_idx] = tile_info.tile_size
-                size = calc_padded_size(tiled_shape, t.dtype, t.format, cube_size)
+                size = calc_padded_size(tiled_shape, t.dtype, t.format, (cube_size, cube_size))
                 tiled_sizes[tid] = align_up(size, l1_align)
             else:
-                size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+                size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
             l1_offset += align_up(size, l1_align)
 
         # 分配额外缓冲副本

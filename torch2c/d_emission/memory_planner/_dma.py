@@ -52,7 +52,7 @@ def build_dma_plan(
                     tensor_id=tid,
                     hbm_offset=t.hbm_offset,
                     l1_offset=l1_layout[tid],
-                    size_bytes=calc_padded_size(t.shape, t.dtype, t.format, cube_size),
+                    size_bytes=calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size)),
                     src_format=t.format,
                     dst_format=dst_fmt,
                     dtype=t.dtype,
@@ -78,7 +78,7 @@ def build_dma_plan(
                     tensor_id=tid,
                     hbm_offset=t.hbm_offset,
                     l1_offset=l1_layout[tid],
-                    size_bytes=calc_padded_size(t.shape, t.dtype, t.format, cube_size),
+                    size_bytes=calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size)),
                     src_format=l1_fmt,
                     dst_format=t.format,
                     dtype=t.dtype,
@@ -103,7 +103,7 @@ def try_global_l1_layout(
             continue
         offset = align_up(offset, l1_alignment)
         layout[tid] = offset
-        offset += calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+        offset += calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
 
     if offset > l1_capacity:
         return False
@@ -114,7 +114,7 @@ def try_global_l1_layout(
     for tid, l1_off in layout.items():
         t = graph.tensors[tid]
         t.l1_offset = l1_off
-        size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+        size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
         # storage=local/pipe 的 tensor 不分配 HBM
         if t.storage in ("local", "pipe"):
             continue
@@ -132,7 +132,7 @@ def build_bulk_dma(graph: Graph, cube_size: int) -> list[DmaPlan]:
     for t in graph.tensors.values():
         if t.hbm_offset is None or t.l1_offset is None:
             continue
-        size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+        size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
         if t.is_model_input or t.is_weight:
             bulk_load.loads.append(
                 DmaInstruction(

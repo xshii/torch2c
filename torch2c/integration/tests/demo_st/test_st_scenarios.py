@@ -405,7 +405,7 @@ def _collect_metrics(graph: Graph, hw_config: dict | None = None) -> dict:
     cube_size = 16
     for t in graph.tensors.values():
         if t.l1_offset is not None:
-            size = calc_padded_size(t.shape, t.dtype, t.format, cube_size)
+            size = calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size))
             l1_peak = max(l1_peak, t.l1_offset + size)
 
     # DMA 总量

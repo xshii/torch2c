@@ -133,7 +133,7 @@ def estimate_bytes(node: Node, graph: Graph, hw: RooflineHwParams) -> int:
     for tid in list(node.inputs) + list(node.outputs):
         t = graph.tensors.get(tid)
         if t:
-            total += calc_padded_size(t.shape, t.dtype, t.format, hw.cube_size)
+            total += calc_padded_size(t.shape, t.dtype, t.format, (hw.cube_size, hw.cube_size))
     return total
 
 

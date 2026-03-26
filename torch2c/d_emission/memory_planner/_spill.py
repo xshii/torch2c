@@ -52,7 +52,7 @@ def _merge_free_blocks(free_blocks: list[list[int]]) -> list[list[int]]:
 def _tensor_l1_size(graph: Graph, tid: str, cube_size: int, l1_align: int) -> int:
     """计算 tensor 的 L1 对齐大小。"""
     t = graph.tensors[tid]
-    return align_up(calc_padded_size(t.shape, t.dtype, t.format, cube_size), l1_align)
+    return align_up(calc_padded_size(t.shape, t.dtype, t.format, (cube_size, cube_size)), l1_align)
 
 
 def _select_victims(
