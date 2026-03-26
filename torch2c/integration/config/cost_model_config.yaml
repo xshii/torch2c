@@ -96,6 +96,8 @@ op_overrides:
   # ---- idma ----
   idma_reshape:
     launch_cycles: 3                # 仅元数据变更
+  idma_transpose:
+    launch_cycles: 10               # 真实数据搬运（维度重排）
   idma_broadcast:
     launch_cycles: 5
   idma_concat:

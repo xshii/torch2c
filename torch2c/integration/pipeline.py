@@ -382,6 +382,7 @@ def _load_configs(
         "reformat": {},
         "mha_merge": {
             **hardware.get("mha_merge", {}),
+            "cost_model": _load_cost_model(config_dir),
             "hardware": {
                 "last_dim_align": (hardware.get("block_pad", {})
                     .get("alignment", {}).get("nd", {})
@@ -390,8 +391,6 @@ def _load_configs(
                     "l1", {}).get("total_size_bytes", 16 * 1024 * 1024),
                 "dma_bytes_per_cycle": hardware.get("compute", {}).get(
                     "dma_bytes_per_cycle", 256),
-                "matmul_launch_cycles": hardware.get("mha_merge", {}).get(
-                    "matmul_launch_cycles", 100),
             },
         },
         "block_pad": hardware.get("block_pad", {}),

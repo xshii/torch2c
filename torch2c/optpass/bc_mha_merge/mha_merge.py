@@ -11,6 +11,9 @@ from dataclasses import dataclass, field
 
 from torch2c.common import Graph, Node, Tensor, get_logger
 from torch2c.common.opt_log import log_opt
+from torch2c.optpass.cd_roofline.roofline_analyzer import (
+    RooflineHwParams, parse_cost_model,
+)
 
 logger = get_logger(__name__)
 
@@ -162,32 +165,47 @@ def _detect_mha_groups(graph: Graph) -> list[MhaGroup]:
 
 
 def _compute_costs(group: MhaGroup, config: dict) -> tuple[float, float]:
-    """计算 merged/split 方案的总开销，返回 (cost_A, cost_B)。"""
+    """计算 merged/split 方案的总开销，返回 (cost_A, cost_B)。
+
+    per-op 参数（launch_cycles）从统一 cost_model 读取，
+    结构性分析（padding waste、tiling pressure）在此处计算。
+    """
     chain = group.q_chain  # 所有链 shape 一致
     B, S, H, Dh, D = chain.B, chain.S, chain.H, chain.Dh, group.D
     elem_bytes = 2  # fp16
 
     # 硬件参数
-    hw = config.get("hardware", {})
-    ld = hw.get("last_dim_align", 16)
-    l1_bytes = hw.get("l1_size_bytes", 16 * 1024 * 1024)
-    dma_bw = hw.get("dma_bytes_per_cycle", 256)
-    matmul_launch = hw.get("matmul_launch_cycles", 100)
+    hw_raw = config.get("hardware", {})
+    ld = hw_raw.get("last_dim_align", 16)
+    l1_bytes = hw_raw.get("l1_size_bytes", 16 * 1024 * 1024)
+    hw = RooflineHwParams(
+        dma_bytes_per_cycle=hw_raw.get("dma_bytes_per_cycle", 256),
+    )
+
+    # per-op 参数从统一 cost_model 读取
+    cm = parse_cost_model(config.get("cost_model"))
+    matmul_launch = cm.get("cube_matmul", "cube").launch_cycles
+    reshape_launch = cm.get("idma_reshape", "idma").launch_cycles
+    transpose_launch = cm.get("idma_transpose", "idma").launch_cycles
+    concat_launch = cm.get("idma_concat", "idma").launch_cycles
 
     # 方案 A: Merged
     pad_waste_merged = (math.ceil(D / ld) * ld - D) * B * S * elem_bytes * 3
     # reshape/transpose DMA: 3 chains × 3 nodes × tensor_bytes
     tensor_bytes = B * S * D * elem_bytes
-    reshape_dma_cost = 3 * 3 * tensor_bytes / dma_bw
+    reshape_dma_cost = 3 * 3 * tensor_bytes / hw.dma_bytes_per_cycle
+    # 3 chains × (view + transpose + reshape) 启动开销
+    chain_launch_cost = 3 * (reshape_launch + transpose_launch + reshape_launch)
     # tiling: attention scores [B*H, S, S]
     scores_bytes = B * H * S * S * elem_bytes
     tiling_cost_merged = scores_bytes if scores_bytes > l1_bytes else 0
-    cost_a = pad_waste_merged + reshape_dma_cost + tiling_cost_merged
+    cost_a = pad_waste_merged + reshape_dma_cost + chain_launch_cost + tiling_cost_merged
 
     # 方案 B: Split
     pad_waste_split = H * (math.ceil(Dh / ld) * ld - Dh) * B * S * elem_bytes * 3
     pipeline_overhead = (H - 1) * 3 * matmul_launch
-    concat_cost = H * B * S * Dh * elem_bytes / dma_bw
+    concat_cost = (H * B * S * Dh * elem_bytes / hw.dma_bytes_per_cycle
+                   + 3 * concat_launch)  # 3 条链各一个 concat
     cost_b = pad_waste_split + pipeline_overhead + concat_cost
 
     return cost_a, cost_b
