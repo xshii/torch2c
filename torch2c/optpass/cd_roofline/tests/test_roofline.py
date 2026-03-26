@@ -389,15 +389,18 @@ def test_cost_context_has_all_fields() -> None:
     assert len(ctx.inputs) == 2
     assert len(ctx.outputs) == 1
     assert ctx.compute_dtype == "fp32"
-    assert ctx.input_formats == ["zz", "nz"]
-    assert ctx.output_formats == ["nd"]
-    assert ctx.input_storage == ["local", "hbm"]
+    # format/storage 从 tensor 直接访问
+    assert ctx.inputs[0].format == "zz"
+    assert ctx.inputs[1].format == "nz"
+    assert ctx.outputs[0].format == "nd"
+    assert ctx.inputs[0].storage == "local"
+    assert ctx.inputs[1].storage == "hbm"
     assert ctx.is_fused is True
     assert ctx.fusion_role == "head"
-    assert ctx.M == 4
-    assert ctx.N == 16
-    assert ctx.K == 32
-    assert ctx.batch == 1
+    # shape 从 tensor 直接访问
+    assert ctx.inputs[0].shape[-2] == 4   # M
+    assert ctx.inputs[1].shape[-1] == 16  # N
+    assert ctx.inputs[0].shape[-1] == 32  # K
     assert ctx.elem_count == 4 * 16
 
 

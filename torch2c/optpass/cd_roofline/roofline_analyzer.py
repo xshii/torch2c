@@ -79,15 +79,11 @@ class CostContext:
     """
 
     node: Node                     # 当前节点
-    inputs: list[Tensor]           # 输入 tensor 列表
+    inputs: list[Tensor]           # 输入 tensor 列表（访问 t.shape/dtype/format/storage）
     outputs: list[Tensor]          # 输出 tensor 列表
     hw: RooflineHwParams           # 硬件参数
     params: dict                   # node.params（算子参数 + 优化元数据）
     compute_dtype: str             # 计算精度 (fp16/fp32/...)
-    input_formats: list[str]       # 输入 format 列表 (nd/nz/zz/nn)
-    output_formats: list[str]      # 输出 format 列表
-    input_storage: list[str]       # 输入 storage 列表 (hbm/local/pipe)
-    output_storage: list[str]      # 输出 storage 列表
     is_fused: bool                 # 是否在融合组内
     fusion_role: str | None        # head/middle/tail/None
 
@@ -97,34 +93,6 @@ class CostContext:
         if self.outputs:
             return _prod(self.outputs[0].shape)
         return 0
-
-    @property
-    def M(self) -> int:
-        """matmul 的 M 维度（第一个输入 shape[-2]）。"""
-        if self.inputs and len(self.inputs[0].shape) >= 2:
-            return self.inputs[0].shape[-2]
-        return 1
-
-    @property
-    def N(self) -> int:
-        """matmul 的 N 维度（第二个输入 shape[-1]）。"""
-        if len(self.inputs) >= 2 and len(self.inputs[1].shape) >= 1:
-            return self.inputs[1].shape[-1]
-        return 1
-
-    @property
-    def K(self) -> int:
-        """matmul 的 K 维度（第一个输入 shape[-1]）。"""
-        if self.inputs and len(self.inputs[0].shape) >= 1:
-            return self.inputs[0].shape[-1]
-        return 1
-
-    @property
-    def batch(self) -> int:
-        """batch 维度乘积（shape[:-2]）。"""
-        if self.inputs and len(self.inputs[0].shape) > 2:
-            return _prod(self.inputs[0].shape[:-2])
-        return 1
 
 
 @dataclass
@@ -146,8 +114,10 @@ def register_cost_fn(op_name: str) -> Callable:
 
         @register_cost_fn("cube_matmul")
         def _cube_matmul_cost(ctx: CostContext) -> CostResult:
-            flops = 2 * ctx.batch * ctx.M * ctx.N * ctx.K
-            launch = 80 if ctx.input_formats[0] == "zz" else 100
+            a, b = ctx.inputs[0], ctx.inputs[1]
+            M, K, N = a.shape[-2], a.shape[-1], b.shape[-1]
+            flops = 2 * M * N * K
+            launch = 80 if a.format == "zz" else 100
             return CostResult(flops=flops, launch_cycles=launch)
     """
     def decorator(fn: Callable[[CostContext], CostResult]) -> Callable:
@@ -171,10 +141,6 @@ def _build_cost_context(
         hw=hw,
         params=node.params,
         compute_dtype=compute_dtype,
-        input_formats=[t.format or "nd" for t in inputs],
-        output_formats=[t.format or "nd" for t in outputs],
-        input_storage=[t.storage or "hbm" for t in inputs],
-        output_storage=[t.storage or "hbm" for t in outputs],
         is_fused="_fusion_group" in node.params,
         fusion_role=node.params.get("_fusion_role"),
     )
