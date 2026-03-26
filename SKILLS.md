@@ -17,29 +17,39 @@
 
 ---
 
-## Skill 1: t2c-build — 智能开发引擎
+## Skill 1: t2c-build — 智能开发引擎 (PUA-Powered)
 
-**合并自**: iterate + tdd + spec-test + debug（原 4 个 skill → 1 个）
+**合并自**: iterate + tdd + spec-test + debug + **PUA 质量引擎**（原 4 skill + PUA → 1 个）
 
-**触发词**: fix / bug / feat / refactor / perf / test / debug / TDD / 报错 / 调试 / 用例设计
+**触发词**: fix / bug / feat / refactor / perf / test / debug / loop / TDD / 报错 / 调试 / 用例设计
 
-**6 种模式**:
+**7 种模式**:
 
 | 模式 | 触发词 | 核心循环 |
 |------|--------|----------|
-| `fix` | fix, bug, 修, 报错 | 复现(Red) → 定位 → 修复(Green) → 回归 |
+| `fix` | fix, bug, 修, 报错 | 复现(Red) → 方法论5步定位 → 修复(Green) → 冰山扫描 → 回归 |
 | `feat` | feat, add, 加, 新增 | 设计确认 → TDD循环 → 集成 → 回归 |
 | `refactor` | refactor, 重构 | 确保测试覆盖 → 小步重构 → 回归 |
 | `perf` | perf, optimize, 性能 | 量化 → 找瓶颈 → 优化 → 验证 |
 | `test` | test, TDD, spec, 用例 | 规格提取 → 5种方法设计 → 实现 |
-| `debug` | debug, 调试, 排查 | 症状分类 → 逐pass缩小 → 定位 |
+| `debug` | debug, 调试, 排查 | 症状分类 → 方法论5步 → 定位 |
+| `loop` | loop, 自动, 迭代 | 自主迭代，零人工干预，直到完成 |
 
-**融合能力**:
+**PUA 质量引擎（融合自 pua-skills）**:
+- **三条红线**: 闭环验证(必须贴pytest输出) / 事实驱动(不猜) / 穷尽一切(5步走完才能放弃)
+- **通用方法论 5 步**: 闻味道 → 揪头发 → 照镜子 → 执行新方案 → 复盘
+- **压力升级**: L0信任→L1温和→L2灵魂拷问→L3严格审查→L4最终尝试（按失败次数）
+- **冰山法则**: 修一个问题，扫一类问题。一个进来，一类出去
+- **Owner 意识**: 主动发现问题，不等用户指出
+- **抗合理化**: 9 种常见借口的反击机制
+- **7 项检查清单**: L3+ 失败时强制完成的排查清单
+- **体面退出**: 穷尽一切后输出结构化失败报告
+
+**开发能力（融合自 iterate/tdd/spec-test/debug）**:
 - **TDD 严格循环**: Red → Green → Refactor，每步验证
 - **5 种测试方法**: 规格驱动 / 场景矩阵 / 不变量 / 决策表 / 回归
 - **错误快速分类**: 按错误类型 → 定位文件（MappingError→YAML, ValidationError→format 等）
 - **debug_dump 全链路**: 每个 pass 前后 JSON 快照 + 可视化
-- **自查清单**: 8 项质量门控（函数<50行、模块<300行、logger/errors/opt_log 等）
 
 ---
 
