@@ -23,8 +23,24 @@ from torch2c.common.sizing import calc_padded_size, get_dim_align
 
 logger = get_logger("global_tiler")
 
-# global tiler 支持的 op（仅 cube + reformat，与 memory_planner._tiling 的全量列表不同）
-_GLOBAL_TILEABLE_OPS = frozenset({"cube_matmul", "cube_matmul_bias", "dma_reformat"})
+# global tiler 支持的 op: cube + reformat + 已注册的 vector/idma 算子
+# vector 逐元素/归约算子支持沿 M 维（dim[-2]）切分：可按行独立处理
+_GLOBAL_TILEABLE_OPS = frozenset({
+    # cube
+    "cube_matmul", "cube_matmul_bias",
+    # dma
+    "dma_reformat",
+    # vector — 逐元素
+    "vector_add", "vector_mul", "vector_sub", "vector_div",
+    "vector_relu", "vector_gelu", "vector_mul_scalar",
+    "vector_fill", "vector_dropout",
+    # vector — 归约（沿最后维归约，M 维可切分）
+    "vector_layernorm_part1", "vector_layernorm_part2",
+    "vector_softmax_part1", "vector_softmax_part2",
+    "vector_rmsnorm_part1", "vector_rmsnorm_part2",
+    # idma — 搬运
+    "idma_reshape", "idma_broadcast",
+})
 
 
 @dataclass

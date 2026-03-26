@@ -40,7 +40,6 @@ def _collect_consumer_src_requirements(
         if consumer is None or consumer.compute_unit is None:
             continue
         cap = capabilities.get(consumer.compute_unit, consumer.npu_op)
-        # 找到 tensor 在 consumer 的非 absorbed 输入中的位置
         non_absorbed = _get_non_absorbed_inputs(consumer, graph)
         try:
             pos = non_absorbed.index(tensor_id)
@@ -51,11 +50,48 @@ def _collect_consumer_src_requirements(
     return needs
 
 
+def _collect_consumer_preferences(
+    tensor_id: str,
+    graph: Graph,
+    capabilities: FormatCapabilities,
+) -> list[str | None]:
+    """收集 tensor 每个消费者对该 tensor 的端口首选格式。
+
+    返回列表与 _collect_consumer_src_requirements 的结果一一对应。
+    元素为 None 表示该端口无偏好（单格式约束或未配置）。
+    """
+    tensor = graph.tensors[tensor_id]
+    prefs: list[str | None] = []
+
+    for consumer_id in tensor.consumer_node_ids:
+        consumer = graph.nodes.get(consumer_id)
+        if consumer is None or consumer.compute_unit is None:
+            continue
+        cap = capabilities.get(consumer.compute_unit, consumer.npu_op)
+        non_absorbed = _get_non_absorbed_inputs(consumer, graph)
+        try:
+            pos = non_absorbed.index(tensor_id)
+        except ValueError:
+            continue
+        prefs.append(cap.get_src_preferred(position=pos))
+
+    return prefs
+
+
 def _pick_best_format(
     dst_options: frozenset[str],
     consumer_needs: list[frozenset[str]],
+    consumer_prefs: list[str | None] | None = None,
+    producer_dst_pref: str | None = None,
 ) -> str:
-    """选择满足最多 consumer 的输出格式。"""
+    """选择满足最多 consumer 的输出格式。
+
+    决策优先级：
+      1. 满足最多 consumer 的格式（得分最高）
+      2. 得分打平 → consumer 输入端口偏好投票（下游硬件想要什么）
+      3. 仍无法决定 → producer 自身的输出偏好分形（我擅长输出什么）
+      4. 都无偏好 → 默认 ND
+    """
     if not consumer_needs:
         # 没有消费者（模型输出），选 nd 作为默认
         return "nd" if "nd" in dst_options else next(iter(dst_options))
@@ -66,7 +102,31 @@ def _pick_best_format(
             if fmt in need:
                 scores[fmt] += 1
 
-    return max(scores, key=scores.get)
+    max_score = max(scores.values())
+    tied = [fmt for fmt, s in scores.items() if s == max_score]
+
+    if len(tied) == 1:
+        return tied[0]
+
+    # tier 2: consumer 端口偏好投票
+    if consumer_prefs:
+        pref_votes: dict[str, int] = {fmt: 0 for fmt in tied}
+        for pref in consumer_prefs:
+            if pref and pref in pref_votes:
+                pref_votes[pref] += 1
+        max_pv = max(pref_votes.values())
+        if max_pv > 0:
+            winners = [fmt for fmt in tied if pref_votes[fmt] == max_pv]
+            if len(winners) == 1:
+                return winners[0]
+            tied = winners  # 缩小候选集，继续 tier 3
+
+    # tier 3: producer 自身输出偏好（匹配不上 consumer 约束时按自己偏好输出分形）
+    if producer_dst_pref and producer_dst_pref in tied:
+        return producer_dst_pref
+
+    # tier 4: 默认 nd
+    return "nd" if "nd" in tied else tied[0]
 
 
 def run(graph: Graph, config: dict) -> Graph:
@@ -134,16 +194,21 @@ def run(graph: Graph, config: dict) -> Graph:
                     })
             else:
                 # tensor.format 未决定或为默认 nd
-                if "nd" in required:
-                    input_annotations.append({
-                        "format": "nd",
-                        "dtype": tensor.dtype,
-                    })
+                if len(required) == 1:
+                    needed = next(iter(required))
                 else:
-                    input_annotations.append({
-                        "format": next(iter(required)),
-                        "dtype": tensor.dtype,
-                    })
+                    # 多格式可选时，按当前节点输入端口的硬件偏好选择
+                    port_pref = cap.get_src_preferred(position=pos)
+                    if port_pref and port_pref in required:
+                        needed = port_pref
+                    elif "nd" in required:
+                        needed = "nd"
+                    else:
+                        needed = next(iter(required))
+                input_annotations.append({
+                    "format": needed,
+                    "dtype": tensor.dtype,
+                })
 
         # ---- 2. 确定输出 tensor 的格式 ----
         output_annotations = []
@@ -157,11 +222,17 @@ def run(graph: Graph, config: dict) -> Graph:
             if len(dst_options) == 1:
                 chosen = next(iter(dst_options))
             else:
-                # lookahead: 看所有 consumer 需要什么
+                # lookahead: 看所有 consumer 需要什么 + 偏好什么
                 consumer_needs = _collect_consumer_src_requirements(
                     tid, graph, capabilities,
                 )
-                chosen = _pick_best_format(dst_options, consumer_needs)
+                consumer_prefs = _collect_consumer_preferences(
+                    tid, graph, capabilities,
+                )
+                chosen = _pick_best_format(
+                    dst_options, consumer_needs, consumer_prefs,
+                    producer_dst_pref=cap.get_dst_preferred(),
+                )
 
             # 检查用户 npu() override
             npu_hint = node.params.get("_npu", {}).get("output")
@@ -210,9 +281,46 @@ def run(graph: Graph, config: dict) -> Graph:
 
         annotated_nodes += 1
 
+    # ---- 权重/外部输入 tensor 格式优化 ----
+    # 无 producer 的 tensor（权重、模型输入）由 graph_capture 创建，默认 ND。
+    # 如果所有消费者对该 tensor 一致要求非 ND 格式，设置 tensor.format 以省去
+    # DMA 随路转换开销（codegen 导出权重时按 tensor.format 存储）。
+    weight_planned = 0
+    for t in graph.tensors.values():
+        if t.producer_node_id is not None or not t.consumer_node_ids:
+            continue  # 仅处理外部输入 tensor
+        needs = _collect_consumer_src_requirements(t.id, graph, capabilities)
+        if not needs:
+            continue
+        # 所有消费者的公共 format 集合
+        common = needs[0]
+        for n in needs[1:]:
+            common = common & n
+        if not common:
+            continue
+        # 如果公共集合不含当前 format（当前 ND），则选公共集合中的最佳格式
+        if t.format not in common:
+            chosen = next(iter(common))
+            old = t.format
+            t.format = chosen
+            weight_planned += 1
+            # 找第一个消费者节点用于 log
+            first_consumer = None
+            for cid in t.consumer_node_ids:
+                first_consumer = graph.nodes.get(cid)
+                if first_consumer:
+                    break
+            if first_consumer:
+                log_opt(
+                    first_consumer, "format_planner", "外部 tensor 格式",
+                    f"{t.id}: {old}→{chosen}。"
+                    f"所有消费者均要求 {chosen} 格式，设置 HBM 存储格式以省去 DMA 转换",
+                )
+
     logger.info(
-        "format_planner 完成: 规划了 %d 个 tensor 的格式, 标注了 %d 个节点",
-        planned_tensors, annotated_nodes,
+        "format_planner 完成: 规划了 %d 个中间 tensor + %d 个外部 tensor 的格式, "
+        "标注了 %d 个节点",
+        planned_tensors, weight_planned, annotated_nodes,
     )
     return graph
 

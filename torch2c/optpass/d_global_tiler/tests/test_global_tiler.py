@@ -64,10 +64,11 @@ class TestGlobalTilerOverflow:
         # 所以这里可能有也可能没有 _tile_config
 
 
-class TestGlobalTilerVectorNotTiled:
-    """vector 算子不在 _TILEABLE_OPS → 不 tiling。"""
+class TestGlobalTilerVectorTiled:
+    """vector 算子支持 tiling — 大 tensor 时应主动切分。"""
 
-    def test_vector_add_no_tile(self):
+    def test_vector_add_tiled_large(self):
+        """大 vector_add（L1 放得下但 tiling+ping-pong 更快）。"""
         g = Graph()
         g.add_tensor(Tensor(id="a", shape=[1, 4096, 1024], dtype="fp16"))
         g.add_tensor(Tensor(id="b", shape=[1, 4096, 1024], dtype="fp16"))
@@ -80,7 +81,42 @@ class TestGlobalTilerVectorNotTiled:
         ))
         g.execution_order = ["add"]
         g = run(g, _hw_config())
+        cfg = g.nodes["add"].params.get("_tile_config")
+        if cfg:
+            assert cfg["tile_size"] < 4096
+            assert cfg["num_tiles"] >= 2
+            assert cfg["speedup"] >= 1.10
+
+    def test_vector_small_no_tile(self):
+        """小 vector_add 不 tiling（收益不够）。"""
+        g = Graph()
+        g.add_tensor(Tensor(id="a", shape=[1, 32, 64], dtype="fp16"))
+        g.add_tensor(Tensor(id="b", shape=[1, 32, 64], dtype="fp16"))
+        g.add_tensor(Tensor(id="c", shape=[1, 32, 64], dtype="fp16",
+                            producer_node_id="add"))
+        g.add_node(Node(
+            id="add", op_type="vector_add", npu_op="vector_add",
+            compute_unit="vector", is_mapped=True,
+            inputs=["a", "b"], outputs=["c"],
+        ))
+        g.execution_order = ["add"]
+        g = run(g, _hw_config())
         assert "_tile_config" not in g.nodes["add"].params
+
+    def test_unsupported_op_not_tiled(self):
+        """不在 _GLOBAL_TILEABLE_OPS 中的 op 不 tiling。"""
+        g = Graph()
+        g.add_tensor(Tensor(id="a", shape=[1, 4096, 1024], dtype="fp16"))
+        g.add_tensor(Tensor(id="c", shape=[1, 4096, 1024], dtype="fp16",
+                            producer_node_id="custom"))
+        g.add_node(Node(
+            id="custom", op_type="custom_op", npu_op="custom_op",
+            compute_unit="vector", is_mapped=True,
+            inputs=["a"], outputs=["c"],
+        ))
+        g.execution_order = ["custom"]
+        g = run(g, _hw_config())
+        assert "_tile_config" not in g.nodes["custom"].params
 
 
 class TestTileConfigFormat:

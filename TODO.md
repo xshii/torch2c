@@ -2,8 +2,6 @@
 
 ## P0 — 功能补全
 
-- [ ] **format_planner 实际标注**：当前全标 ND，应根据 format_capabilities 给 cube 权重标 NZ、激活标 ZZ
-- [ ] **DMA 随路格式转换**：codegen 生成 DMA load 时使用 tensor.format 设置 dst format
 - [ ] **裂解产物签名**：c_api_signatures.yaml 缺少 vector_layernorm_part1/part2、vector_softmax_part1/part2
 
 ## P1 — 可扩展性
@@ -32,3 +30,6 @@
 - [x] npu_mock.h 消除
 - [x] vector_relu + idma_embedding
 - [x] Demo: AX+B / Embedding / 单层 Attention
+- [x] format_planner 实际标注（cube 权重→NZ、cube 激活→ZZ、vector→ND）
+- [x] DMA 随路格式转换（src_format/dst_format 全链路）
+- [x] global_tiler 扩展 vector 算子支持

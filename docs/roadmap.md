@@ -29,6 +29,9 @@
 | 4 种格式 (ND/NZ/ZZ/NN) | ✅ 全链路 |
 | MHA merge pass | ✅ |
 | npu_mock.h 消除 | ✅ |
+| format_planner 实际标注 (NZ/ZZ) | ✅ tiebreaker + 权重格式优化 |
+| DMA 随路格式转换 | ✅ src_format/dst_format 全链路 |
+| global_tiler vector 算子支持 | ✅ 20+ 算子 |
 
 ---
 
@@ -38,8 +41,6 @@
 
 | 项目 | 描述 |
 |------|------|
-| format_planner 实际标注 | 当前全标 ND，应根据 format_capabilities 标注 NZ/ZZ |
-| DMA 随路格式转换 | codegen 生成 DMA load 时应设 dst format，当前全是 ND |
 | decompositions.yaml 实效性 | layernorm/softmax 裂解后下游 pass 需适配（c_api_signatures 缺 part1/part2） |
 
 ### P1 — 可扩展性
@@ -77,7 +78,7 @@
 |------|------|------|
 | TD-1 | 模块局部 config/ 是 integration/config/ 的手动副本 | 中 |
 | TD-2 | load_config() 无 schema 校验 | 中 |
-| TD-3 | format_planner 标注逻辑未完整实现（全标 ND） | 高 |
-| TD-4 | codegen DMA 未使用 tensor.format 做随路转换 | 高 |
+| ~~TD-3~~ | ~~format_planner 标注逻辑未完整实现~~ | ✅ 已修复 |
+| ~~TD-4~~ | ~~codegen DMA 未使用 tensor.format 做随路转换~~ | ✅ 已修复 |
 | TD-5 | c_api_signatures 缺少 layernorm_part1/part2 等裂解产物的签名 | 中 |
 | TD-6 | codegen 与 mock 后端耦合，无抽象层 | 低 |

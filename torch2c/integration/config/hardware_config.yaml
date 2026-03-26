@@ -22,9 +22,9 @@ dma:
 
 format_capabilities:
   cube:
-    src0: [nd, zz]       # 激活：ND 或 Fractal_Z
+    src0: [zz, nd]       # 激活：Fractal_Z 优先（硬件原生），ND 兼容
     src1: nz              # 权重：必须 Fractal_NZ
-    dst: [nd, nz, zz]
+    dst: [zz, nz, nd]    # 输出：优先分形格式（ZZ>NZ>ND）
   vector:
     src: [nd]             # Vector 仅支持 ND
     dst: [nd]
