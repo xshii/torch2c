@@ -375,8 +375,9 @@ def _load_configs(
         "mha_merge": {
             **hardware.get("mha_merge", {}),
             "hardware": {
-                "last_dim_align": hardware.get("block_pad", {}).get(
-                    "default", {}).get("last_dim", 16),
+                "last_dim_align": (hardware.get("block_pad", {})
+                    .get("alignment", {}).get("nd", {})
+                    .get("fp16", [1, 16]))[1],
                 "l1_size_bytes": hardware.get("memory", {}).get(
                     "l1", {}).get("total_size_bytes", 16 * 1024 * 1024),
                 "dma_bytes_per_cycle": hardware.get("compute", {}).get(

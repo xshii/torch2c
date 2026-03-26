@@ -38,15 +38,36 @@ mha_merge:
   matmul_launch_cycles: 100     # 仅此参数为 mha_merge 独有
 
 block_pad:
-  default:
-    last_dim: 16           # ndim>=2: 最后 1 维对齐到的倍数
-    last_two_product: 256  # ndim>=2: 最后 2 维乘积对齐到的倍数
-    # single_dim: 256      # ndim==1: 唯一维度对齐（省略时 = last_two_product）
-  by_dtype:
-    # 特定 dtype 覆盖默认值，缺失字段回退 default
-    # int8:
-    #   last_dim: 32
-    #   last_two_product: 1024
+  # 二维对齐表: format → dtype → [dim[-2]对齐, dim[-1]对齐]
+  # 分形格式 (NZ/ZZ/NN) 的块尺寸由 cube_size 和 c0 决定
+  # ND 格式 dim[-2] 通常为 1（不对齐），dim[-1] 按 SIMD 宽度对齐
+  alignment:
+    nd:
+      fp16: [1, 16]
+      fp32: [1, 16]
+      bf16: [1, 16]
+      int8: [1, 32]
+      int32: [1, 16]
+    nz:                    # Fractal_NZ: 列优先块, 行=c0, 列=cube_size
+      fp16: [16, 16]
+      fp32: [16, 16]
+      bf16: [16, 16]
+      int8: [32, 16]
+      int32: [16, 16]
+    zz:                    # Fractal_Z: 行优先块, 行=cube_size, 列=c0
+      fp16: [16, 16]
+      fp32: [16, 16]
+      bf16: [16, 16]
+      int8: [16, 32]
+      int32: [16, 16]
+    nn:                    # 列优先块, 行=c0, 列=cube_size (同 NZ 块形状)
+      fp16: [16, 16]
+      fp32: [16, 16]
+      bf16: [16, 16]
+      int8: [32, 16]
+      int32: [16, 16]
+  fallback: [16, 16]      # 未匹配的 format×dtype 组合兜底
+  single_dim: 256          # 1D tensor 对齐（无分形结构）
 
 compute:
   cube_ops_per_cycle: 4096     # 16x16x16 MAC
