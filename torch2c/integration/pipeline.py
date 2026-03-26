@@ -335,6 +335,14 @@ def get_pass_topology() -> dict:
 # ---- 工具函数 ----
 
 
+def _load_cost_model(config_dir: str) -> dict:
+    """加载代价模型配置，缺失时返回空 dict（使用内置默认值）。"""
+    path = os.path.join(config_dir, "cost_model_config.yaml")
+    if not os.path.exists(path):
+        return {}
+    return load_config(path)
+
+
 def _load_pass_config(config_dir: str) -> PassConfig:
     """加载可选 Pass 开关，缺失时默认全部启用。"""
     opt_path = os.path.join(config_dir, "optimization_config.yaml")
@@ -393,6 +401,7 @@ def _load_configs(
             **hardware.get("pipe_bypass", {}),
         },
         "hardware": hardware,
+        "cost_model": _load_cost_model(config_dir),
         "signatures": load_config(os.path.join(config_dir, "c_api_signatures.yaml")),
         "debug": debug,
         "pass_config": _load_pass_config(config_dir),

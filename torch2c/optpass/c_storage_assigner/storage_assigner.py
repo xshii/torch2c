@@ -1,17 +1,20 @@
-"""storage_assigner — Pass⑤b：存储位置分配（local / pipe / hbm）。
+"""storage_assigner — Pass⑤c：存储位置分配（pipe / local / hbm）。
 
-对于裂解产生的中间 tensor，如果满足以下条件，
-其 DMA 输出可以不落 HBM，直接进入下游 op 的 local buffer：
-  1. 不是外部输入（is_model_input=False）
-  2. 不是权重（is_weight=False）
-  3. 不是模型输出（is_model_output=False）
-  4. 只有一个消费者节点（单 consumer）
-  5. producer → consumer 的计算单元对在 allowed_pairs 中
+职责分工：
+  - storage_assigner（本 pass）：为满足硬件 bypass 条件的 tensor 分配 pipe 或 local 存储。
+    pipe = 硬件直连寄存器传递，不占 L1 也不占 HBM（最快）。
+    local = L1 buffer 驻留，不回 HBM。
+  - fusion_planner（⑥c）：激进将剩余中间 tensor 标记为 local，
+    下游 memory_planner._spill 在 L1 不够时降级回 hbm。
 
-如果计算单元对还在 pipe_pairs 中，则 tensor 走硬件直连通路（pipe），
-不经过 L1 buffer，也不占 HBM。
+条件：
+  1. 不是外部输入/权重/模型输出
+  2. 只有一个消费者节点（单 consumer）
+  3. producer → consumer 的计算单元对在 allowed_pairs 中
+  4. 如果计算单元对还在 pipe_pairs 中 → storage=pipe
+  5. 否则 → storage=local
 
-计算单元类型包括：
+计算单元类型：
   "cube"   — 矩阵计算单元
   "vector" — 向量计算单元
   "idma"   — DMA 搬运/格式转换单元
@@ -19,7 +22,7 @@
 storage 取值：
   "hbm"   — 默认，落主存
   "l2"    — 片上 L2 buffer
-  "local" — 直接进下游 op 的 local buffer，不占 HBM
+  "local" — L1 buffer 驻留，不回 HBM
   "pipe"  — 硬件直连通路，不经 L1，也不占 HBM
 
 配置示例（hardware_config.yaml）：

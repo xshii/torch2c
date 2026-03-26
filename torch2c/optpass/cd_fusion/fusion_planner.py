@@ -1,12 +1,20 @@
-"""fusion_planner — 识别可融合的线性算子链。
+"""fusion_planner — 激进 L1 驻留 + 线性融合链分析。
 
-融合条件：
-1. producer -> consumer 1:1 连接（中间 tensor 无 fan-out）
-2. consumer 除了 producer 的输出外，其他输入都是 weight/常量
-3. 组内所有算子的 tiling 维度兼容
-4. 组内至少有 2 个算子（否则无融合收益）
+两阶段策略：
+  Phase 1（激进 L1 驻留）：
+    所有中间 tensor（非 model_input / model_output / weight，有 producer）
+    默认标记 storage="local"，留在 L1 不回写 HBM。
+    下游 memory_planner._spill_strategy 会在 L1 不够时自动降级回 hbm。
+
+  Phase 2（线性链融合分析）：
+    在 Phase 1 的基础上，识别可融合的线性算子链，标注融合组信息供 codegen 使用。
+    融合条件：
+    1. producer -> consumer 1:1 连接（中间 tensor 无 fan-out）
+    2. consumer 除了 producer 的输出外，其他输入都是 weight/常量
+    3. 组内至少有 2 个算子
 
 输出：
+- tensor.storage = "local" （所有合格中间 tensor）
 - node.params["_fusion_group"] = group_id (str)
 - node.params["_fusion_role"] = "head" | "middle" | "tail"
 - graph 级别的 _fusion_groups metadata
@@ -239,16 +247,50 @@ def _annotate_chain(chain: list[str], group_id: str, graph: Graph) -> None:
 # ---------------------------------------------------------------------------
 
 
-def run(graph: Graph, config: dict) -> Graph:
-    """执行融合分析 pass。
+def _promote_to_local(graph: Graph) -> int:
+    """Phase 1：激进将所有合格中间 tensor 标记为 storage=local。
 
-    Args:
-        graph: 经过 op_mapping 的 Graph IR。
-        config: 配置字典（当前未使用保留字段）。
+    合格条件：
+      - 不是 model_input / model_output / weight
+      - 有 producer（即是某个 op 的输出）
+      - 当前 storage 不是 pipe（pipe 比 local 更优，不降级）
 
     Returns:
-        同一 Graph 对象（原地修改，添加融合标注）。
+        标记为 local 的 tensor 数量。
     """
+    count = 0
+    for t in graph.tensors.values():
+        if t.is_model_input or t.is_model_output or t.is_weight:
+            continue
+        if t.producer_node_id is None:
+            continue
+        if t.storage == "pipe":
+            continue  # pipe 已经是最优存储层级
+        if t.storage == "local":
+            continue  # 已经是 local（storage_assigner 先标记的）
+        t.storage = "local"
+        count += 1
+    return count
+
+
+def run(graph: Graph, config: dict) -> Graph:
+    """执行融合 pass：激进 L1 驻留 + 线性链分析。
+
+    Args:
+        graph: 经过 storage_assigner 的 Graph IR。
+        config: 配置字典。可选键：
+            aggressive_local: bool — 是否激进标记 local，默认 True。
+
+    Returns:
+        同一 Graph 对象（原地修改）。
+    """
+    # Phase 1: 激进 L1 驻留
+    aggressive = config.get("aggressive_local", True)
+    if aggressive:
+        promoted = _promote_to_local(graph)
+        logger.info("fusion_planner phase1: %d 个中间 tensor 提升为 local", promoted)
+
+    # Phase 2: 线性链融合分析
     fanout = _build_tensor_fanout(graph)
     chains = _find_linear_chains(graph, fanout)
 

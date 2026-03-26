@@ -291,14 +291,20 @@ class TestHardcodedOpSetsValidity:
             f"global_tiler._GLOBAL_TILEABLE_OPS 中包含无效算子: {sorted(invalid)}"
         )
 
-    def test_roofline_flops_multiplier_valid(self, configs):
-        from torch2c.optpass.cd_roofline.roofline_analyzer import _VECTOR_FLOPS_MULTIPLIER
+    def test_cost_model_ops_valid(self, configs):
+        """cost_model_config.yaml 中 op_overrides 的算子名必须在 signatures 中。"""
+        import os
+        from torch2c.common import load_config
+
+        config_dir = os.path.join(os.path.dirname(__file__), "..", "config")
+        cost_path = os.path.join(config_dir, "cost_model_config.yaml")
+        if not os.path.exists(cost_path):
+            return  # 无配置文件时跳过
+        cost_config = load_config(cost_path)
+        overrides = cost_config.get("op_overrides", {})
 
         sig_ops = _sig_all_ops(configs)
-        # 这里用前缀匹配（vector_softmax 匹配 vector_softmax_part1 等）
-        for op_prefix in _VECTOR_FLOPS_MULTIPLIER:
-            matches = [op for op in sig_ops if op.startswith(op_prefix)]
-            assert matches, (
-                f"roofline._VECTOR_FLOPS_MULTIPLIER 中的前缀 '{op_prefix}' "
-                f"在 signatures 中无匹配算子"
-            )
+        invalid = set(overrides.keys()) - sig_ops
+        assert not invalid, (
+            f"cost_model_config.yaml op_overrides 中包含无效算子: {sorted(invalid)}"
+        )

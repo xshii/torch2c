@@ -1,0 +1,102 @@
+# 算子时延代价模型配置
+#
+# 两层结构：
+#   1. unit_defaults — 按计算单元类型的默认规则
+#   2. op_overrides  — 按 npu_op 名逐一覆盖
+#
+# 可用变量（自动从算子入参提取）：
+#   elem_count  — 第一个输出 tensor 的元素数
+#   M, N, K     — matmul 维度（仅 cube_matmul* 可用）
+#   batch       — batch 维度乘积（shape[:-2]）
+#   input_bytes — 所有输入 tensor 总字节数
+#   output_bytes — 所有输出 tensor 总字节数
+#
+# 计算公式：
+#   cube 类:   flops = 2 * batch * M * N * K（内置 matmul 公式）
+#   vector 类: flops = elem_count * flops_multiplier
+#   dma/idma:  flops = 0（纯搬运）
+#
+# 时延计算：
+#   compute_cycles = flops / ops_per_cycle + launch_cycles
+#   dma_cycles     = dma_bytes / dma_bytes_per_cycle
+#   node_cycles    = max(compute_cycles, dma_cycles)
+
+unit_defaults:
+  cube:
+    flops_formula: matmul           # 内置: 2 * batch * M * N * K
+    launch_cycles: 100              # 管线填充开销
+  vector:
+    flops_formula: elementwise      # 内置: elem_count * flops_multiplier
+    flops_multiplier: 1             # 默认每元素 1 次运算
+    launch_cycles: 10
+  dma:
+    flops_formula: none             # 无计算
+    launch_cycles: 5
+  idma:
+    flops_formula: none
+    launch_cycles: 5
+
+# 按 npu_op 名覆盖（缺省字段继承 unit_defaults）
+op_overrides:
+
+  # ---- cube ----
+  cube_matmul:
+    launch_cycles: 100
+  cube_matmul_bias:
+    launch_cycles: 110              # 多一个 bias 累加
+
+  # ---- vector: 算术 ----
+  vector_add:
+    flops_multiplier: 1
+  vector_sub:
+    flops_multiplier: 1
+  vector_mul:
+    flops_multiplier: 1
+  vector_div:
+    flops_multiplier: 1
+  vector_mul_scalar:
+    flops_multiplier: 1
+
+  # ---- vector: 激活 ----
+  vector_relu:
+    flops_multiplier: 1             # compare + select
+  vector_gelu:
+    flops_multiplier: 8             # erf 近似: mul + add + tanh + ... 约 8 ops/elem
+
+  # ---- vector: 归约 ----
+  vector_softmax_part1:
+    flops_multiplier: 3             # max + sub + exp
+    launch_cycles: 20
+  vector_softmax_part2:
+    flops_multiplier: 2             # sum + div
+    launch_cycles: 20
+  vector_layernorm_part1:
+    flops_multiplier: 3             # mean + sub
+    launch_cycles: 25
+  vector_layernorm_part2:
+    flops_multiplier: 3             # var + scale + bias
+    launch_cycles: 25
+  vector_rmsnorm_part1:
+    flops_multiplier: 3             # sq + mean
+    launch_cycles: 25
+  vector_rmsnorm_part2:
+    flops_multiplier: 2             # rsqrt + scale
+    launch_cycles: 25
+
+  # ---- vector: 其他 ----
+  vector_fill:
+    flops_multiplier: 0             # 纯赋值，无运算
+  vector_dropout:
+    flops_multiplier: 2             # random + compare + mul
+
+  # ---- dma ----
+  dma_reformat:
+    launch_cycles: 10               # 格式转换有额外开销
+
+  # ---- idma ----
+  idma_reshape:
+    launch_cycles: 3                # 仅元数据变更
+  idma_broadcast:
+    launch_cycles: 5
+  idma_concat:
+    launch_cycles: 8

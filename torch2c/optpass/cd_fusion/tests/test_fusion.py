@@ -243,3 +243,63 @@ class TestFusionAnnotations:
 
         assert gelu is not None and gelu.params["_fusion_group"] == "fg_0"
         assert gelu.params["_fusion_role"] == "tail"
+
+
+# ---- Phase 1: aggressive local promotion ----
+
+
+class TestAggressiveLocalPromotion:
+    """Phase 1：所有合格中间 tensor 默认标记为 local。"""
+
+    def test_all_intermediates_promoted(self) -> None:
+        """chain 内外的中间 tensor 都应被标记为 local。"""
+        g = _build_matmul_bias_gelu()
+        run(g, {})
+        # mm_out, add_out 是链内中间 tensor
+        assert g.tensors["mm_out"].storage == "local"
+        assert g.tensors["add_out"].storage == "local"
+
+    def test_model_io_stays_hbm(self) -> None:
+        """model_input / model_output 必须保持 hbm。"""
+        g = _build_matmul_bias_gelu()
+        run(g, {})
+        assert g.tensors["x"].storage == "hbm"
+        assert g.tensors["gelu_out"].storage == "hbm"
+
+    def test_weight_stays_hbm(self) -> None:
+        """权重必须保持 hbm。"""
+        g = _build_matmul_bias_gelu()
+        run(g, {})
+        assert g.tensors["w"].storage == "hbm"
+        assert g.tensors["bias"].storage == "hbm"
+
+    def test_fanout_tensor_also_promoted(self) -> None:
+        """fan-out 的中间 tensor 也应被标记为 local（不受链式融合约束）。"""
+        g = Graph()
+        g.add_tensor(_make_tensor("x", consumers=["n_mm"], is_model_input=True))
+        g.add_tensor(_make_tensor("w", consumers=["n_mm"], is_weight=True))
+        # mm_out feeds two consumers — 链式融合不会包含它，但 Phase 1 会标记为 local
+        g.add_tensor(_make_tensor("mm_out", producer="n_mm", consumers=["n_a", "n_b"]))
+        g.add_tensor(_make_tensor("a_out", producer="n_a", is_model_output=True))
+        g.add_tensor(_make_tensor("b_out", producer="n_b", is_model_output=True))
+
+        g.add_node(_make_node("n_mm", ["x", "w"], ["mm_out"], "cube", "cube_matmul"))
+        g.add_node(_make_node("n_a", ["mm_out"], ["a_out"], "vector", "vector_relu"))
+        g.add_node(_make_node("n_b", ["mm_out"], ["b_out"], "vector", "vector_gelu"))
+
+        run(g, {})
+        # fan-out tensor 也被激进标记为 local
+        assert g.tensors["mm_out"].storage == "local"
+
+    def test_pipe_not_downgraded(self) -> None:
+        """已经是 pipe 的 tensor 不应被降级为 local。"""
+        g = _build_matmul_bias_gelu()
+        g.tensors["mm_out"].storage = "pipe"
+        run(g, {})
+        assert g.tensors["mm_out"].storage == "pipe"
+
+    def test_disable_aggressive(self) -> None:
+        """aggressive_local=False 时不做 Phase 1。"""
+        g = _build_matmul_bias_gelu()
+        run(g, {"aggressive_local": False})
+        assert g.tensors["mm_out"].storage == "hbm"
