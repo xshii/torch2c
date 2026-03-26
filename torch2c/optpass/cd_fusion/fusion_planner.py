@@ -248,12 +248,17 @@ def _annotate_chain(chain: list[str], group_id: str, graph: Graph) -> None:
 
 
 def _promote_to_local(graph: Graph) -> int:
-    """Phase 1：激进将所有合格中间 tensor 标记为 storage=local。
+    """Phase 1：将 storage_assigner 未处理的中间 tensor 提升为 local。
 
-    合格条件：
-      - 不是 model_input / model_output / weight
-      - 有 producer（即是某个 op 的输出）
-      - 当前 storage 不是 pipe（pipe 比 local 更优，不降级）
+    storage_assigner（⑤c）已经根据硬件 allowed_pairs 约束将合格的
+    单消费者 tensor 标记为 local/pipe。它刻意留在 hbm 的 tensor 有
+    硬件原因（计算单元对不支持 bypass），不应被覆盖。
+
+    Phase 1 只提升以下 tensor：
+      - fan-out > 1 的中间 tensor（storage_assigner 不处理多消费者）
+      - 无消费者的中间 tensor（storage_assigner 不处理）
+    这些 tensor storage_assigner 跳过了，但如果生命周期短，留在 L1
+    仍有收益。下游 _spill_strategy 会在 L1 不够时自动降级回 hbm。
 
     Returns:
         标记为 local 的 tensor 数量。
@@ -264,10 +269,11 @@ def _promote_to_local(graph: Graph) -> int:
             continue
         if t.producer_node_id is None:
             continue
-        if t.storage == "pipe":
-            continue  # pipe 已经是最优存储层级
-        if t.storage == "local":
-            continue  # 已经是 local（storage_assigner 先标记的）
+        if t.storage in ("pipe", "local"):
+            continue  # 已有更优存储（storage_assigner 决策）
+        # 只提升 fan-out > 1 的 tensor（storage_assigner 只处理 fan-out == 1）
+        if len(t.consumer_node_ids) <= 1:
+            continue  # fan-out ≤ 1: storage_assigner 已做决策，尊重其结果
         t.storage = "local"
         count += 1
     return count
@@ -331,19 +337,17 @@ def run(graph: Graph, config: dict) -> Graph:
                     f"省去 {savings} bytes DMA 搬运（约 {savings//256} cycles）",
                 )
 
-    # 在 graph 上附加 metadata
+    # 在 graph.metadata 上附加融合组信息
     if groups:
-        graph_meta = []
-        for g in groups:
-            graph_meta.append({
+        graph.metadata["fusion_groups"] = [
+            {
                 "id": g.id,
                 "node_ids": g.node_ids,
                 "internal_tensors": g.internal_tensors,
                 "estimated_dma_savings": g.estimated_dma_savings,
-            })
-        # 挂在第一个节点的 graph 级别（或用 execution_order 旁的字段）
-        # 用 graph 对象的动态属性存储
-        object.__setattr__(graph, "_fusion_groups", groups)
+            }
+            for g in groups
+        ]
 
     logger.info(
         "融合分析完成：%d 个融合组，预计节省 DMA %d bytes",

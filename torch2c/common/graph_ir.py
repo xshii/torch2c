@@ -146,6 +146,7 @@ class Graph:
     tensors: dict[str, Tensor] = field(default_factory=dict)
     execution_order: list[str] = field(default_factory=list)
     dma_plans: list[DmaPlan] = field(default_factory=list)
+    metadata: dict = field(default_factory=dict)  # pass 级元数据（roofline_summary 等）
 
     # ---- 节点操作 ----
 
@@ -376,6 +377,8 @@ class Graph:
         }
         if self.dma_plans:
             d["dma_plans"] = [asdict(dp) for dp in self.dma_plans]
+        if self.metadata:
+            d["metadata"] = dict(self.metadata)
         return d
 
     @classmethod
@@ -392,6 +395,7 @@ class Graph:
             stores = [DmaInstruction(**st) for st in dp_dict.get("stores", [])]
             rest = {k: v for k, v in dp_dict.items() if k not in ("loads", "stores")}
             g.dma_plans.append(DmaPlan(**rest, loads=loads, stores=stores))
+        g.metadata = dict(data.get("metadata", {}))
         return g
 
     # ---- 摘要 ----

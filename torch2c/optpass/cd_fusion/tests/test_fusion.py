@@ -94,20 +94,20 @@ class TestMatmulBiasGeluFused:
     def test_single_group_found(self) -> None:
         g = _build_matmul_bias_gelu()
         g = run(g, {})
-        groups = getattr(g, "_fusion_groups", [])
+        groups = g.metadata.get("fusion_groups", [])
         assert len(groups) == 1
 
     def test_group_contains_all_three(self) -> None:
         g = _build_matmul_bias_gelu()
         g = run(g, {})
-        groups = getattr(g, "_fusion_groups", [])
-        assert groups[0].node_ids == ["n_mm", "n_add", "n_gelu"]
+        groups = g.metadata.get("fusion_groups", [])
+        assert groups[0]["node_ids"] == ["n_mm", "n_add", "n_gelu"]
 
     def test_savings_positive(self) -> None:
         g = _build_matmul_bias_gelu()
         g = run(g, {})
-        groups = getattr(g, "_fusion_groups", [])
-        assert groups[0].estimated_dma_savings > 0
+        groups = g.metadata.get("fusion_groups", [])
+        assert groups[0]["estimated_dma_savings"] > 0
 
 
 class TestFanoutBreaksChain:
@@ -127,7 +127,7 @@ class TestFanoutBreaksChain:
         g.add_node(_make_node("n_b", ["mm_out"], ["b_out"], "vector", "vector_gelu"))
 
         g = run(g, {})
-        groups = getattr(g, "_fusion_groups", [])
+        groups = g.metadata.get("fusion_groups", [])
         assert len(groups) == 0
 
 
@@ -147,7 +147,7 @@ class TestModelOutputBreaksChain:
         g.add_node(_make_node("n_b", ["a_out"], ["b_out"], "vector", "vector_gelu"))
 
         g = run(g, {})
-        groups = getattr(g, "_fusion_groups", [])
+        groups = g.metadata.get("fusion_groups", [])
         assert len(groups) == 0
 
 
@@ -164,7 +164,7 @@ class TestDmaNotFused:
         g.add_node(_make_node("n_v", ["dma_out"], ["v_out"], "vector", "vector_relu"))
 
         g = run(g, {})
-        groups = getattr(g, "_fusion_groups", [])
+        groups = g.metadata.get("fusion_groups", [])
         assert len(groups) == 0
 
 
@@ -178,7 +178,7 @@ class TestSingleOpNotFused:
         g.add_node(_make_node("n_a", ["x"], ["a_out"], "vector", "vector_relu"))
 
         g = run(g, {})
-        groups = getattr(g, "_fusion_groups", [])
+        groups = g.metadata.get("fusion_groups", [])
         assert len(groups) == 0
 
 
@@ -205,9 +205,9 @@ class TestTwoSeparateChains:
         g.add_node(_make_node("n_gelu2", ["mm2_out"], ["gelu2_out"], "vector", "vector_gelu"))
 
         g = run(g, {})
-        groups = getattr(g, "_fusion_groups", [])
+        groups = g.metadata.get("fusion_groups", [])
         assert len(groups) == 2
-        all_node_ids = {nid for grp in groups for nid in grp.node_ids}
+        all_node_ids = {nid for grp in groups for nid in grp["node_ids"]}
         assert all_node_ids == {"n_mm1", "n_relu1", "n_mm2", "n_gelu2"}
 
 
@@ -217,11 +217,11 @@ class TestInternalTensorsIdentified:
     def test_internal_tensors(self) -> None:
         g = _build_matmul_bias_gelu()
         g = run(g, {})
-        groups = getattr(g, "_fusion_groups", [])
+        groups = g.metadata.get("fusion_groups", [])
         assert len(groups) == 1
         grp = groups[0]
-        assert set(grp.internal_tensors) == {"mm_out", "add_out"}
-        assert "gelu_out" not in grp.internal_tensors
+        assert set(grp["internal_tensors"]) == {"mm_out", "add_out"}
+        assert "gelu_out" not in grp["internal_tensors"]
 
 
 class TestFusionAnnotations:
@@ -251,13 +251,14 @@ class TestFusionAnnotations:
 class TestAggressiveLocalPromotion:
     """Phase 1：所有合格中间 tensor 默认标记为 local。"""
 
-    def test_all_intermediates_promoted(self) -> None:
-        """chain 内外的中间 tensor 都应被标记为 local。"""
+    def test_single_consumer_not_promoted(self) -> None:
+        """fan-out == 1 的中间 tensor 不被 Phase 1 提升（尊重 storage_assigner）。"""
         g = _build_matmul_bias_gelu()
         run(g, {})
-        # mm_out, add_out 是链内中间 tensor
-        assert g.tensors["mm_out"].storage == "local"
-        assert g.tensors["add_out"].storage == "local"
+        # mm_out, add_out 是 fan-out == 1 的链内 tensor
+        # Phase 1 不提升它们（storage_assigner 已处理 fan-out == 1 的情况）
+        assert g.tensors["mm_out"].storage == "hbm"
+        assert g.tensors["add_out"].storage == "hbm"
 
     def test_model_io_stays_hbm(self) -> None:
         """model_input / model_output 必须保持 hbm。"""
@@ -273,12 +274,12 @@ class TestAggressiveLocalPromotion:
         assert g.tensors["w"].storage == "hbm"
         assert g.tensors["bias"].storage == "hbm"
 
-    def test_fanout_tensor_also_promoted(self) -> None:
-        """fan-out 的中间 tensor 也应被标记为 local（不受链式融合约束）。"""
+    def test_fanout_tensor_promoted(self) -> None:
+        """fan-out > 1 的中间 tensor 被 Phase 1 标记为 local。"""
         g = Graph()
         g.add_tensor(_make_tensor("x", consumers=["n_mm"], is_model_input=True))
         g.add_tensor(_make_tensor("w", consumers=["n_mm"], is_weight=True))
-        # mm_out feeds two consumers — 链式融合不会包含它，但 Phase 1 会标记为 local
+        # mm_out feeds two consumers — storage_assigner 不处理，Phase 1 会标记为 local
         g.add_tensor(_make_tensor("mm_out", producer="n_mm", consumers=["n_a", "n_b"]))
         g.add_tensor(_make_tensor("a_out", producer="n_a", is_model_output=True))
         g.add_tensor(_make_tensor("b_out", producer="n_b", is_model_output=True))
@@ -288,8 +289,26 @@ class TestAggressiveLocalPromotion:
         g.add_node(_make_node("n_b", ["mm_out"], ["b_out"], "vector", "vector_gelu"))
 
         run(g, {})
-        # fan-out tensor 也被激进标记为 local
+        # fan-out > 1 tensor 被提升为 local
         assert g.tensors["mm_out"].storage == "local"
+
+    def test_single_consumer_hbm_not_overridden(self) -> None:
+        """fan-out == 1 且 storage_assigner 留在 hbm 的 tensor 不被覆盖。"""
+        g = Graph()
+        g.add_tensor(_make_tensor("x", consumers=["n_a"], is_model_input=True))
+        # mm_out 是 fan-out == 1，storage_assigner 可能因硬件约束留在 hbm
+        g.add_tensor(_make_tensor("mm_out", producer="n_a", consumers=["n_b"]))
+        g.add_tensor(_make_tensor("b_out", producer="n_b", is_model_output=True))
+
+        g.add_node(_make_node("n_a", ["x"], ["mm_out"], "cube", "cube_matmul"))
+        g.add_node(_make_node("n_b", ["mm_out"], ["b_out"], "cube", "cube_matmul"))
+
+        # 模拟 storage_assigner 决策：cube→cube 不在 allowed_pairs → 留 hbm
+        g.tensors["mm_out"].storage = "hbm"
+
+        run(g, {})
+        # Phase 1 不应覆盖 storage_assigner 的 hbm 决策
+        assert g.tensors["mm_out"].storage == "hbm"
 
     def test_pipe_not_downgraded(self) -> None:
         """已经是 pipe 的 tensor 不应被降级为 local。"""

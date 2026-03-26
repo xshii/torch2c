@@ -294,7 +294,9 @@ def _try_cost_fn(
     if fn is None:
         return None
     ctx = _build_cost_context(node, graph, hw)
-    return fn(ctx)
+    result = fn(ctx)
+    logger.debug("cost_fn override: %s → flops=%d launch=%d", op, result.flops, result.launch_cycles)
+    return result
 
 
 def estimate_flops(
@@ -388,34 +390,25 @@ def estimate_dma_bytes(node: Node, graph: Graph, hw: RooflineHwParams) -> int:
 # ── Cycle 估算 ───────────────────────────────────────────
 
 
-def estimate_node_cycles(
-    node: Node, graph: Graph, hw: RooflineHwParams,
-    cost_model: CostModel | None = None,
+def _compute_cycles(
+    node: Node,
+    flops: int,
+    dma_bytes: int,
+    cost_result: CostResult | None,
+    cost_model: CostModel | None,
+    hw: RooflineHwParams,
 ) -> tuple[int, int, int]:
-    """估算节点的计算、DMA 和总时延（cycles）。
-
-    优先级：Python 函数注册 > YAML per-op > YAML unit 默认 > 硬编码。
-
-    Returns:
-        (compute_cycles, dma_cycles, node_cycles)
-        node_cycles = max(compute_cycles, dma_cycles)，即瓶颈决定时延。
-    """
+    """内部 cycle 计算（接受已缓存的 flops 和 cost_result）。"""
     op = node.npu_op or node.op_type
     cu = (node.compute_unit or "vector").lower()
-    dma_bytes = estimate_dma_bytes(node, graph, hw)
 
-    # 1. Python 函数注册 — 优先级最高
-    cost_result = _try_cost_fn(node, graph, hw)
+    # launch_cycles
     if cost_result is not None:
-        flops = cost_result.flops
         launch = cost_result.launch_cycles
+    elif cost_model:
+        launch = cost_model.get(op, cu).launch_cycles
     else:
-        flops = estimate_flops(node, graph, hw, cost_model)
-        # launch_cycles 从 YAML
         launch = 0
-        if cost_model:
-            params = cost_model.get(op, cu)
-            launch = params.launch_cycles
 
     # 计算 cycles
     if cu == "cube":
@@ -426,12 +419,30 @@ def estimate_node_cycles(
         ops_rate = hw.vector_ops_per_cycle
 
     compute_cycles = (flops // ops_rate if ops_rate > 0 else 0) + launch
-
-    # DMA cycles
     dma_cycles = dma_bytes // hw.dma_bytes_per_cycle if hw.dma_bytes_per_cycle > 0 else 0
-
     node_cycles = max(compute_cycles, dma_cycles)
     return compute_cycles, dma_cycles, node_cycles
+
+
+def estimate_node_cycles(
+    node: Node, graph: Graph, hw: RooflineHwParams,
+    cost_model: CostModel | None = None,
+) -> tuple[int, int, int]:
+    """估算节点的计算、DMA 和总时延（cycles）。
+
+    公开 API，独立调用时自动查找 cost fn。
+    run() 内部使用 _compute_cycles 以复用缓存。
+
+    Returns:
+        (compute_cycles, dma_cycles, node_cycles)
+    """
+    cost_result = _try_cost_fn(node, graph, hw)
+    if cost_result is not None:
+        flops = cost_result.flops
+    else:
+        flops = estimate_flops(node, graph, hw, cost_model)
+    dma_bytes = estimate_dma_bytes(node, graph, hw)
+    return _compute_cycles(node, flops, dma_bytes, cost_result, cost_model, hw)
 
 
 # ── Ridge Point ──────────────────────────────────────────
@@ -465,7 +476,14 @@ def run(graph: Graph, config: dict | None = None) -> Graph:
     total_node_cycles = 0
 
     for nid, node in graph.nodes.items():
-        flops = estimate_flops(node, graph, hw, cost_model)
+        # 缓存 Python cost fn 结果，避免重复构建 CostContext
+        cost_result = _try_cost_fn(node, graph, hw)
+
+        if cost_result is not None:
+            flops = cost_result.flops
+        else:
+            flops = estimate_flops(node, graph, hw, cost_model)
+
         nbytes = estimate_bytes(node, graph, hw)
         dma_nbytes = estimate_dma_bytes(node, graph, hw)
         oi = flops / nbytes if nbytes > 0 else 0.0
@@ -482,7 +500,9 @@ def run(graph: Graph, config: dict | None = None) -> Graph:
         bottleneck = "compute" if oi >= ridge else "memory"
         achievable_ratio = min(oi / ridge, 1.0) if ridge > 0 else 0.0
 
-        comp_cy, dma_cy, node_cy = estimate_node_cycles(node, graph, hw, cost_model)
+        comp_cy, dma_cy, node_cy = _compute_cycles(
+            node, flops, dma_nbytes, cost_result, cost_model, hw,
+        )
         total_compute_cycles += comp_cy
         total_dma_cycles += dma_cy
         total_node_cycles += node_cy
@@ -514,14 +534,14 @@ def run(graph: Graph, config: dict | None = None) -> Graph:
         else:
             memory_count += 1
 
-    # graph 级别汇总（动态属性）
-    object.__setattr__(graph, "_roofline_summary", {
+    # graph 级别汇总
+    graph.metadata["roofline_summary"] = {
         "total_cycles": total_node_cycles,
         "total_compute_cycles": total_compute_cycles,
         "total_dma_cycles": total_dma_cycles,
         "compute_bound_nodes": compute_count,
         "memory_bound_nodes": memory_count,
-    })
+    }
 
     total = len(graph.nodes)
     logger.info(

@@ -214,7 +214,7 @@ def test_roofline_summary_on_graph() -> None:
     graph = _make_graph(node, [a, b, c])
     run(graph)
 
-    summary = getattr(graph, "_roofline_summary", None)
+    summary = graph.metadata.get("roofline_summary")
     assert summary is not None
     assert summary["total_cycles"] > 0
     assert "compute_bound_nodes" in summary
