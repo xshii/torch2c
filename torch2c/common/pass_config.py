@@ -34,8 +34,9 @@ class OptionalPass(Enum):
     STORAGE_ASSIGNER = auto()   # ⑤c storage_assigner
     BLOCK_PAD = auto()          # ⑤d block_pad
     ROOFLINE_ANALYZER = auto()  # ⑥b roofline_analyzer
-    FUSION_PLANNER = auto()     # ⑥c fusion_planner
-    GLOBAL_TILER = auto()       # ⑦b global_tiler
+    FUSION_PLANNER = auto()     # ⑥c fusion_planner（block_fuser 开启时自动禁用）
+    BLOCK_FUSER = auto()        # ⑥c block_fuser（替换 fusion_planner + global_tiler）
+    GLOBAL_TILER = auto()       # ⑦b global_tiler（block_fuser 开启时自动禁用）
 
 
 @dataclass
@@ -49,10 +50,17 @@ class PassConfig:
     block_pad: bool = True
     roofline_analyzer: bool = True
     fusion_planner: bool = True
+    block_fuser: bool = False       # 默认关闭（开发中）
     global_tiler: bool = True
 
     def is_enabled(self, pass_id: OptionalPass) -> bool:
-        """检查指定 Pass 是否启用。"""
+        """检查指定 Pass 是否启用。
+
+        block_fuser 开启时自动禁用 fusion_planner 和 global_tiler。
+        """
+        if self.block_fuser:
+            if pass_id in (OptionalPass.FUSION_PLANNER, OptionalPass.GLOBAL_TILER):
+                return False
         return getattr(self, pass_id.name.lower())
 
     @classmethod

@@ -30,6 +30,7 @@ from torch2c.optpass.bc_mha_merge import mha_merge
 from torch2c.optpass.bc_op_absorption import op_absorption
 from torch2c.b_lowering.op_decomposition import op_decomposition
 from torch2c.b_lowering.op_mapping import op_mapping
+from torch2c.optpass.cd_block_fuser import block_fuser
 from torch2c.optpass.cd_roofline import roofline_analyzer
 from torch2c.d_emission.scheduler import scheduler
 from torch2c.optpass.c_storage_assigner import storage_assigner
@@ -143,6 +144,12 @@ _LATE_PASSES: list[_PassDesc] = [
     _PassDesc(
         "roofline_analyzer", "⑥b", roofline_analyzer.run, None,
         toggle=OptionalPass.ROOFLINE_ANALYZER,
+    ),
+    _PassDesc(
+        "block_fuser", "⑥c", block_fuser.run, None,
+        block_fuser.post_validate,
+        toggle=OptionalPass.BLOCK_FUSER,
+        post_hook=_global_tiler_post_hook,  # 复用 tile_override 注入
     ),
     _PassDesc(
         "fusion_planner", "⑥c", fusion_planner.run, None,

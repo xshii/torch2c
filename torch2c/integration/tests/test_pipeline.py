@@ -54,14 +54,21 @@ class TestLoadConfigs:
 
     def test_pass_config_default_all_true(self):
         pc = _load_pass_config(_CONFIG_DIR)
+        # BLOCK_FUSER 默认 False（开发中，需显式启用）
         for p in OptionalPass:
-            assert pc.is_enabled(p), f"{p.name} should default to True"
+            if p == OptionalPass.BLOCK_FUSER:
+                assert not pc.is_enabled(p), "BLOCK_FUSER should default to False"
+            else:
+                assert pc.is_enabled(p), f"{p.name} should default to True"
 
     def test_pass_config_missing_file(self, tmp_path):
-        """optimization_config.yaml 不存在时全部默认启用。"""
+        """optimization_config.yaml 不存在时全部默认启用（BLOCK_FUSER 除外）。"""
         pc = _load_pass_config(str(tmp_path))
         for p in OptionalPass:
-            assert pc.is_enabled(p)
+            if p == OptionalPass.BLOCK_FUSER:
+                assert not pc.is_enabled(p)
+            else:
+                assert pc.is_enabled(p)
 
 
 # ---- Pass 开关端到端 ----
