@@ -148,6 +148,31 @@ for name, skill in rules['skills'].items():
 
 ---
 
+## 架构工具箱（Sprint 1-4 新增 API）
+
+写新 pass 时优先使用以下 API，降低出错概率：
+
+| API | 用途 | 替代 |
+|-----|------|------|
+| `node.roofline` | typed 读写 `params["_roofline"]` | `node.params.get("_roofline")` |
+| `ComputeUnit.CUBE` | 类型安全常量 | 裸字符串 `"cube"` |
+| `TensorFormat.NZ` | 类型安全常量 | 裸字符串 `"nz"` |
+| `Storage.LOCAL` | 类型安全常量 | 裸字符串 `"local"` |
+| `FormatAnnotation.uniform(2,1)` | 结构化标注 | 手动构建 dict |
+| `graph.rewire_input(nid, port, tid)` | 原子接线 | 手动更新 consumer 列表 |
+| `graph.insert_node_before(target, node)` | 插入节点 | 手动 splice execution_order |
+| `graph.single_consumer(tid)` | 查找唯一消费者 | 自写 `_find_single_consumer()` |
+| `graph.intermediates()` | 中间 tensor 迭代器 | 自写过滤逻辑 |
+| `graph_transaction(graph)` | 异常自动回滚 | 无 |
+| `GraphBuilder` + `LAST` | 测试图构建 | 50 行手动 Tensor/Node |
+| `MhaMergeConfig.from_raw(d)` | 类型安全 config | `config.get("key", default)` |
+| `_PassDesc(..., kind="analysis")` | 声明 pass 类型 | 无 |
+| `_PassDesc(..., requires=..., provides=...)` | 声明依赖 | 隐含在列表顺序 |
+
+详见 `code_todo.md` 和 `graph_ir.py` 源码。
+
+---
+
 ## 编程规范速查
 
 | 规则 | 说明 |
@@ -158,6 +183,10 @@ for name, skill in rules['skills'].items():
 | 用 `common.errors` 的异常类 | 不用裸 raise |
 | 用 `opt_log` 记录优化决策 | 可视化依赖它 |
 | 用 `get_dim_align()` 获取对齐值 | 不硬编码 |
+| 用 `ComputeUnit.CUBE` 等 Enum | 不用裸字符串 |
+| 用 `node.roofline` 等 descriptor | 不用 `params["_roofline"]` |
+| 用 `graph.rewire_input()` 接线 | 不手动更新 consumer 列表 |
+| 用 `GraphBuilder` 写测试 | 不手动创建 50 行 Graph |
 | Config 改完跑一致性测试 | `test_config_consistency.py` |
 | Python 3.10 + PyTorch 2.4+ | 不用 3.11+ 特性 |
 | C99 标准 | mock 实现遵守 |
@@ -171,6 +200,8 @@ for name, skill in rules['skills'].items():
 - 不要跳过 config 一致性检查
 - 不要在 pass 中修改 config（pass 是 graph → graph 的纯变换）
 - 不要 `print` 调试信息（用 `logger.debug`）
+- 不要用 `node.params["_roofline"]`（用 `node.roofline` descriptor）
+- 不要硬编码 `"cube"` / `"nz"` / `"local"`（用 Enum 常量）
 
 ## VSCode Tasks 速查
 

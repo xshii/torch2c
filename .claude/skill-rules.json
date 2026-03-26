@@ -15,14 +15,18 @@
           "test", "测试", "TDD", "spec", "规格",
           "debug", "调试", "报错", "失败", "不通过",
           "改动", "修改", "迭代", "workflow",
-          "Red", "Green", "用例设计", "不变量", "决策表"
+          "Red", "Green", "用例设计", "不变量", "决策表",
+          "loop", "自动", "自动迭代", "一直跑", "循环",
+          "PUA", "pua", "质量", "红线", "闭环", "穷尽"
         ],
         "intentPatterns": [
           "(fix|debug|修|排查).*(bug|error|fail|报错|问题)",
           "(add|implement|加|新增|写).*(feature|function|功能)",
           "(refactor|重构|优化).*(code|pass|模块)",
           "(write|design|设计).*(test|测试|用例)",
-          "(how to|怎么).*(test|debug|调试|排查)"
+          "(how to|怎么).*(test|debug|调试|排查)",
+          "(loop|自动|迭代).*(完成|搞定|实现|修复)",
+          "(PUA|质量|红线|闭环).*(模式|检查|验证)"
         ]
       },
       "fileTriggers": {
@@ -42,7 +46,8 @@
         "refactor": { "triggers": ["refactor", "重构"] },
         "perf":     { "triggers": ["perf", "optimize", "性能", "优化"] },
         "test":     { "triggers": ["test", "测试", "TDD", "spec", "用例"] },
-        "debug":    { "triggers": ["debug", "调试", "排查"] }
+        "debug":    { "triggers": ["debug", "调试", "排查"] },
+        "loop":     { "triggers": ["loop", "自动", "迭代", "一直跑", "循环"] }
       }
     },
 
@@ -72,14 +77,19 @@
           "npu_cpu_mock/include/npu_api.h",
           "npu_cpu_mock/src/*.c",
           "torch2c/common/pass_config.py",
-          "torch2c/common/sizing.py"
+          "torch2c/common/config_schemas.py",
+          "torch2c/common/sizing.py",
+          "torch2c/integration/_pass_descriptions.py"
         ],
         "contentPatterns": [
           "direct_mappings",
           "c_api_signatures",
           "OptionalPass",
           "_DEFAULT_ALIGNMENT",
-          "block_pad.alignment"
+          "block_pad.alignment",
+          "_PassDesc",
+          "GraphBuilder",
+          "_PassSlot"
         ]
       },
       "types": {
@@ -101,7 +111,10 @@
           "Graph IR", "Node", "Tensor", "format",
           "config", "配置", "YAML",
           "setup", "安装", "环境", "怎么跑",
-          "tools", "VSCode", "task"
+          "tools", "VSCode", "task",
+          "ComputeUnit", "TensorFormat", "Storage", "FormatAnnotation",
+          "GraphBuilder", "graph_transaction", "_PassSlot",
+          "analysis pass", "transform pass", "pass依赖"
         ],
         "intentPatterns": [
           "(understand|explain|理解|解释).*(arch|架构|pipeline|流水线)",

@@ -40,7 +40,121 @@ from __future__ import annotations
 
 from collections import deque
 from typing import ClassVar
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
+from enum import Enum
+
+
+# ── Enum 常量（str 继承保证序列化兼容：ComputeUnit.CUBE == "cube"）──
+
+
+class ComputeUnit(str, Enum):
+    """NPU 计算单元类型。"""
+
+    CUBE = "cube"
+    VECTOR = "vector"
+    IDMA = "idma"
+    DMA = "dma"
+
+
+class TensorFormat(str, Enum):
+    """Tensor 存储格式。"""
+
+    ND = "nd"
+    NZ = "nz"
+    ZZ = "zz"
+    NN = "nn"
+
+
+class Storage(str, Enum):
+    """Tensor 存储位置。"""
+
+    HBM = "hbm"
+    LOCAL = "local"
+    PIPE = "pipe"
+
+
+class FusionRole(str, Enum):
+    """融合组内节点角色。"""
+
+    HEAD = "head"
+    MIDDLE = "middle"
+    TAIL = "tail"
+
+
+# ── Format 标注结构体 ──
+
+
+@dataclass(frozen=True)
+class FormatSpec:
+    """Format + dtype 对，用于 format_annotation 内部。"""
+
+    format: str
+    dtype: str
+
+    def to_dict(self) -> dict:
+        return {"format": self.format, "dtype": self.dtype}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> FormatSpec:
+        return cls(format=d.get("format", "nd"), dtype=d.get("dtype", "fp16"))
+
+
+@dataclass
+class FormatAnnotation:
+    """节点的 format/dtype 标注（结构化替代裸 dict）。
+
+    向后兼容：可通过 to_dict()/from_dict() 与现有 dict 格式互转。
+    """
+
+    inputs: list[FormatSpec]
+    outputs: list[FormatSpec]
+
+    def to_dict(self) -> dict:
+        return {
+            "inputs": [s.to_dict() for s in self.inputs],
+            "outputs": [s.to_dict() for s in self.outputs],
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> FormatAnnotation:
+        return cls(
+            inputs=[FormatSpec.from_dict(x) for x in d.get("inputs", [])],
+            outputs=[FormatSpec.from_dict(x) for x in d.get("outputs", [])],
+        )
+
+    @classmethod
+    def uniform(cls, n_inputs: int, n_outputs: int,
+                fmt: str = "nd", dtype: str = "fp16") -> FormatAnnotation:
+        """所有端口相同格式。"""
+        spec = FormatSpec(format=fmt, dtype=dtype)
+        return cls(inputs=[spec] * n_inputs, outputs=[spec] * n_outputs)
+
+
+# ── Pass 元数据 Descriptor ──
+
+
+class _PassSlot:
+    """Descriptor for typed access to node.params entries.
+
+    底层仍存 params dict，序列化兼容。旧代码 node.params["_roofline"] 仍然工作。
+    新代码可用 node.roofline 访问，有 IDE 补全，typo 报 AttributeError。
+    """
+
+    def __init__(self, key: str, default=None):
+        self.key = key
+        self.default = default
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        return obj.params.get(self.key, self.default)
+
+    def __set__(self, obj, value):
+        obj.params[self.key] = value
+
+    def __delete__(self, obj):
+        obj.params.pop(self.key, None)
 
 
 @dataclass
@@ -107,6 +221,17 @@ class Node:
     schedule_order: int | None = None
     task_id: int = 0
     dependencies: list[str] = field(default_factory=list)
+
+    # ── Pass 级元数据 typed access（底层仍存 params dict，旧代码兼容）──
+    # 用法：node.roofline = {...}  /  if node.roofline:  /  del node.roofline
+    roofline = _PassSlot("_roofline")           # roofline_analyzer 写入
+    tile_config = _PassSlot("_tile_config")     # global_tiler / block_fuser 写入
+    fusion_group = _PassSlot("_fusion_group")   # fusion_planner / block_fuser 写入
+    fusion_role = _PassSlot("_fusion_role")     # fusion_planner / block_fuser 写入
+    mha_analysis = _PassSlot("_mha_analysis")   # mha_merge 写入
+    weight_slices = _PassSlot("_weight_slices") # mha_merge 写入
+    tile_info = _PassSlot("_tile_info")         # memory_planner 写入
+    npu_hint = _PassSlot("_npu")                # graph_capture 写入
 
 
 @dataclass
@@ -310,19 +435,22 @@ class Graph:
             "node_required": ["id", "op_type"],
             "tensor_required": ["id", "shape", "dtype"],
         },
-        "op_mapping": {
+        # op_mapping: 不校验——部分节点可能未映射，留给 decomposition
+        "op_decomposition": {
             "node_required": ["compute_unit", "npu_op"],
             "node_bool_true": ["is_mapped"],
         },
         "format_annotator": {
             "node_required": ["format_annotation"],
-            "tensor_required": ["format"],
+        },
+        "reformat_inserter": {
+            "node_required": ["format_annotation"],
         },
         "scheduler": {
             "node_required": ["schedule_order"],
         },
         "memory_planner": {
-            "tensor_hbm_required": ["hbm_offset", "hbm_size", "l1_offset"],
+            "tensor_hbm_required": ["hbm_offset", "hbm_size"],
         },
     }
 
@@ -472,6 +600,95 @@ class Graph:
 
         return "\n\n".join(sections)
 
+    # ---- 图改写原子方法 (Sprint 2 — T4) ----
+
+    def splice_execution_order(self, old_id: str, new_ids: list[str]) -> None:
+        """execution_order 中用 new_ids 替换 old_id。"""
+        try:
+            idx = self.execution_order.index(old_id)
+        except ValueError:
+            return
+        self.execution_order[idx:idx + 1] = new_ids
+
+    def rewire_input(self, node_id: str, port: int, new_tid: str) -> None:
+        """替换节点第 port 个输入为 new_tid，自动更新 consumer 列表。"""
+        node = self.nodes.get(node_id)
+        if node is None or port >= len(node.inputs):
+            return
+        old_tid = node.inputs[port]
+        if old_tid == new_tid:
+            return
+        node.inputs[port] = new_tid
+        # 旧 tensor 移除 consumer
+        old_t = self.tensors.get(old_tid)
+        if old_t and node_id in old_t.consumer_node_ids:
+            old_t.consumer_node_ids.remove(node_id)
+        # 新 tensor 添加 consumer
+        new_t = self.tensors.get(new_tid)
+        if new_t and node_id not in new_t.consumer_node_ids:
+            new_t.consumer_node_ids.append(node_id)
+
+    def insert_node_before(self, target_id: str, new_node: Node,
+                           new_tensor: Tensor | None = None) -> None:
+        """在 target 前插入节点（及可选的输出 tensor），更新 execution_order。
+
+        不自动接线——调用方需通过 rewire_input 完成连接。
+        """
+        if new_tensor is not None:
+            self.add_tensor(new_tensor)
+        self.nodes[new_node.id] = new_node
+        # 插入 execution_order（不通过 add_node，避免追加到末尾）
+        try:
+            idx = self.execution_order.index(target_id)
+            self.execution_order.insert(idx, new_node.id)
+        except ValueError:
+            self.execution_order.append(new_node.id)
+
+    # ---- 图查询 API (Sprint 2 — T5) ----
+
+    def single_consumer(self, tensor_id: str) -> Node | None:
+        """tensor 的唯一消费者节点，多消费者或无消费者返回 None。"""
+        t = self.tensors.get(tensor_id)
+        if t is None or len(t.consumer_node_ids) != 1:
+            return None
+        return self.nodes.get(t.consumer_node_ids[0])
+
+    def intermediates(self):
+        """非 weight、非 model_input/output、有 producer 的中间 tensor 迭代器。"""
+        return (t for t in self.tensors.values()
+                if not t.is_weight and not t.is_model_input
+                and not t.is_model_output and t.producer_node_id is not None)
+
+    def nodes_by_unit(self, unit: str):
+        """按 compute_unit 过滤节点的迭代器。"""
+        return (n for n in self.nodes.values() if n.compute_unit == unit)
+
+    def consumers_of(self, node_id: str) -> list[Node]:
+        """节点的直接下游节点（通过输出 tensor 的 consumer 查找）。"""
+        node = self.nodes.get(node_id)
+        if node is None:
+            return []
+        seen: set[str] = set()
+        result: list[Node] = []
+        for tid in node.outputs:
+            t = self.tensors.get(tid)
+            if t is None:
+                continue
+            for cid in t.consumer_node_ids:
+                if cid not in seen:
+                    seen.add(cid)
+                    c = self.nodes.get(cid)
+                    if c is not None:
+                        result.append(c)
+        return result
+
+    def producer_of(self, tensor_id: str) -> Node | None:
+        """tensor 的生产者节点。"""
+        t = self.tensors.get(tensor_id)
+        if t is None or t.producer_node_id is None:
+            return None
+        return self.nodes.get(t.producer_node_id)
+
 
 # ---- Graph diff ----
 
@@ -518,3 +735,29 @@ def graph_diff(before: dict, after: dict) -> dict:
         "tensors_removed": t_removed,
         "tensors_changed": t_changed,
     }
+
+
+# ---- Graph 事务 (T10) ----
+
+
+@contextmanager
+def graph_transaction(graph: Graph):
+    """Context manager：异常时自动回滚图状态。
+
+    用法::
+
+        with graph_transaction(graph):
+            # 对 graph 的修改如果抛异常，会自动回滚
+            graph = some_pass.run(graph, config)
+    """
+    snapshot = graph.to_dict()
+    try:
+        yield graph
+    except Exception:
+        restored = Graph.from_dict(snapshot)
+        graph.nodes = restored.nodes
+        graph.tensors = restored.tensors
+        graph.execution_order = restored.execution_order
+        graph.dma_plans = restored.dma_plans
+        graph.metadata = restored.metadata
+        raise

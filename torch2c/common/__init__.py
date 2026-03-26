@@ -15,7 +15,21 @@ from .errors import (
     Severity,
     ValidationError,
 )
-from .graph_ir import DmaInstruction, DmaPlan, Graph, Node, Tensor, graph_diff
+from .graph_ir import (
+    ComputeUnit,
+    DmaInstruction,
+    DmaPlan,
+    FormatAnnotation,
+    FormatSpec,
+    FusionRole,
+    Graph,
+    Node,
+    Storage,
+    Tensor,
+    TensorFormat,
+    graph_diff,
+    graph_transaction,
+)
 from .logger import get_logger, setup_logging
 from .compile_config import get_model_config, torch2c_config
 from .debug_config import (
@@ -36,6 +50,7 @@ from .npu_annotate import (
     npu,
     npu_input,
 )
+from .config_schemas import BlockPadConfig, FormatConfig, MhaMergeConfig
 from .pass_config import OptionalPass, PassConfig
 from .pass_protocol import CompilerPass, ValidatablePass
 from .sizing import align_up, calc_padded_size, get_dim_align
@@ -60,9 +75,11 @@ __all__ = [
     "DTYPE_INFO",
     "DTYPE_NUMPY",
     "AbsorptionError",
+    "BlockPadConfig",
     "CodegenError",
     "CompileDiagnostic",
     "CompilerError",
+    "ComputeUnit",
     "CompilerPass",
     "ValidatablePass",
     "ConfigError",
@@ -71,19 +88,26 @@ __all__ = [
     "DmaInstruction",
     "DmaPlan",
     "DtypeInfo",
+    "FormatAnnotation",
+    "FormatConfig",
+    "FormatSpec",
+    "FusionRole",
     "Graph",
     "graph_diff",
     "HARDWARE_CONFIG_PATH",
     "INTEGRATION_CONFIG_DIR",
     "MappingError",
     "MemoryPlanError",
+    "MhaMergeConfig",
     "NPU_CPU_MOCK_DIR",
     "Node",
     "NpuSpec",
     "PACKAGE_ROOT",
     "PROJECT_ROOT",
     "Severity",
+    "Storage",
     "Tensor",
+    "TensorFormat",
     "ValidationError",
     "get_input_annotation",
     "get_model_config",

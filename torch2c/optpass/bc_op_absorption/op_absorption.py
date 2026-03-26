@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from torch2c.common import Graph, get_logger, load_config
+from torch2c.common.constants import MATMUL_OPS as _MATMUL_OPS
 from torch2c.common.opt_log import log_opt
 
 logger = get_logger(__name__)
@@ -89,9 +90,6 @@ def _try_absorb(graph: Graph, rule: dict) -> tuple[int, int]:
         graph.remove_tensor(tid)
 
     return len(nodes_to_remove), len(tensors_to_remove)
-
-
-from torch2c.common.constants import MATMUL_OPS as _MATMUL_OPS
 
 
 def _absorb_weight_transposes(graph: Graph) -> int:
