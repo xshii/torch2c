@@ -581,7 +581,7 @@ def compile(
     static_golden: bool = False,
     debug_dump: bool = False,
     tile_override: dict | None = None,
-    pass_toggles: dict[str, bool] | None = None,
+    pass_toggles: dict[str, bool] | str | None = None,
 ) -> str:
     """完整编译流水线：9 Pass 从 PyTorch 模型到 C 工程。返回输出目录路径。
 
@@ -592,7 +592,7 @@ def compile(
 
     pass_toggles: 可选 Pass 开关覆盖，优先级高于 optimization_config.yaml。
         例如 {"absorption": False, "global_tiler": False}。
-        也可传入 PassConfig 实例（会自动适配）。
+        也可传入 "minimal" 关闭所有可选 pass（只跑必需 pass）。
     """
     if output_dir is None:
         model_name = type(model).__name__
@@ -605,7 +605,10 @@ def compile(
     if tile_override:
         configs["hardware"]["tile_override"] = tile_override
     # pass_toggles 覆盖 config 文件中的开关
-    if pass_toggles:
+    # 特殊值 "minimal" / "none" 关闭所有可选 pass
+    if pass_toggles == "minimal" or pass_toggles == "none":
+        configs["pass_config"] = PassConfig.all_disabled()
+    elif pass_toggles:
         base_pc: PassConfig = configs["pass_config"]
         merged = {**asdict(base_pc), **pass_toggles}
         configs["pass_config"] = PassConfig.from_dict(merged)
@@ -670,14 +673,17 @@ def compile_graph_only(
     *,
     target_dtype: str | None = None,
     target_format: str | None = None,
-    pass_toggles: dict[str, bool] | None = None,
+    pass_toggles: dict[str, bool] | str | None = None,
 ) -> Graph:
     """仅运行 Pass ①-⑧（不含 codegen），返回编排后的 Graph。
 
     用于 benchmark / 策略对比，跳过 C 代码生成和 golden 验证。
+    pass_toggles="minimal" 关闭所有可选 pass。
     """
     configs = _resolve_compile_configs(model, config_dir, target_dtype, target_format, None)
-    if pass_toggles:
+    if pass_toggles == "minimal" or pass_toggles == "none":
+        configs["pass_config"] = PassConfig.all_disabled()
+    elif pass_toggles:
         base_pc: PassConfig = configs["pass_config"]
         configs["pass_config"] = PassConfig.from_dict({**asdict(base_pc), **pass_toggles})
     collector = DiagnosticCollector()
