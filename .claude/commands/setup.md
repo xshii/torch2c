@@ -38,7 +38,60 @@ cd build && ctest -V
 | NumPy | >=1.24 |
 | Flask | 可选（远端可视化） |
 
-## 二、AI Skills 安装指南
+## 二、Pre-commit 护栏安装
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+安装后每次 `git commit` 会自动检查：
+- Python lint（ruff）
+- 禁止 `print()`（源码中应用 logger）
+- 禁止 `.addr`（C mock 应用 `.ptr`）
+- 禁止 `calc_padded_size(..., (16, 16))` 硬编码（应用 `get_dim_align`）
+- 函数 > 50 行、文件 > 300 行（warning）
+
+手动跑全量检查：
+
+```bash
+pre-commit run --all-files
+```
+
+单独跑规范检查器：
+
+```bash
+python scripts/check_conventions.py
+```
+
+## 三、代码模板使用
+
+`templates/` 目录下有 4 个骨架文件，新增算子或 pass 时直接复制修改：
+
+| 模板文件 | 用途 | 使用方式 |
+|----------|------|----------|
+| `new_pass_template.py` | 新 pass 骨架 | 复制到 `torch2c/optpass/{prefix}_{name}/{name}.py`，改 TODO |
+| `new_pass_test_template.py` | 新 pass 测试骨架 | 复制到 `tests/test_{name}.py`，改 TODO |
+| `new_op_c_mock_template.c` | C mock 骨架 | 复制到 `npu_cpu_mock/src/`，改 TODO |
+| `new_op_checklist.md` | 新增算子 10 步清单 | 打开跟着做，每步有可粘贴代码 |
+
+示例（新增 pass）：
+
+```bash
+# 1. 创建目录
+mkdir -p torch2c/optpass/c_my_pass/tests
+
+# 2. 复制模板
+cp templates/new_pass_template.py torch2c/optpass/c_my_pass/my_pass.py
+cp templates/new_pass_test_template.py torch2c/optpass/c_my_pass/tests/test_my_pass.py
+
+# 3. 编辑 TODO 占位符
+# 4. 注册到 pass_config.py + pipeline.py
+# 5. 跑测试
+.venv/bin/pytest torch2c/optpass/c_my_pass/tests/ -v
+```
+
+## 四、AI Skills 安装指南
 
 ### Claude Code
 
@@ -60,15 +113,12 @@ SKILLS.md                        # 技能索引（AI 参考）
 
 使用方式：在 Claude Code 中输入 `/add-op` 等斜杠命令即可触发对应 skill。
 
-### Cursor
+### Cursor / GLM
 
-将以下内容追加到 `.cursorrules`（如果用 Cursor 的话）：
+`.cursorrules` 已创建，Cursor 会自动加载。内容是 CLAUDE.md 的精简版，
+危险操作在最前面，适合能力较弱的模型。
 
-```
-请阅读项目根目录的 CLAUDE.md 和 SKILLS.md，
-它们定义了本项目的架构规则、编程规范、调试方法。
-具体操作指南在 .claude/commands/ 目录下。
-```
+配合 `templates/` 目录下的骨架文件使用效果更好。
 
 ### 其他 AI 工具
 
@@ -76,7 +126,7 @@ SKILLS.md                        # 技能索引（AI 参考）
 2. 将 `SKILLS.md` 作为参考文档
 3. 需要具体操作时，读取 `.claude/commands/` 下的对应文件
 
-## 三、VSCode 配置
+## 五、VSCode 配置
 
 ### Tasks
 
@@ -96,7 +146,7 @@ SKILLS.md                        # 技能索引（AI 参考）
 - Pylance — 类型检查
 - C/C++ — 查看 npu_cpu_mock 源码
 
-## 四、项目关键文件地图
+## 六、项目关键文件地图
 
 ```
 开始接触项目时，按以下顺序阅读：
@@ -110,7 +160,7 @@ SKILLS.md                        # 技能索引（AI 参考）
 7. docs/roadmap.md          ← 路线图 + 技术债
 ```
 
-## 五、快速验证一切正常
+## 七、快速验证一切正常
 
 ```bash
 # 1. 安装
