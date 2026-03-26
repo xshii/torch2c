@@ -71,6 +71,30 @@ class TestSerialize:
         for nid in g.nodes:
             assert g2.nodes[nid].op_type == g.nodes[nid].op_type
 
+    def test_metadata_survives_serialization(self):
+        """metadata 通过 to_dict/from_dict 保留。"""
+        g = _make_linear_graph()
+        g.metadata["roofline_summary"] = {"total_cycles": 42}
+        g.metadata["fusion_groups"] = [{"id": "fg_0", "node_ids": ["n1"]}]
+
+        d = g.to_dict()
+        assert "metadata" in d
+
+        g2 = Graph.from_dict(d)
+        assert g2.metadata["roofline_summary"]["total_cycles"] == 42
+        assert g2.metadata["fusion_groups"][0]["id"] == "fg_0"
+
+    def test_metadata_empty_by_default(self):
+        """新 Graph 的 metadata 是空 dict。"""
+        g = Graph()
+        assert g.metadata == {}
+
+    def test_metadata_not_in_dict_when_empty(self):
+        """metadata 为空时 to_dict 不含 metadata 键。"""
+        g = _make_linear_graph()
+        d = g.to_dict()
+        assert "metadata" not in d
+
 
 class TestValidate:
     def test_valid_graph(self):
