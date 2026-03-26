@@ -97,6 +97,49 @@
       "presentation": { "reveal": "always", "focus": true }
     },
     {
+      "label": "test:no-golden",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/pytest",
+      "args": [
+        "--tb=short", "-q",
+        "--deselect", "torch2c/integration/tests/test_pipeline.py::TestCGoldenComparison"
+      ],
+      "detail": "全量测试（跳过 C golden 精度测试）",
+      "group": "test"
+    },
+    {
+      "label": "test:block-fuser",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/pytest",
+      "args": ["torch2c/optpass/cd_block_fuser/tests/", "-v", "--tb=short"],
+      "detail": "block_fuser 单元测试",
+      "group": "test"
+    },
+    {
+      "label": "test:codegen",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/pytest",
+      "args": ["torch2c/d_emission/codegen/tests/", "-v", "--tb=short"],
+      "detail": "codegen 单元测试（含 fused_emitter）",
+      "group": "test"
+    },
+    {
+      "label": "test:roofline",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/pytest",
+      "args": ["torch2c/optpass/cd_roofline/tests/", "-v", "--tb=short"],
+      "detail": "roofline + cost model 单元测试",
+      "group": "test"
+    },
+    {
+      "label": "git:push",
+      "type": "shell",
+      "command": "git",
+      "args": ["push", "origin", "main"],
+      "detail": "推送到 origin/main",
+      "presentation": { "reveal": "always", "focus": true }
+    },
+    {
       "label": "install:dev",
       "type": "shell",
       "command": "${workspaceFolder}/.venv/bin/pip",
