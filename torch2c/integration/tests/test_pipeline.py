@@ -150,8 +150,8 @@ class TestEndToEnd:
 
         # viz 产物
         viz = os.path.join(result_dir, "viz")
-        assert os.path.isfile(os.path.join(viz, "schedule.html"))
-        assert os.path.isfile(os.path.join(viz, "lifetime.html"))
+        assert os.path.isfile(os.path.join(viz, "pipeline.html"))
+        assert os.path.isfile(os.path.join(viz, "memory.html"))
 
     def test_golden_data_exported(self, output_dir):
         """golden 数据正确导出。"""

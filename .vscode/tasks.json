@@ -100,6 +100,35 @@
       "problemMatcher": ["$python"]
     },
     {
+      "label": "compile:both+serve",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["scripts/compile_model.py", "${file}", "--mode", "both", "--serve", "--no-open"],
+      "detail": "编译当前模型 + 启动 Flask 查看器（http://127.0.0.1:5050）",
+      "group": "build",
+      "presentation": { "reveal": "always", "focus": true },
+      "problemMatcher": ["$python"],
+      "isBackground": true
+    },
+    {
+      "label": "serve:html",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["scripts/serve_html.py"],
+      "detail": "启动 Flask 查看器浏览所有历史 HTML（http://127.0.0.1:5050）",
+      "group": "none",
+      "presentation": { "reveal": "always", "focus": true },
+      "isBackground": true
+    },
+    {
+      "label": "serve:shutdown",
+      "type": "shell",
+      "command": "curl",
+      "args": ["-s", "-X", "POST", "http://127.0.0.1:5050/api/shutdown"],
+      "detail": "关闭 Flask HTML 查看器",
+      "group": "none"
+    },
+    {
       "label": "run:current",
       "type": "shell",
       "command": "${workspaceFolder}/.venv/bin/python",
@@ -187,7 +216,6 @@
       "type": "pickString",
       "description": "选择要运行 demo 的模块",
       "options": [
-        "a_capture/graph_capture",
         "b_lowering/op_mapping",
         "b_lowering/op_decomposition",
         "optpass/bc_op_absorption",

@@ -940,7 +940,8 @@ class TestMatmulBiasSoftmaxLnFfn:
         assert "t_sm_out" not in store_tids
 
     def test_layernorm_dma(self):
-        """layernorm: 不 load t_sm_out(local)；load gamma/beta(hbm)；store t_ln_out(hbm)。"""
+        """layernorm: 不 load t_sm_out(local)；load gamma/beta(hbm)。
+        t_ln_out 是中间 tensor，L1 驻留优化跳过 store。"""
         g = self._build()
         g = run_memory_planner(g, load_hw_config())
         plans = g.dma_plans
@@ -948,15 +949,17 @@ class TestMatmulBiasSoftmaxLnFfn:
         ln_plan = [p for p in plans if p.node_id == "node_layernorm"][0]
 
         load_tids = {ld.tensor_id for ld in ln_plan.loads}
-        assert "t_sm_out" not in load_tids
+        assert "t_sm_out" not in load_tids  # local tensor, 不走 DMA
         assert "t_ln_gamma" in load_tids
         assert "t_ln_beta" in load_tids
 
+        # t_ln_out 是中间 tensor（非 model_output），L1 驻留优化跳过 store
         store_tids = {s.tensor_id for s in ln_plan.stores}
-        assert "t_ln_out" in store_tids
+        assert "t_ln_out" not in store_tids
 
     def test_ffn_dma(self):
-        """ffn: load reformat 输出(hbm) + weight(hbm)；store t_ffn_out(hbm)。"""
+        """ffn: load weight(hbm)；store t_ffn_out(model_output)。
+        reformat 输出已在 L1 中（L1 驻留优化跳过 load）。"""
         g = self._build()
         g = run_memory_planner(g, load_hw_config())
         plans = g.dma_plans
@@ -966,9 +969,11 @@ class TestMatmulBiasSoftmaxLnFfn:
         ffn_plan = [p for p in plans if p.node_id == "node_ffn"][0]
 
         load_tids = {ld.tensor_id for ld in ffn_plan.loads}
-        assert rf2_out_tid in load_tids
+        # reformat 输出已在 L1 中，不需要重新 load
+        assert rf2_out_tid not in load_tids
         assert "t_ffn_weight" in load_tids
 
+        # t_ffn_out 是 model_output，必须 store
         store_tids = {s.tensor_id for s in ffn_plan.stores}
         assert "t_ffn_out" in store_tids
 

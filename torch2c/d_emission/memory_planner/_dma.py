@@ -88,6 +88,117 @@ def build_dma_plan(
     return plan
 
 
+def build_dma_plan_residency(
+    graph: Graph,
+    node_id: str,
+    l1_layout: dict[str, int],
+    cube_size: int,
+    l1_resident: set[str],
+    l1_lifetimes: dict[str, tuple[int, int]],
+    op_idx: int,
+) -> DmaPlan:
+    """L1 驻留感知的 DMA 计划生成。
+
+    与 build_dma_plan 的区别：
+      - Skip Load: 已在 L1 中的 tensor 不重新从 HBM 加载
+      - Lazy Store: 所有 consumer 都在 L1 lifetime 内的中间 tensor 不写回 HBM
+
+    Args:
+        l1_resident: 当前已在 L1 中的 tensor id 集合（调用方维护）
+        l1_lifetimes: tensor → (first_op_idx, last_op_idx) L1 生命周期
+        op_idx: 当前算子在 execution_order 中的索引
+    """
+    node = graph.nodes[node_id]
+    plan = DmaPlan(node_id=node_id)
+
+    # ── Loads: 只加载不在 L1 中的 tensor ──
+    load_tids = list(node.inputs)
+    for _, atid in sorted(node.absorbed_inputs.items()):
+        if atid not in load_tids:
+            load_tids.append(atid)
+
+    skipped_loads = 0
+    for tid in load_tids:
+        t = graph.tensors.get(tid)
+        if t and t.storage in ("local", "pipe"):
+            continue
+        if tid in l1_resident:
+            skipped_loads += 1
+            continue  # 已驻留 L1，跳过
+        if t and t.hbm_offset is not None and tid in l1_layout:
+            dst_fmt = _get_dst_format(node, tid, t)
+            plan.loads.append(
+                DmaInstruction(
+                    op="load",
+                    tensor_id=tid,
+                    hbm_offset=t.hbm_offset,
+                    l1_offset=l1_layout[tid],
+                    size_bytes=calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype)),
+                    src_format=t.format,
+                    dst_format=dst_fmt,
+                    dtype=t.dtype,
+                )
+            )
+            l1_resident.add(tid)
+
+    # ── Stores: 只写回必须的 tensor ──
+    skipped_stores = 0
+    for tid in node.outputs:
+        t = graph.tensors.get(tid)
+        if t and t.storage in ("local", "pipe"):
+            continue
+        if t and t.hbm_offset is not None and tid in l1_layout:
+            # 判断是否可以跳过 HBM 写回
+            if not _must_writeback(t, tid, l1_lifetimes):
+                skipped_stores += 1
+                l1_resident.add(tid)
+                continue  # lazy store — 留在 L1
+
+            l1_fmt = t.format
+            if node.format_annotation and "outputs" in node.format_annotation:
+                annots = node.format_annotation["outputs"]
+                out_idx = node.outputs.index(tid)
+                if out_idx < len(annots) and "format" in annots[out_idx]:
+                    l1_fmt = annots[out_idx]["format"]
+            plan.stores.append(
+                DmaInstruction(
+                    op="store",
+                    tensor_id=tid,
+                    hbm_offset=t.hbm_offset,
+                    l1_offset=l1_layout[tid],
+                    size_bytes=calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype)),
+                    src_format=l1_fmt,
+                    dst_format=t.format,
+                    dtype=t.dtype,
+                )
+            )
+            l1_resident.add(tid)
+
+    if skipped_loads or skipped_stores:
+        logger.debug(
+            "node %s: skipped %d loads, %d stores (L1 resident)",
+            node_id, skipped_loads, skipped_stores,
+        )
+    return plan
+
+
+def _must_writeback(tensor, tid: str, l1_lifetimes: dict[str, tuple[int, int]]) -> bool:
+    """判断 tensor 是否必须写回 HBM。
+
+    可跳过写回的条件：
+      - 不是模型输出
+      - L1 lifetime 覆盖所有 consumer（即所有 consumer 都能从 L1 访问）
+    """
+    if tensor.is_model_output:
+        return True  # 模型输出必须在 HBM
+    # 没有 L1 lifetime 信息 → 安全起见写回
+    if tid not in l1_lifetimes:
+        return True
+    # L1 lifetime 的 last_op 就是 max(所有 consumer)
+    # 如果 tensor 有 L1 lifetime，说明 L1 分配覆盖了所有使用它的 op → 可跳过
+    return False
+
+
 def try_global_l1_layout(
     graph: Graph,
     l1_alignment: int,

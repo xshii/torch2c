@@ -250,6 +250,12 @@ class DmaInstruction:
     batch_count: int | None = None
     hbm_batch_stride: int | None = None
     l1_batch_stride: int | None = None
+    # TidInfo — tid_assign pass 填入
+    task_id: int = 0
+    dep_cube_tid: int = 0
+    dep_vector_tid: int = 0
+    dep_dma_tid: int = 0
+    dep_idma_tid: int = 0
 
 
 @dataclass

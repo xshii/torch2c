@@ -183,17 +183,28 @@ def _gen_op_call(npu_op: str, sig: dict, node: Node, tensors: dict[str, Tensor],
         args.append(resolver.resolve(p))
     return f"{npu_op}({', '.join(args)})"
 
+def _build_dma_tid_str(instr: dict) -> str:
+    """从 DMA 指令构建 TidInfo（tid_assign pass 已填入，否则全零）。"""
+    tid = instr.get("task_id", 0)
+    dc = instr.get("dep_cube_tid", 0)
+    dv = instr.get("dep_vector_tid", 0)
+    dd = instr.get("dep_dma_tid", 0)
+    di = instr.get("dep_idma_tid", 0)
+    return f"(TidInfo){{{tid}, {dc}, {dv}, {dd}, {di}}}"
+
+
 def _gen_dma_line(instr: dict) -> str:
-    """生成 dma_move 调用（TidInfo 全零，DMA 不参与图调度）。"""
+    """生成 dma_move 调用（使用 tid_assign 分配的 TidInfo）。"""
     dt = DTYPE_C_ENUM_MAP.get(instr.get("dtype", "fp16"), "NPU_DTYPE_FP16")
     sf = FORMAT_MAP.get(instr.get("src_format", "nd"), "NPU_FORMAT_ND")
     df = FORMAT_MAP.get(instr.get("dst_format", "nd"), "NPU_FORMAT_ND")
     l1o, ho, sz = instr["l1_offset"], instr["hbm_offset"], instr["size_bytes"]
+    tid_str = _build_dma_tid_str(instr)
     if instr["op"] == "load":
         dst, src = f"(npu_tensor_t){{l1 + {l1o}, {dt}, {df}}}", f"(npu_tensor_t){{hbm + {ho}, {dt}, {sf}}}"
     else:
         dst, src = f"(npu_tensor_t){{hbm + {ho}, {dt}, {df}}}", f"(npu_tensor_t){{l1 + {l1o}, {dt}, {sf}}}"
-    return f"dma_move((TidInfo){{0}}, {dst}, {src}, {sz});"
+    return f"dma_move({tid_str}, {dst}, {src}, {sz});"
 
 def _gen_dma_block(instructions: list[dict], indent: str = "    ") -> str:
     return "\n".join(f"{indent}{_gen_dma_line(i)}" for i in instructions)

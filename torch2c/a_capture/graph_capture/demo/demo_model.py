@@ -1,7 +1,14 @@
-"""2 层 Encoder Transformer 演示模型（小 shape 版）。
+"""DemoEncoder — 2 层 Transformer Encoder 演示模型。
 
 hidden_size=64, num_heads=4, ffn_dim=256, seq_len=32, batch=1
 forward(x, mask) — mask shape=[1, 1, 32, 32]
+
+用法：
+    # 全管线编译（compile_model.py 加载本文件）
+    python scripts/compile_model.py torch2c/a_capture/graph_capture/demo/demo_model.py --mode both
+
+    # 单独跑 graph_capture
+    python torch2c/a_capture/graph_capture/demo/demo_model.py
 """
 
 from __future__ import annotations
@@ -112,3 +119,26 @@ class DemoEncoder(nn.Module):
             self.ff2_2,
         )
         return x
+
+
+# ── compile_model.py 需要的导出 ──
+model = DemoEncoder()
+dummy_input = torch.randn(1, 32, 64)
+mask = torch.zeros(1, 1, 32, 32)
+
+
+if __name__ == "__main__":
+    import json
+
+    from torch2c.a_capture.graph_capture import capture
+    from torch2c.common.paths import DEFAULT_OUTPUT_DIR
+
+    model.eval()
+    graph = capture(model, dummy_input, mask=mask)
+
+    out_dir = DEFAULT_OUTPUT_DIR / "graph_capture_demo"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "captured_graph.json"
+    out_path.write_text(json.dumps(graph.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"已保存到 {out_path}")
+    print(graph.summary())

@@ -5,6 +5,10 @@
 支持两种精度模式：
 - mixed：linear1/norm1 为 fp32 全精度，其余 fp16 IO + fp32 计算
 - fp16：全部 fp16 IO + fp16 权重 + fp32 计算
+
+用法：
+    # 全管线编译（compile_model.py 加载本文件）
+    python scripts/compile_model.py torch2c/integration/demo/encoder_model.py --mode both
 """
 
 from __future__ import annotations
@@ -141,3 +145,9 @@ class EncoderModel(nn.Module):
         for layer in self.layers:
             x = layer(x, mask)
         return x
+
+
+# ── compile_model.py 需要的导出 ──
+model = EncoderModel(d_model=192, dim_ff=384, num_layers=2, num_heads=3)
+dummy_input = torch.randn(1, 32, 192)
+mask = torch.zeros(1, 32, 32)

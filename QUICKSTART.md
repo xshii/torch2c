@@ -76,7 +76,7 @@ python scripts/viz_server.py --compile --port 8080
 按编译流水线顺序逐步查看中间结果：
 
 ```bash
-python torch2c/a_capture/graph_capture/demo/run_demo.py
+python torch2c/a_capture/graph_capture/demo/demo_model.py
 python torch2c/b_lowering/op_mapping/demo/run_demo.py
 python torch2c/b_lowering/op_decomposition/demo/run_demo.py
 python torch2c/optpass/bc_op_absorption/demo/run_demo.py

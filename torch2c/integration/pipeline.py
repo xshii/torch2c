@@ -11,7 +11,10 @@ from dataclasses import asdict, dataclass
 import torch
 import torch.nn as nn
 
-from torch2c.viz import emit_graph_html, emit_lifetime_html
+from torch2c.viz import (
+    emit_graph_html, emit_lifetime_html, emit_roofline_html,
+    emit_fusion_html, emit_tid_html, emit_unified_html,
+)
 from torch2c.common import (
     CompilerError, DiagnosticCollector, Graph, graph_diff,
     get_logger, get_model_config, load_config, load_debug_config,
@@ -26,6 +29,7 @@ from torch2c.optpass.d_global_tiler import global_tiler
 from torch2c.a_capture.graph_capture import graph_capture
 from torch2c.c_backend.reformat_inserter import reformat_inserter
 from torch2c.d_emission.memory_planner import memory_planner
+from torch2c.d_emission.tid_assign import tid_assign
 from torch2c.optpass.bc_mha_merge import mha_merge
 from torch2c.optpass.bc_op_absorption import op_absorption
 from torch2c.b_lowering.op_decomposition import op_decomposition
@@ -107,6 +111,22 @@ def _global_tiler_post_hook(graph: Graph, configs: dict) -> None:
         configs["hardware"].setdefault("tile_override", {}).update(tile_override)
 
 
+def _roofline_viz(
+    graph: Graph, output_dir: str, cube_size: int, configs: dict,
+) -> None:
+    """roofline 后生成 Roofline 算力分析图。"""
+    hw = configs.get("hardware")
+    emit_roofline_html(graph, output_dir, cube_size, hw)
+
+
+def _fusion_viz(
+    graph: Graph, output_dir: str, cube_size: int, configs: dict,
+) -> None:
+    """fusion 后生成融合组拓扑图。"""
+    hw = configs.get("hardware")
+    emit_fusion_html(graph, output_dir, cube_size, hw)
+
+
 def _memory_planner_viz(
     graph: Graph, output_dir: str, cube_size: int, configs: dict,
 ) -> None:
@@ -116,6 +136,17 @@ def _memory_planner_viz(
     emit_graph_html(graph, output_dir, cube_size, hw, graph.dma_plans)
     emit_lifetime_html(graph, output_dir, cube_size, hw,
                        dma_plans=graph.dma_plans, title=model_name)
+
+
+def _tid_assign_viz(
+    graph: Graph, output_dir: str, cube_size: int, configs: dict,
+) -> None:
+    """tid_assign 后生成 TID 调度甘特图 + 统一面板。"""
+    hw = configs.get("hardware")
+    model_name = configs.get("_model_name")
+    emit_tid_html(graph, output_dir, cube_size, hw)
+    emit_unified_html(graph, output_dir, cube_size, hw,
+                      dma_plans=graph.dma_plans, title=model_name)
 
 
 # ---- Pass 列表 ----
@@ -181,6 +212,7 @@ _LATE_PASSES: list[_PassDesc] = [
         "roofline_analyzer", "⑥b", roofline_analyzer.run, None,
         toggle=OptionalPass.ROOFLINE_ANALYZER,
         kind="analysis", requires=frozenset({MAPPED}),
+        viz_hook=_roofline_viz,
     ),
     _PassDesc(
         "block_fuser", "⑥c", block_fuser.run, None,
@@ -188,11 +220,13 @@ _LATE_PASSES: list[_PassDesc] = [
         toggle=OptionalPass.BLOCK_FUSER,
         post_hook=_global_tiler_post_hook,
         kind="analysis",
+        viz_hook=_fusion_viz,
     ),
     _PassDesc(
         "fusion_planner", "⑥c", fusion_planner.run, None,
         toggle=OptionalPass.FUSION_PLANNER,
         kind="analysis",
+        viz_hook=_fusion_viz,
     ),
     _PassDesc(
         "scheduler", "⑦", scheduler.run, None,
@@ -210,6 +244,11 @@ _LATE_PASSES: list[_PassDesc] = [
         memory_planner.post_validate,
         viz_hook=_memory_planner_viz,
         requires=frozenset({SCHEDULED, ANNOTATED}),
+    ),
+    _PassDesc(
+        "tid_assign", "⑧b", tid_assign.run, "hardware",
+        kind="transform",
+        viz_hook=_tid_assign_viz,
     ),
 ]
 

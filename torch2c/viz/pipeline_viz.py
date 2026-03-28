@@ -574,7 +574,7 @@ def emit_pipeline_html(
     html = _render_html(layout, data_json, snap_json)
 
     viz_dir = ensure_viz_dir(output_dir)
-    path = os.path.join(viz_dir, "pipeline.html")
+    path = os.path.join(viz_dir, "passes.html")
     with open(path, "w", encoding="utf-8") as f:
         f.write(html)
     logger.info("Pipeline HTML: %s", path)

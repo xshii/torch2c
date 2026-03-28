@@ -65,6 +65,9 @@ def main():
     parser.add_argument("--output", default=None, help="输出目录（默认 output/<ModelName>）")
     parser.add_argument("--no-debug", action="store_true", help="关闭 debug_dump")
     parser.add_argument("--no-open", action="store_true", help="不自动打开 HTML")
+    parser.add_argument("--serve", action="store_true", help="编译后启动 Flask 查看器")
+    parser.add_argument("--ip", default="0.0.0.0", help="Flask 绑定 IP（默认 0.0.0.0）")
+    parser.add_argument("--port", type=int, default=5050, help="Flask 端口（默认 5050）")
     args = parser.parse_args()
 
     # 加载模型文件
@@ -82,12 +85,13 @@ def main():
 
     model_name = type(model).__name__
     config_dir = str(INTEGRATION_CONFIG_DIR)
+    timestamp = time.strftime("%Y%m%d_%H%M")
 
     modes = [args.mode] if args.mode != "both" else ["minimal", "full"]
 
     for mode in modes:
-        output_dir = args.output or f"output/{model_name}"
-        output_dir = f"{output_dir}_{mode}"
+        base = args.output or f"output/{model_name}"
+        output_dir = f"{base}_{mode}_{timestamp}"
 
         toggles = "minimal" if mode == "minimal" else None
 
@@ -108,6 +112,15 @@ def main():
         )
         elapsed = time.perf_counter() - t0
 
+        # 生成 pass 流水线可视化
+        if not args.no_debug:
+            from torch2c.viz.pipeline_viz import emit_pipeline_html
+            debug_dir = os.path.join(output_dir, "debug")
+            timing_path = os.path.join(debug_dir, "pass_timing.json")
+            import json
+            timing = json.load(open(timing_path)) if os.path.isfile(timing_path) else None
+            emit_pipeline_html(output_dir, pass_timing=timing, debug_dir=debug_dir)
+
         print(f"\n  完成: {output_dir} ({elapsed:.1f}s)")
 
         # 列出生成的 C 文件
@@ -122,7 +135,17 @@ def main():
 
     if len(modes) == 2:
         print(f"\n对比两个版本:")
-        print(f"  diff output/{model_name}_minimal/src/ output/{model_name}_full/src/")
+        base = args.output or f"output/{model_name}"
+        print(f"  diff {base}_minimal_{timestamp}/src/ {base}_full_{timestamp}/src/")
+
+    if args.serve:
+        from serve_html import _kill_existing, _find_free_port, create_app
+
+        _kill_existing(args.ip, args.port)
+        port = _find_free_port(args.ip, args.port)
+        app = create_app("output")
+        print(f"\n  Flask 查看器: http://{args.ip}:{port}")
+        app.run(host=args.ip, port=port, debug=False)
 
 
 if __name__ == "__main__":

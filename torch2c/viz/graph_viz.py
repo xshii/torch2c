@@ -621,7 +621,7 @@ def emit_graph_html(graph: Graph, output_dir: str, cube_size: int,
                     dma_plans: list | None = None) -> str:
     """生成 Pipeline Schedule HTML，返回文件路径。"""
     viz_dir = ensure_viz_dir(output_dir)
-    path = os.path.join(viz_dir, "schedule.html")
+    path = os.path.join(viz_dir, "pipeline.html")
     html = render_schedule(graph, cube_size, hw_config, dma_plans)
     with open(path, "w") as f:
         f.write(html)

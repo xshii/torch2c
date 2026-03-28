@@ -151,24 +151,26 @@ class TestReuse:
 
 class TestDmaPlan:
     def test_dma_plan(self):
-        """每个算子有正确数量的 load 和 store 指令（per-op 路径）。"""
+        """L1 驻留感知: 线性链中间 tensor 跳过冗余 load/store。"""
         g = _make_linear_chain(5, shape=_MEDIUM_SHAPE)
         config = _load_config()
         g = run(g, config)
 
         assert len(g.dma_plans) == 5
-        for plan in g.dma_plans:
-            node = g.nodes[plan.node_id]
-            # load 数 = 输入 tensor 数
-            expected_loads = len(node.inputs)
-            assert len(plan.loads) == expected_loads, (
-                f"{plan.node_id}: 期望 {expected_loads} loads, 实际 {len(plan.loads)}"
-            )
-            # store 数 = 输出 tensor 数
-            expected_stores = len(node.outputs)
-            assert len(plan.stores) == expected_stores, (
-                f"{plan.node_id}: 期望 {expected_stores} stores, 实际 {len(plan.stores)}"
-            )
+
+        total_loads = sum(len(p.loads) for p in g.dma_plans)
+        total_stores = sum(len(p.stores) for p in g.dma_plans)
+
+        # 线性链 A→B→C→D→E:
+        # - 只有首个 input 需要 load（后续都从 L1 获取）
+        # - 只有末尾 model_output 需要 store（中间 tensor 留在 L1）
+        assert total_loads >= 1, f"至少需要 1 个 load（model input），实际 {total_loads}"
+        assert total_stores >= 1, f"至少需要 1 个 store（model output），实际 {total_stores}"
+
+        # 验证 DMA 消除确实发生：旧模式 5 loads + 5 stores = 10，现在应该少很多
+        assert total_loads + total_stores < 10, (
+            f"DMA 消除未生效: {total_loads} loads + {total_stores} stores = {total_loads + total_stores}"
+        )
 
 
 class TestL1CapacityCheck:
@@ -256,6 +258,7 @@ class TestDmaStoreFormat:
                 consumer_node_ids=["node_0"],
             )
         )
+        # t_mid1 标记为 model_output 以确保 store 不被 lazy 优化跳过
         g.add_tensor(
             Tensor(
                 id="t_mid1",
@@ -264,6 +267,7 @@ class TestDmaStoreFormat:
                 format="nd",
                 producer_node_id="node_0",
                 consumer_node_ids=["node_1"],
+                is_model_output=True,
             )
         )
         g.add_tensor(
@@ -350,7 +354,7 @@ class TestDmaStoreFormat:
         config = _load_config()
         g = run(g, config)
 
-        # node_0 的 DMA plan
+        # node_0 的 DMA plan: t_mid1 是 model_output，store 必须保留
         plan = g.dma_plans[0]
         assert plan.node_id == "node_0"
         assert plan.loads[0].dst_format == "nz"

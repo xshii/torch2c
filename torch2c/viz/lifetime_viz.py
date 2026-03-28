@@ -578,7 +578,7 @@ def emit_lifetime_html(graph: Graph, output_dir: str, cube_size: int,
                        title: str | None = None) -> str:
     """生成统一 HBM+L1 + DMA 箭头图到 output_dir/viz/lifetime.html。"""
     viz_dir = ensure_viz_dir(output_dir)
-    path = os.path.join(viz_dir, "lifetime.html")
+    path = os.path.join(viz_dir, "memory.html")
     html = render_lifetime(graph, cube_size, hw_config=hw_config,
                            dma_plans=dma_plans, title=title)
     with open(path, "w") as f:

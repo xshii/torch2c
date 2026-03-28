@@ -10,7 +10,7 @@ from torch2c.common.sizing import get_dim_align
 logger = get_logger("memory_planner.l1")
 
 
-def _analyze_l1_lifetimes(graph: Graph) -> dict[str, tuple[int, int]]:
+def analyze_l1_lifetimes(graph: Graph) -> dict[str, tuple[int, int]]:
     """分析每个 tensor 的 L1 生命周期 (first_op_idx, last_op_idx)。
 
     - storage=local 的 tensor：从 producer 到最后一个 consumer（跨算子驻留）。
@@ -74,7 +74,7 @@ def allocate_l1_global(
     cube_size: int,
 ) -> dict[str, int]:
     """L1 全局 liveness best-fit 分配，返回 {tensor_id: l1_offset}。"""
-    l1_lifetimes = _analyze_l1_lifetimes(graph)
+    l1_lifetimes = analyze_l1_lifetimes(graph)
     result: dict[str, int] = {}
     live: dict[str, int] = {}
     alloc_sizes: dict[str, int] = {}
