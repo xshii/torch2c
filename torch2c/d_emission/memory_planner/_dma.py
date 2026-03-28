@@ -236,8 +236,39 @@ def try_global_l1_layout(
     return True
 
 
+def _bulk_load_dst_format(graph: Graph, tensor) -> str:
+    """为 bulk load 确定 dst_format：查第一个消费者的 format_annotation。"""
+    for cid in tensor.consumer_node_ids:
+        consumer = graph.nodes.get(cid)
+        if not consumer or not consumer.format_annotation:
+            continue
+        annots = consumer.format_annotation.get("inputs", [])
+        for i, tid in enumerate(consumer.inputs):
+            if tid == tensor.id and i < len(annots) and "format" in annots[i]:
+                return annots[i]["format"]
+    return tensor.format
+
+
+def _bulk_store_src_format(graph: Graph, tensor) -> str:
+    """为 bulk store 确定 src_format：查 producer 的 format_annotation。"""
+    producer = graph.nodes.get(tensor.producer_node_id) if tensor.producer_node_id else None
+    if producer and producer.format_annotation:
+        annots = producer.format_annotation.get("outputs", [])
+        try:
+            out_idx = producer.outputs.index(tensor.id)
+            if out_idx < len(annots) and "format" in annots[out_idx]:
+                return annots[out_idx]["format"]
+        except ValueError:
+            pass
+    return tensor.format
+
+
 def build_bulk_dma(graph: Graph, cube_size: int) -> list[DmaPlan]:
-    """为全局 L1 布局生成 bulk load/store DMA 计划。"""
+    """为全局 L1 布局生成 bulk load/store DMA 计划。
+
+    load: src_format = tensor.format (HBM 存储)，dst_format = 消费者 format_annotation
+    store: src_format = producer format_annotation，dst_format = tensor.format (HBM 存储)
+    """
     bulk_load = DmaPlan(node_id="__bulk_load__")
     bulk_store = DmaPlan(node_id="__bulk_store__")
 
@@ -246,6 +277,7 @@ def build_bulk_dma(graph: Graph, cube_size: int) -> list[DmaPlan]:
             continue
         size = calc_padded_size(t.shape, t.dtype, t.format, get_dim_align(t.format, t.dtype))
         if t.is_model_input or t.is_weight:
+            dst_fmt = _bulk_load_dst_format(graph, t)
             bulk_load.loads.append(
                 DmaInstruction(
                     op="load",
@@ -254,11 +286,12 @@ def build_bulk_dma(graph: Graph, cube_size: int) -> list[DmaPlan]:
                     l1_offset=t.l1_offset,
                     size_bytes=size,
                     src_format=t.format,
-                    dst_format=t.format,
+                    dst_format=dst_fmt,
                     dtype=t.dtype,
                 )
             )
         if t.is_model_output:
+            src_fmt = _bulk_store_src_format(graph, t)
             bulk_store.stores.append(
                 DmaInstruction(
                     op="store",
@@ -266,7 +299,7 @@ def build_bulk_dma(graph: Graph, cube_size: int) -> list[DmaPlan]:
                     hbm_offset=t.hbm_offset,
                     l1_offset=t.l1_offset,
                     size_bytes=size,
-                    src_format=t.format,
+                    src_format=src_fmt,
                     dst_format=t.format,
                     dtype=t.dtype,
                 )
