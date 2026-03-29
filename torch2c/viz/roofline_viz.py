@@ -18,27 +18,17 @@ from torch2c.viz._utils import CU_COLOR, ensure_viz_dir
 logger = get_logger("viz.roofline")
 
 
-def emit_roofline_html(
+def build_roofline_data(
     graph: Graph,
-    output_dir: str,
-    cube_size: int,
     hw_config: dict | None = None,
-) -> str:
-    """生成 Roofline HTML，返回文件路径。"""
-    viz_dir = ensure_viz_dir(output_dir)
-    path = os.path.join(viz_dir, "roofline.html")
-
-    # 硬件参数
+) -> dict:
+    """构建 roofline 数据（纯数据，不写文件）。返回 {points, cube_peak, vec_peak, bw}。"""
     compute = (hw_config or {}).get("compute", {})
     cube_peak = compute.get("cube_ops_per_cycle", 4096)
     vec_peak = compute.get("vector_ops_per_cycle", 128)
     dma_bw = compute.get("dma_bytes_per_cycle", 256)
     bw = dma_bw * 2  # load + store 双向
 
-    cube_ridge = cube_peak / bw if bw > 0 else 1
-    vec_ridge = vec_peak / bw if bw > 0 else 1
-
-    # 收集数据点
     points = []
     for nid in (graph.execution_order or []):
         node = graph.nodes.get(nid)
@@ -50,19 +40,49 @@ def emit_roofline_html(
         oi = rf.get("oi", 0)
         flops = rf.get("flops", 0)
         cu = (node.compute_unit or "vector").lower()
-        # 算力 = flops / node_cycles
         nc = rf.get("node_cycles", 1)
         perf = flops / nc if nc > 0 else 0
+        peak = cube_peak if cu == "cube" else vec_peak
+        ridge = peak / bw if bw > 0 else 0
         points.append({
+            "nid": nid,
             "name": f"{nid} ({node.npu_op})",
             "oi": oi,
             "perf": round(perf, 2),
             "flops": flops,
+            "bytes": rf.get("bytes", 0),
+            "dma_bytes": rf.get("dma_bytes", 0),
             "unit": cu,
             "bottleneck": rf.get("bottleneck", "?"),
             "cycles": nc,
+            "comp_cy": rf.get("compute_cycles", 0),
+            "dma_cy": rf.get("dma_cycles", 0),
+            "ratio": rf.get("achievable_ratio", 0),
+            "peak": peak,
+            "ridge": round(ridge, 2),
             "color": CU_COLOR.get(cu, "#999"),
         })
+
+    return {"points": points, "cube_peak": cube_peak, "vec_peak": vec_peak, "bw": bw}
+
+
+def emit_roofline_html(
+    graph: Graph,
+    output_dir: str,
+    cube_size: int,
+    hw_config: dict | None = None,
+) -> str:
+    """生成 Roofline HTML，返回文件路径。"""
+    viz_dir = ensure_viz_dir(output_dir)
+    path = os.path.join(viz_dir, "roofline.html")
+
+    data = build_roofline_data(graph, hw_config)
+    points = data["points"]
+    cube_peak = data["cube_peak"]
+    vec_peak = data["vec_peak"]
+    bw = data["bw"]
+    cube_ridge = cube_peak / bw if bw > 0 else 1
+    vec_ridge = vec_peak / bw if bw > 0 else 1
 
     data_json = json.dumps(points, ensure_ascii=False)
 
@@ -155,8 +175,16 @@ chart.setOption({
     formatter: p => {
       if (p.seriesType === 'line') return '';
       const d = p.data._extra || {};
-      return `<b>${d.name || ''}</b><br/>OI: ${d.oi}<br/>Perf: ${d.perf} FLOP/cy<br/>` +
-        `FLOPS: ${d.flops}<br/>Bottleneck: ${d.bottleneck}<br/>Cycles: ${d.cycles}`;
+      if (!d.name) return '';
+      const bn = d.bottleneck==='compute' ? '计算受限 (OI≥ridge)' : '访存受限 (OI<ridge)';
+      return `<b>${d.name}</b> [${d.unit}]<br/>`
+        + `<b>OI</b> = FLOPS÷Bytes = ${d.flops}÷${d.bytes} = <b>${d.oi}</b><br/>`
+        + `Ridge = peak÷BW = ${d.peak}÷${bw} = ${d.ridge}<br/>`
+        + `<b>${bn}</b> (利用率 ${(d.ratio*100).toFixed(0)}%)<br/>`
+        + `<hr style="border-color:#444;margin:4px 0"/>`
+        + `Perf: ${d.perf} FLOP/cy<br/>`
+        + `Compute: ${d.comp_cy} cy | DMA: ${d.dma_cy} cy<br/>`
+        + `Total: ${d.cycles} cy = max(compute, dma)`;
     }
   },
   legend: { top: 30, textStyle: { color: '#94a3b8' } },

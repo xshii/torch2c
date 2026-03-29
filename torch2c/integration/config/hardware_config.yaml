@@ -16,6 +16,7 @@ fractal:
     int8: 32
 
 dma:
+  channels: 1                      # DMA 通道数，1=串行，>1 允许并行搬运
   supports_format_convert: true
   supports_dtype_cast: false
   max_transfer_size_bytes: 1048576

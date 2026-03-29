@@ -13,9 +13,144 @@ import json
 import os
 
 from torch2c.common import Graph, get_logger
-from torch2c.viz._utils import CU_COLOR, ensure_viz_dir
+from torch2c.viz._utils import CU_COLOR, ensure_viz_dir, shape_str
 
 logger = get_logger("viz.tid")
+
+
+def build_tid_data(graph: Graph, hw_config: dict | None = None,
+                    dma_plans: list | None = None) -> list[dict]:
+    """构建 TID 调度数据（纯数据，不写文件）。返回 items 列表。
+
+    当提供 hw_config 时，附加 cycle 时序信息（start/end/dur）。
+    """
+    plans = dma_plans if dma_plans is not None else (graph.dma_plans or [])
+    plan_map = {p.node_id: p for p in plans}
+
+    try:
+        from torch2c.d_emission.tid_assign.tid_assign import _find_critical_path, _classify_branches
+        main_path = _find_critical_path(graph)
+        branch_map = _classify_branches(graph, main_path)
+    except Exception:
+        main_path = set(graph.execution_order or [])
+        branch_map = {nid: 0 for nid in (graph.execution_order or [])}
+
+    items = []
+    for nid in (graph.execution_order or []):
+        node = graph.nodes.get(nid)
+        if not node:
+            continue
+        plan = plan_map.get(nid)
+        is_main = nid in main_path
+        branch = branch_map.get(nid, 0)
+
+        if plan:
+            for ld in plan.loads:
+                t = graph.tensors.get(ld.tensor_id)
+                fmt = f"{ld.src_format}→{ld.dst_format}" if ld.src_format != ld.dst_format else ld.src_format
+                items.append({
+                    "tid": ld.task_id, "unit": "dma", "nid": nid,
+                    "label": f"load {ld.tensor_id}",
+                    "main": is_main, "branch": branch,
+                    "type": "dma_load", "deps": _dma_deps(ld),
+                    "shape": shape_str(t.shape) if t else "?",
+                    "fmt": fmt, "dtype": ld.dtype, "size": ld.size_bytes,
+                })
+
+        # compute 项：附带输入输出 tensor 关键参数
+        ins = []
+        for i, tid in enumerate(node.inputs):
+            t = graph.tensors.get(tid)
+            if not t:
+                continue
+            desc = {"id": tid, "shape": shape_str(t.shape), "dtype": t.dtype or "?"}
+            if node.format_annotation:
+                annots = node.format_annotation.get("inputs", [])
+                if i < len(annots) and "format" in annots[i]:
+                    l1 = annots[i]["format"]
+                    desc["fmt"] = f"{t.format}→{l1}" if t.format != l1 else t.format
+            ins.append(desc)
+        outs = []
+        for i, tid in enumerate(node.outputs):
+            t = graph.tensors.get(tid)
+            if not t:
+                continue
+            desc = {"id": tid, "shape": shape_str(t.shape), "dtype": t.dtype or "?"}
+            outs.append(desc)
+        items.append({
+            "tid": node.task_id,
+            "unit": (node.compute_unit or "vector").lower(),
+            "nid": nid,
+            "label": f"{nid} ({node.npu_op or '?'})",
+            "main": is_main, "branch": branch,
+            "type": "compute", "deps": _node_deps(node),
+            "ins": ins, "outs": outs,
+        })
+
+        if plan:
+            for st in plan.stores:
+                t = graph.tensors.get(st.tensor_id)
+                fmt = f"{st.src_format}→{st.dst_format}" if st.src_format != st.dst_format else st.src_format
+                items.append({
+                    "tid": st.task_id, "unit": "dma", "nid": nid,
+                    "label": f"store {st.tensor_id}",
+                    "main": is_main, "branch": branch,
+                    "type": "dma_store", "deps": _dma_deps(st),
+                    "shape": shape_str(t.shape) if t else "?",
+                    "fmt": fmt, "dtype": st.dtype, "size": st.size_bytes,
+                })
+
+    for key in ("__bulk_load__", "__bulk_store__"):
+        plan = plan_map.get(key)
+        if not plan:
+            continue
+        for instr in plan.loads + plan.stores:
+            t = graph.tensors.get(instr.tensor_id)
+            fmt = f"{instr.src_format}→{instr.dst_format}" if instr.src_format != instr.dst_format else instr.src_format
+            items.append({
+                "tid": instr.task_id, "unit": "dma", "nid": key,
+                "label": f"{'load' if instr.op == 'load' else 'store'} {instr.tensor_id}",
+                "main": True, "branch": 0,
+                "type": f"dma_{instr.op}", "deps": _dma_deps(instr),
+                "shape": shape_str(t.shape) if t else "?",
+                "fmt": fmt, "dtype": instr.dtype, "size": instr.size_bytes,
+            })
+
+    items.sort(key=lambda x: x["tid"])
+
+    # 附加 cycle 时序（如果有 hw_config）
+    if hw_config:
+        try:
+            from torch2c.viz.graph_viz import _schedule_ops
+            from torch2c.viz.cost_model import estimate_all
+            costs = estimate_all(graph, hw_config)
+            ops = _schedule_ops(graph, costs, dma_plans or graph.dma_plans, hw_config)
+            timing = {op.nid: (op.start, op.end) for op in ops if not op.is_summary}
+
+            for it in items:
+                nid = it["nid"]
+                tp = it["type"]
+                tid_str = it["label"].split()[-1]  # "load t_0" → "t_0"
+                if tp == "compute":
+                    key = nid
+                elif tp in ("dma_load", "dma_store"):
+                    if nid == "__bulk_load__":
+                        key = f"__bulk_load_{tid_str}"
+                    elif nid == "__bulk_store__":
+                        key = f"__bulk_store_{tid_str}"
+                    else:
+                        key = f"__dma_{'load' if 'load' in tp else 'store'}_{nid}_{tid_str}"
+                else:
+                    key = nid
+                if key in timing:
+                    s, e = timing[key]
+                    it["start"] = s
+                    it["end"] = e
+                    it["dur"] = e - s
+        except Exception:
+            pass
+
+    return items
 
 
 def emit_tid_html(
@@ -28,77 +163,7 @@ def emit_tid_html(
     viz_dir = ensure_viz_dir(output_dir)
     path = os.path.join(viz_dir, "tid_schedule.html")
 
-    plan_map = {p.node_id: p for p in (graph.dma_plans or [])}
-
-    # 主路径检测
-    from torch2c.d_emission.tid_assign.tid_assign import _find_critical_path, _classify_branches
-    main_path = _find_critical_path(graph)
-    branch_map = _classify_branches(graph, main_path)
-
-    # 收集所有指令 (tid, unit, label, is_main, type, deps)
-    items = []
-    for nid in (graph.execution_order or []):
-        node = graph.nodes.get(nid)
-        if not node:
-            continue
-        plan = plan_map.get(nid)
-        is_main = nid in main_path
-        branch = branch_map.get(nid, 0)
-
-        # DMA loads
-        if plan:
-            for ld in plan.loads:
-                items.append({
-                    "tid": ld.task_id,
-                    "unit": "dma",
-                    "label": f"load {ld.tensor_id}",
-                    "main": is_main,
-                    "branch": branch,
-                    "type": "dma_load",
-                    "deps": _dma_deps(ld),
-                })
-
-        # Compute
-        items.append({
-            "tid": node.task_id,
-            "unit": (node.compute_unit or "vector").lower(),
-            "label": f"{nid} ({node.npu_op or '?'})",
-            "main": is_main,
-            "branch": branch,
-            "type": "compute",
-            "deps": _node_deps(node),
-        })
-
-        # DMA stores
-        if plan:
-            for st in plan.stores:
-                items.append({
-                    "tid": st.task_id,
-                    "unit": "dma",
-                    "label": f"store {st.tensor_id}",
-                    "main": is_main,
-                    "branch": branch,
-                    "type": "dma_store",
-                    "deps": _dma_deps(st),
-                })
-
-    # Bulk DMA
-    for key in ("__bulk_load__", "__bulk_store__"):
-        plan = plan_map.get(key)
-        if not plan:
-            continue
-        for instr in plan.loads + plan.stores:
-            items.append({
-                "tid": instr.task_id,
-                "unit": "dma",
-                "label": f"{'load' if instr.op == 'load' else 'store'} {instr.tensor_id}",
-                "main": True,
-                "branch": 0,
-                "type": f"dma_{instr.op}",
-                "deps": _dma_deps(instr),
-            })
-
-    items.sort(key=lambda x: x["tid"])
+    items = build_tid_data(graph, hw_config, graph.dma_plans)
     data_json = json.dumps(items, ensure_ascii=False)
     n_main = sum(1 for it in items if it["main"])
 
@@ -193,9 +258,14 @@ chart.setOption({
       const d = p.data?._d;
       if (!d) return '';
       const deps = Object.entries(d.deps).filter(([,v]) => v > 0).map(([k,v]) => `${k}:${v}`).join(', ');
-      return `<b>TID ${d.tid}</b> — ${d.label}<br/>Unit: ${d.unit}<br/>` +
+      let s = `<b>TID ${d.tid}</b> — ${d.label}<br/>Unit: ${d.unit}<br/>` +
         `${d.main ? '<b>MAIN PATH</b>' : 'Branch ' + d.branch}<br/>` +
         `Deps: ${deps || 'none'}`;
+      if (d.start !== undefined) s += `<br/>Cycle: ${d.start}~${d.end} (${d.dur} cy)`;
+      if (d.fmt) s += `<br/>Format: ${d.fmt} | ${d.dtype} | ${((d.size||0)/1024).toFixed(1)}K | ${d.shape}`;
+      if (d.ins && d.ins.length) { s += '<br/><b>Inputs:</b>'; d.ins.forEach(t => { s += `<br/>&ensp;${t.id} ${t.shape} ${t.dtype}${t.fmt?' '+t.fmt:''}`; }); }
+      if (d.outs && d.outs.length) { s += '<br/><b>Outputs:</b>'; d.outs.forEach(t => { s += `<br/>&ensp;${t.id} ${t.shape} ${t.dtype}`; }); }
+      return s;
     }
   },
   grid: { left: 80, right: 30, top: 60, bottom: 40 },

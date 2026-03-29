@@ -24,18 +24,9 @@ _GROUP_COLORS = [
 ]
 
 
-def emit_fusion_html(
-    graph: Graph,
-    output_dir: str,
-    cube_size: int = 16,
-    hw_config: dict | None = None,
-) -> str:
-    """生成 Fusion Group HTML，返回文件路径。"""
-    viz_dir = ensure_viz_dir(output_dir)
-    path = os.path.join(viz_dir, "fusion.html")
-
-    # 收集融合组信息
-    group_ids: dict[str, int] = {}  # group_name → color_index
+def build_fusion_data(graph: Graph) -> dict:
+    """构建 fusion 数据（纯数据，不写文件）。返回 {nodes, edges, stats}。"""
+    group_ids: dict[str, int] = {}
     next_color = 0
 
     nodes = []
@@ -53,7 +44,7 @@ def emit_fusion_html(
 
         color = _GROUP_COLORS[group_ids[fg]] if fg else "#64748b"
         nodes.append({
-            "id": nid,
+            "id": nid, "_nid": nid,
             "name": f"{nid}\n{node.npu_op or node.op_type}",
             "category": fg or "ungrouped",
             "symbolSize": 30 if fg else 20,
@@ -64,7 +55,6 @@ def emit_fusion_html(
             "_role": role,
         })
 
-    # 边：tensor 流向
     edges = []
     for nid in (graph.execution_order or list(graph.nodes)):
         node = graph.nodes.get(nid)
@@ -89,19 +79,33 @@ def emit_fusion_html(
                         "_local": is_local,
                     })
 
-    # 统计
     n_groups = len(group_ids)
     n_fused = sum(1 for n in nodes if n["_group"])
     n_local = sum(1 for e in edges if e["_local"])
 
-    data_json = json.dumps({"nodes": nodes, "edges": edges, "stats": {
+    return {"nodes": nodes, "edges": edges, "stats": {
         "groups": n_groups, "fused_nodes": n_fused, "local_edges": n_local,
-    }}, ensure_ascii=False)
+    }}
+
+
+def emit_fusion_html(
+    graph: Graph,
+    output_dir: str,
+    cube_size: int = 16,
+    hw_config: dict | None = None,
+) -> str:
+    """生成 Fusion Group HTML，返回文件路径。"""
+    viz_dir = ensure_viz_dir(output_dir)
+    path = os.path.join(viz_dir, "fusion.html")
+
+    raw = build_fusion_data(graph)
+    data_json = json.dumps(raw, ensure_ascii=False)
 
     html = _TEMPLATE.replace("__DATA__", data_json)
     with open(path, "w", encoding="utf-8") as f:
         f.write(html)
-    logger.info("Fusion HTML: %s (%d groups, %d fused nodes)", path, n_groups, n_fused)
+    stats = raw["stats"]
+    logger.info("Fusion HTML: %s (%d groups, %d fused nodes)", path, stats["groups"], stats["fused_nodes"])
     return path
 
 

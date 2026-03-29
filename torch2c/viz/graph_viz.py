@@ -48,40 +48,53 @@ def _estimate_dma_cost(size_bytes: int) -> int:
 def _schedule_single_op(
     scheduled: list, lane_end: dict, op_end: dict,
     node, nid: str, cu: str, dp, costs: dict,
-    bulk_load,
+    bulk_load, dma_start_fn=None, dma_finish_fn=None,
 ) -> None:
-    """调度单个非 tiled 算子（load → compute → store）。"""
-    load_nid = None
+    """调度单个非 tiled 算子（逐条 DMA load → compute → 逐条 DMA store）。"""
+    def _dma_start(dep_ready=0):
+        if dma_start_fn:
+            return dma_start_fn(dep_ready)
+        return max(lane_end["dma"], dep_ready)
+
+    def _dma_finish(end):
+        if dma_finish_fn:
+            dma_finish_fn(end)
+        lane_end["dma"] = max(lane_end["dma"], end)
+
+    last_load_nid = None
     if dp and dp.loads:
-        load_nid = f"__dma_load_{nid}"
-        total_size = sum(inst.size_bytes for inst in dp.loads)
-        dur = _estimate_dma_cost(total_size)
         dep_ready = max((op_end.get(d, 0) for d in node.dependencies), default=0)
-        start = max(lane_end["dma"], dep_ready)
-        end = start + dur
-        lane_end["dma"] = end
-        op_end[load_nid] = end
-        scheduled.append(ScheduledOp(
-            nid=load_nid, op=f"dma_load ({len(dp.loads)})",
-            lane="dma", lane_idx=_LANE_INDEX["dma"],
-            start=start, end=end, duration=dur, tid=0,
-            deps=list(node.dependencies),
-        ))
+        for i, inst in enumerate(dp.loads):
+            ld_nid = f"__dma_load_{nid}_{inst.tensor_id}"
+            dur = _estimate_dma_cost(inst.size_bytes)
+            start = _dma_start(dep_ready)
+            end = start + dur
+            _dma_finish(end)
+            op_end[ld_nid] = end
+            scheduled.append(ScheduledOp(
+                nid=ld_nid, op=f"load {inst.tensor_id}",
+                lane="dma", lane_idx=_LANE_INDEX["dma"],
+                start=start, end=end, duration=dur, tid=0,
+                deps=list(node.dependencies) if i == 0 else [last_load_nid],
+            ))
+            last_load_nid = ld_nid
+        # 聚合 nid 供 compute 依赖
+        op_end[f"__dma_load_{nid}"] = lane_end["dma"]
 
     duration = costs.get(nid, 1)
     dep_ready = max((op_end.get(d, 0) for d in node.dependencies), default=0)
     if bulk_load and "__bulk_load__" in op_end:
         dep_ready = max(dep_ready, op_end["__bulk_load__"])
-    if load_nid and load_nid in op_end:
-        dep_ready = max(dep_ready, op_end[load_nid])
+    if last_load_nid and last_load_nid in op_end:
+        dep_ready = max(dep_ready, op_end[last_load_nid])
     start = max(lane_end[cu], dep_ready)
     end = start + duration
     lane_end[cu] = end
     op_end[nid] = end
 
     compute_deps = list(node.dependencies)
-    if load_nid:
-        compute_deps.append(load_nid)
+    if last_load_nid:
+        compute_deps.append(last_load_nid)
     elif bulk_load:
         compute_deps.append("__bulk_load__")
     scheduled.append(ScheduledOp(
@@ -92,19 +105,22 @@ def _schedule_single_op(
     ))
 
     if dp and dp.stores:
-        store_nid = f"__dma_store_{nid}"
-        total_size = sum(inst.size_bytes for inst in dp.stores)
-        dur = _estimate_dma_cost(total_size)
-        start = max(lane_end["dma"], op_end[nid])
-        end = start + dur
-        lane_end["dma"] = end
-        op_end[store_nid] = end
-        scheduled.append(ScheduledOp(
-            nid=store_nid, op=f"dma_store ({len(dp.stores)})",
-            lane="dma", lane_idx=_LANE_INDEX["dma"],
-            start=start, end=end, duration=dur, tid=0,
-            deps=[nid],
-        ))
+        last_store_dep = nid
+        for i, inst in enumerate(dp.stores):
+            st_nid = f"__dma_store_{nid}_{inst.tensor_id}"
+            dur = _estimate_dma_cost(inst.size_bytes)
+            start = _dma_start(op_end[last_store_dep])
+            end = start + dur
+            _dma_finish(end)
+            op_end[st_nid] = end
+            scheduled.append(ScheduledOp(
+                nid=st_nid, op=f"store {inst.tensor_id}",
+                lane="dma", lane_idx=_LANE_INDEX["dma"],
+                start=start, end=end, duration=dur, tid=0,
+                deps=[last_store_dep],
+            ))
+            last_store_dep = st_nid
+        op_end[f"__dma_store_{nid}"] = lane_end["dma"]
 
 
 def _schedule_tiled_op(
@@ -261,8 +277,23 @@ def _schedule_tiled_op(
 
 def _schedule_ops(
     graph: Graph, costs: dict[str, int], dma_plans: list | None = None,
+    hw_config: dict | None = None,
 ) -> list[ScheduledOp]:
-    """贪心流水线调度，含 DMA 搬运。"""
+    """贪心流水线调度，含 DMA 搬运。支持多通道 DMA。"""
+    dma_channels = (hw_config or {}).get("dma", {}).get("channels", 1)
+    # 多通道 DMA：各通道独立跟踪结束时间，取最早可用通道
+    _dma_ch_end = [0] * max(1, dma_channels)
+
+    def _dma_lane_start(dep_ready: int = 0) -> int:
+        """返回最早可用 DMA 通道的 start 时间。"""
+        earliest = min(_dma_ch_end)
+        return max(earliest, dep_ready)
+
+    def _dma_lane_finish(end: int) -> None:
+        """标记最早可用通道的结束时间。"""
+        idx = _dma_ch_end.index(min(_dma_ch_end))
+        _dma_ch_end[idx] = end
+
     lane_end = {lane: 0 for lane in _LANES}
     op_end: dict[str, int] = {}
     scheduled: list[ScheduledOp] = []
@@ -277,20 +308,25 @@ def _schedule_ops(
     bulk_load = dma_map.pop("__bulk_load__", None)
     bulk_store = dma_map.pop("__bulk_store__", None)
 
-    # ── bulk load ──
+    # ── bulk load（逐条，多通道时可并行）──
     if bulk_load and bulk_load.loads:
-        total_size = sum(inst.size_bytes for inst in bulk_load.loads)
-        dur = _estimate_dma_cost(total_size)
-        start = lane_end["dma"]
-        end = start + dur
-        lane_end["dma"] = end
-        op_end["__bulk_load__"] = end
-        tids = [inst.tensor_id for inst in bulk_load.loads]
-        scheduled.append(ScheduledOp(
-            nid="__bulk_load__", op=f"bulk_load ({len(bulk_load.loads)} tensors)",
-            lane="dma", lane_idx=_LANE_INDEX["dma"],
-            start=start, end=end, duration=dur, tid=0,
-        ))
+        prev_nid = None
+        for inst in bulk_load.loads:
+            ld_nid = f"__bulk_load_{inst.tensor_id}"
+            dur = _estimate_dma_cost(inst.size_bytes)
+            start = _dma_lane_start()
+            end = start + dur
+            _dma_lane_finish(end)
+            lane_end["dma"] = max(lane_end["dma"], end)
+            op_end[ld_nid] = end
+            scheduled.append(ScheduledOp(
+                nid=ld_nid, op=f"bulk load {inst.tensor_id}",
+                lane="dma", lane_idx=_LANE_INDEX["dma"],
+                start=start, end=end, duration=dur, tid=0,
+                deps=[prev_nid] if prev_nid else [],
+            ))
+            prev_nid = ld_nid
+        op_end["__bulk_load__"] = lane_end["dma"]
 
     for nid in graph.execution_order:
         node = graph.nodes[nid]
@@ -312,68 +348,90 @@ def _schedule_ops(
             # ── 非 tiled: 单次 load → compute → store ──
             _schedule_single_op(
                 scheduled, lane_end, op_end, node, nid, cu, dp, costs,
-                bulk_load,
+                bulk_load, _dma_lane_start, _dma_lane_finish,
             )
 
-    # ── bulk store ──
+    # ── bulk store（逐条，多通道时可并行）──
     if bulk_store and bulk_store.stores:
-        total_size = sum(inst.size_bytes for inst in bulk_store.stores)
-        dur = _estimate_dma_cost(total_size)
-        # bulk store 需要等所有计算完成
         all_done = max(op_end.values()) if op_end else 0
-        start = max(lane_end["dma"], all_done)
-        end = start + dur
-        lane_end["dma"] = end
-        op_end["__bulk_store__"] = end
-        # 依赖最后一个计算节点
         last_compute = graph.execution_order[-1] if graph.execution_order else None
-        scheduled.append(ScheduledOp(
-            nid="__bulk_store__", op=f"bulk_store ({len(bulk_store.stores)} tensors)",
-            lane="dma", lane_idx=_LANE_INDEX["dma"],
-            start=start, end=end, duration=dur, tid=0,
-            deps=[last_compute] if last_compute else [],
-        ))
+        prev_nid = None
+        for inst in bulk_store.stores:
+            st_nid = f"__bulk_store_{inst.tensor_id}"
+            dur = _estimate_dma_cost(inst.size_bytes)
+            start = _dma_lane_start(all_done)
+            end = start + dur
+            _dma_lane_finish(end)
+            lane_end["dma"] = max(lane_end["dma"], end)
+            op_end[st_nid] = end
+            deps = [prev_nid] if prev_nid else ([last_compute] if last_compute else [])
+            scheduled.append(ScheduledOp(
+                nid=st_nid, op=f"bulk store {inst.tensor_id}",
+                lane="dma", lane_idx=_LANE_INDEX["dma"],
+                start=start, end=end, duration=dur, tid=0,
+                deps=deps,
+            ))
+            prev_nid = st_nid
+        op_end["__bulk_store__"] = lane_end["dma"]
 
     return scheduled
 
 
-def render_schedule(
+def _tensor_desc(graph: Graph, tid: str, node=None,
+                 input_idx: int | None = None,
+                 output_idx: int | None = None) -> str:
+    """构建 tensor 描述字符串（含 format 转换信息）。"""
+    t = graph.tensors.get(tid)
+    if not t:
+        return tid
+    parts = [shape_str(t.shape), t.dtype or "?"]
+    hbm_fmt = t.format or "nd"
+    l1_fmt = hbm_fmt
+    if node and node.format_annotation:
+        if input_idx is not None:
+            annots = node.format_annotation.get("inputs", [])
+            if input_idx < len(annots) and "format" in annots[input_idx]:
+                l1_fmt = annots[input_idx]["format"]
+        elif output_idx is not None:
+            annots = node.format_annotation.get("outputs", [])
+            if output_idx < len(annots) and "format" in annots[output_idx]:
+                l1_fmt = annots[output_idx]["format"]
+    if hbm_fmt != l1_fmt:
+        parts.append(f"{hbm_fmt}→{l1_fmt}")
+    elif hbm_fmt != "nd":
+        parts.append(hbm_fmt)
+    return " ".join(parts)
+
+
+def build_pipeline_data(
     graph: Graph, cube_size: int,
     hw_config: dict | None = None,
     dma_plans: list | None = None,
-) -> str:
-    """生成 MindSpore 风格 Pipeline Schedule HTML。"""
+) -> dict:
+    """构建 pipeline 数据（纯数据，不写文件）。返回 {bars, deps, max_time}。"""
     costs = estimate_all(graph, hw_config)
-    ops = _schedule_ops(graph, costs, dma_plans)
+    ops = _schedule_ops(graph, costs, dma_plans, hw_config)
     if not ops:
-        return "<html><body>No ops</body></html>"
+        return {"bars": [], "deps": [], "max_time": 0}
 
     max_time = max(o.end for o in ops)
-    # op_map: 非 summary 优先，summary 仅在无 per-tile 条目时补位
     op_map: dict[str, ScheduledOp] = {}
     for o in ops:
         if o.is_summary:
-            op_map.setdefault(o.nid, o)  # 仅在 nid 不存在时填充
+            op_map.setdefault(o.nid, o)
         else:
             op_map[o.nid] = o
-
-    def _tensor_desc(tid: str) -> str:
-        t = graph.tensors.get(tid)
-        if not t:
-            return tid
-        parts = [shape_str(t.shape), t.dtype or "?"]
-        if t.format and t.format != "nd":
-            parts.append(t.format)
-        return " ".join(parts)
 
     bars = []
     for o in ops:
         if o.is_summary:
-            continue  # summary 条仅供 lifetime_viz，不在甘特图中显示
+            continue
         node = graph.nodes.get(o.nid)
         if node:
-            ins = [{"id": tid, "desc": _tensor_desc(tid)} for tid in node.inputs]
-            outs = [{"id": tid, "desc": _tensor_desc(tid)} for tid in node.outputs]
+            ins = [{"id": tid, "desc": _tensor_desc(graph, tid, node, input_idx=i)}
+                   for i, tid in enumerate(node.inputs)]
+            outs = [{"id": tid, "desc": _tensor_desc(graph, tid, node, output_idx=i)}
+                    for i, tid in enumerate(node.outputs)]
         else:
             ins, outs = [], []
         bars.append({
@@ -383,19 +441,34 @@ def render_schedule(
             "ins": ins, "outs": outs,
         })
 
-    # 依赖线（跳过 summary → summary，per-tile 箭头独立展示）
-    deps = []
+    dep_list = []
     for o in ops:
         if o.is_summary:
-            continue  # summary 条不生成出向箭头
+            continue
         for dep_nid in o.deps:
             dep = op_map.get(dep_nid)
             if dep:
-                deps.append({
+                dep_list.append({
                     "x1": dep.end, "y1": dep.lane_idx,
                     "x2": o.start, "y2": o.lane_idx,
                 })
 
+    return {"bars": bars, "deps": dep_list, "max_time": max_time}
+
+
+def render_schedule(
+    graph: Graph, cube_size: int,
+    hw_config: dict | None = None,
+    dma_plans: list | None = None,
+) -> str:
+    """生成 MindSpore 风格 Pipeline Schedule HTML。"""
+    data = build_pipeline_data(graph, cube_size, hw_config, dma_plans)
+    bars = data["bars"]
+    max_time = data["max_time"]
+    if not bars:
+        return "<html><body>No ops</body></html>"
+
+    deps = data["deps"]
     bars_json = json.dumps(bars, ensure_ascii=False)
     deps_json = json.dumps(deps)
     lanes_json = json.dumps([l.upper() for l in _LANES])
@@ -623,7 +696,7 @@ def emit_graph_html(graph: Graph, output_dir: str, cube_size: int,
     viz_dir = ensure_viz_dir(output_dir)
     path = os.path.join(viz_dir, "pipeline.html")
     html = render_schedule(graph, cube_size, hw_config, dma_plans)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(html)
     logger.info("Pipeline Schedule HTML 已写入: %s", path)
     return path

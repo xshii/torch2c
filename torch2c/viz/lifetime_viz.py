@@ -52,7 +52,7 @@ def _compute_timing(
     from torch2c.viz.graph_viz import _schedule_ops
 
     costs = estimate_all(graph, hw_config)
-    ops = _schedule_ops(graph, costs, dma_plans)
+    ops = _schedule_ops(graph, costs, dma_plans, hw_config)
     timing = {op.nid: (op.start, op.end) for op in ops}
     total = max((op.end for op in ops), default=0)
     return timing, total
@@ -61,33 +61,37 @@ def _compute_timing(
 def _tensor_involved_ops(
     graph: Graph, dma_plans: list | None,
 ) -> dict[str, list[str]]:
-    """构建 tensor_id → 涉及的算子 nid 列表（含 DMA 虚拟节点）。"""
-    result: dict[str, list[str]] = defaultdict(list)
+    """构建 tensor_id → 涉及的算子 nid 列表，分 DMA 和 compute 两组。
 
-    # DMA 算子
+    返回 {tensor_id: {"dma": [nid, ...], "compute": [nid, ...]}}
+    HBM 生命周期只看 DMA ops，L1 生命周期看全部。
+    """
+    result: dict[str, dict[str, list[str]]] = defaultdict(lambda: {"dma": [], "compute": []})
+
+    # DMA 算子（nid 与 graph_viz._schedule_ops 生成的逐条 nid 一致）
     if dma_plans:
         for dp in dma_plans:
             for inst in dp.loads:
                 if dp.node_id == "__bulk_load__":
-                    nid = "__bulk_load__"
+                    nid = f"__bulk_load_{inst.tensor_id}"
                 else:
-                    nid = f"__dma_load_{dp.node_id}"
-                result[inst.tensor_id].append(nid)
+                    nid = f"__dma_load_{dp.node_id}_{inst.tensor_id}"
+                result[inst.tensor_id]["dma"].append(nid)
             for inst in dp.stores:
                 if dp.node_id == "__bulk_store__":
-                    nid = "__bulk_store__"
+                    nid = f"__bulk_store_{inst.tensor_id}"
                 else:
-                    nid = f"__dma_store_{dp.node_id}"
-                result[inst.tensor_id].append(nid)
+                    nid = f"__dma_store_{dp.node_id}_{inst.tensor_id}"
+                result[inst.tensor_id]["dma"].append(nid)
 
     # 计算算子
     for nid, node in graph.nodes.items():
         for tid in node.inputs:
-            result[tid].append(nid)
+            result[tid]["compute"].append(nid)
         for tid in node.outputs:
-            result[tid].append(nid)
+            result[tid]["compute"].append(nid)
         for _, tid in node.absorbed_inputs.items():
-            result[tid].append(nid)
+            result[tid]["compute"].append(nid)
 
     return dict(result)
 
@@ -113,7 +117,7 @@ def _is_eviction_mode(dma_plans: list | None) -> bool:
 def _build_blocks(
     graph: Graph, cube_size: int,
     op_timing: dict[str, tuple[int, int]], total_cycles: int,
-    tensor_ops: dict[str, list[str]],
+    tensor_ops: dict[str, dict[str, list[str]]],
     mode: str,
     bulk: bool = False,
 ) -> list[MemBlock]:
@@ -144,7 +148,13 @@ def _build_blocks(
             continue
 
         # 从涉及的算子中获取 cycle 范围
-        ops = tensor_ops.get(tid, [])
+        # HBM 只看 DMA ops（tensor 在 HBM 的生命周期由 DMA 搬运决定）
+        # L1 看全部（DMA load 到 L1 → compute → DMA store 回 HBM）
+        t_ops = tensor_ops.get(tid, {"dma": [], "compute": []})
+        if mode == "hbm":
+            ops = t_ops["dma"]
+        else:
+            ops = t_ops["dma"] + t_ops["compute"]
         starts = [op_timing[nid][0] for nid in ops if nid in op_timing]
         ends = [op_timing[nid][1] for nid in ops if nid in op_timing]
 
@@ -153,10 +163,6 @@ def _build_blocks(
 
         start_c = min(starts)
         end_c = max(ends)
-
-        # Bulk 模式下 L1 空间不释放，所有 tensor 驻留到结束
-        if bulk and mode == "l1":
-            end_c = total_cycles
 
         blocks.append(MemBlock(
             tid=tid, offset=offset, size=size,
@@ -336,13 +342,15 @@ def _unified_block_dict(b: MemBlock, y_offset: float, zone: str) -> dict:
 # ── 渲染 ──────────────────────────────────────────────
 
 
-def render_lifetime(
+def build_memory_data(
     graph: Graph, cube_size: int,
     hw_config: dict | None = None,
     dma_plans: list | None = None,
-    title: str | None = None,
-) -> str:
-    """生成统一 HBM+L1 内存生命周期图 + DMA 搬移箭头。"""
+) -> dict:
+    """构建 HBM+L1 内存块数据（纯数据，不写文件）。
+
+    返回 {blocks, arrows, total_cycles, l1_max, hbm_max, hbm_base, total_y, gap}。
+    """
     op_timing, total_cycles = _compute_timing(graph, hw_config, dma_plans)
     tensor_ops = _tensor_involved_ops(graph, dma_plans)
     bulk = _is_bulk_mode(dma_plans)
@@ -367,10 +375,28 @@ def render_lifetime(
     blocks_data += [_unified_block_dict(b, hbm_base, "HBM") for b in hbm_blocks]
     arrows_data = _build_dma_arrows(dma_plans, op_timing, hbm_base)
 
+    return {
+        "blocks": blocks_data, "arrows": arrows_data,
+        "total_cycles": total_cycles,
+        "l1_max": l1_max, "hbm_max": hbm_max,
+        "hbm_base": hbm_base, "total_y": total_y, "gap": gap,
+    }
+
+
+def render_lifetime(
+    graph: Graph, cube_size: int,
+    hw_config: dict | None = None,
+    dma_plans: list | None = None,
+    title: str | None = None,
+) -> str:
+    """生成统一 HBM+L1 内存生命周期图 + DMA 搬移箭头。"""
+    data = build_memory_data(graph, cube_size, hw_config, dma_plans)
+
     return _render_html(
-        json.dumps(blocks_data, ensure_ascii=False),
-        json.dumps(arrows_data, ensure_ascii=False),
-        total_cycles, l1_max, hbm_max, hbm_base, total_y, gap, title,
+        json.dumps(data["blocks"], ensure_ascii=False),
+        json.dumps(data["arrows"], ensure_ascii=False),
+        data["total_cycles"], data["l1_max"], data["hbm_max"],
+        data["hbm_base"], data["total_y"], data["gap"], title,
     )
 
 
@@ -581,7 +607,7 @@ def emit_lifetime_html(graph: Graph, output_dir: str, cube_size: int,
     path = os.path.join(viz_dir, "memory.html")
     html = render_lifetime(graph, cube_size, hw_config=hw_config,
                            dma_plans=dma_plans, title=title)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(html)
     logger.info("统一内存生命周期 HTML 已写入: %s", path)
     return path
